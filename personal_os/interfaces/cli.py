@@ -1,7 +1,9 @@
-"""`personal-os` command line (phase 0 skeleton).
+"""`personal-os` command line.
 
-In phase 0 the CLI works directly on the database. From phase 1, commands that affect the
-running daemon (pause, forget) also notify it over the local API.
+Commands work directly on the database. The running daemon picks up pause/resume and forget
+from the database within a second (it watches the pause setting and meta.forget markers), so
+no network API is needed for control. Daemon, doctor, hooks and autostart commands live in
+cli_ops.py.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ import typer
 from personal_os.config.loader import config_path, default_home, ensure_dirs, load_config
 from personal_os.config.schema import Config
 from personal_os.core import pause as pause_mod
+from personal_os.core import runtime
 from personal_os.core.clock import SystemClock, from_ms
 from personal_os.core.events import Event
 from personal_os.core.logging import setup_logging
@@ -111,7 +114,10 @@ def status(db: DbOption = None) -> None:
         typer.echo(f"capture       PAUSED{until_text}")
     else:
         typer.echo("capture       active" + (" (pause expired)" if present else ""))
-    typer.echo("daemon        not built yet (phase 1)")
+    info = runtime.daemon_info(cfg.runtime_dir)
+    typer.echo(
+        f"daemon        {'running (pid ' + str(info.pid) + ')' if info.running else 'not running'}"
+    )
 
 
 @app.command()
@@ -344,6 +350,9 @@ def main() -> None:
             reconfigure(errors="replace")
     app()
 
+
+# Registers daemon/doctor/hooks/autostart/config-set commands on `app` (needs `app` defined).
+from personal_os.interfaces import cli_ops  # noqa: E402,F401
 
 if __name__ == "__main__":
     main()
