@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+dist/
+build/
+*.egg-info/
+node_modules/
+extensions/*/out/
+*.vsix
+# never commit captured data or local runtime state
+*.db
+*.db-wal
+*.db-shm
+*.jsonl
+runtime/
+spool/
+.env
