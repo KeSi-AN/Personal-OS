@@ -177,7 +177,7 @@ def test_nested_extract_is_redacted(privacy: PrivacyFilter):
 
 
 def test_pause_drops_everything_but_meta(privacy: PrivacyFilter):
-    privacy.is_paused = lambda: True
+    privacy.is_paused = lambda _e: True
     assert privacy.apply(ev(WindowFocus(app="Code"))) is None
     assert privacy.apply(ev(MetaEvent(kind="meta.resume"))) is not None
     assert privacy.counters.paused == 1

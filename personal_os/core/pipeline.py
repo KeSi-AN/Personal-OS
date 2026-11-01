@@ -10,6 +10,7 @@ import sqlite3
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from personal_os.core.bus import EventBus
 from personal_os.core.clock import Clock
@@ -56,14 +57,33 @@ class Pipeline:
         self.bus = bus
         self.stats = PipelineStats()
         self._flushed: dict[str, Counter[str]] = {}
+        self.forgotten: list[tuple[datetime, datetime]] = []
+        self.busy = False  # a batch is being written (the daemon waits on this when pausing)
+        self.forget_dropped = 0
 
     @property
     def conn(self) -> sqlite3.Connection:
         return self.writer.conn
 
+    def add_forgotten(self, start: datetime, end: datetime) -> None:
+        """After a forget, drop late arrivals inside the window (spooled commands, in-flight
+        checkpoints). Windows older than a day are discarded."""
+        horizon = self.clock.now() - timedelta(days=1)
+        self.forgotten = [(s, e) for s, e in self.forgotten if e >= horizon] + [(start, end)]
+
+    def _is_forgotten(self, event: Event) -> bool:
+        if event.source == "meta" or not self.forgotten:
+            return False
+        last = event.ts_end or event.last_seen or event.ts_start
+        return any(event.ts_start < end and last >= start for start, end in self.forgotten)
+
     def process(self, events: Iterable[Event]) -> int:
         batch = list(events)
         self.stats.received += len(batch)
+        if self.forgotten:
+            before = len(batch)
+            batch = [e for e in batch if not self._is_forgotten(e)]
+            self.forget_dropped += before - len(batch)
         kept = [self.hint(e) for e in self.privacy.apply_many(batch)]
         stored = self.writer.write(kept)
         self.stats.stored += stored
@@ -103,4 +123,8 @@ class Pipeline:
         while not (stop.is_set() and len(bus) == 0):
             batch = await bus.get_batch(max_batch, timeout=timeout_s, linger=linger_s)
             if batch:
-                await asyncio.to_thread(self.process, batch)
+                self.busy = True
+                try:
+                    await asyncio.to_thread(self.process, batch)
+                finally:
+                    self.busy = False

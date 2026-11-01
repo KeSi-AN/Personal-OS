@@ -22,11 +22,15 @@ class ForgetReport:
     page_extracts: int
 
 
-def forget(conn: sqlite3.Connection, start: datetime, end: datetime, clock: Clock) -> ForgetReport:
+def forget(
+    conn: sqlite3.Connection, start: datetime, end: datetime, clock: Clock, *, marker: bool = True
+) -> ForgetReport:
     """Delete everything captured that overlaps [start, end), then leave a content-free marker.
 
     Open intervals count as lasting until now. With secure_delete and FTS secure-delete on,
     the deleted text is overwritten in the database file, and the WAL is truncated afterwards.
+    The running daemon watches for the marker, purges its queue and observers' open intervals,
+    and repeats the delete once (marker=False) to catch a checkpoint written in between.
     """
     if end <= start:
         raise ValueError("forget window must have end > start")
@@ -40,25 +44,26 @@ def forget(conn: sqlite3.Connection, start: datetime, end: datetime, clock: Cloc
             params,
         ).fetchone()[0]
         n_events = conn.execute(f"DELETE FROM events WHERE {overlap}", params).rowcount
-        marker = Event.point(
-            MetaEvent(kind="meta.forget", range_start=start, range_end=end),
-            clock.now(),
-            observer_version=MAINTENANCE_VERSION,
-        )
-        conn.execute(
-            "INSERT INTO events (id, source, type, ts_start, ts_end, privacy_class, retention, "
-            "observer_version, payload, inserted_at, updated_at) "
-            "VALUES (?, 'meta', 'forget', ?, ?, 'normal', 'summary', ?, ?, ?, ?)",
-            (
-                str(marker.id),
-                now_ms,
-                now_ms,
-                MAINTENANCE_VERSION,
-                marker.payload.model_dump_json(),
-                now_ms,
-                now_ms,
-            ),
-        )
+        if marker:
+            event = Event.point(
+                MetaEvent(kind="meta.forget", range_start=start, range_end=end),
+                clock.now(),
+                observer_version=MAINTENANCE_VERSION,
+            )
+            conn.execute(
+                "INSERT INTO events (id, source, type, ts_start, ts_end, privacy_class, retention, "
+                "observer_version, payload, inserted_at, updated_at) "
+                "VALUES (?, 'meta', 'forget', ?, ?, 'normal', 'summary', ?, ?, ?, ?)",
+                (
+                    str(event.id),
+                    now_ms,
+                    now_ms,
+                    MAINTENANCE_VERSION,
+                    event.payload.model_dump_json(),
+                    now_ms,
+                    now_ms,
+                ),
+            )
     checkpoint(conn)
     return ForgetReport(start, end, n_events, int(n_extracts))
 
@@ -84,6 +89,34 @@ def close_open_intervals(conn: sqlite3.Connection) -> int:
             "UPDATE events SET ts_end = coalesce(last_seen, ts_start), truncated = 1 "
             "WHERE ts_end IS NULL"
         ).rowcount
+
+
+def close_open_at(conn: sqlite3.Connection, at: datetime) -> int:
+    """On pause: end every open interval now (observers drop them from memory)."""
+    with transaction(conn):
+        return conn.execute(
+            "UPDATE events SET ts_end = max(ts_start, ?) WHERE ts_end IS NULL", (to_ms(at),)
+        ).rowcount
+
+
+def forget_markers_since(
+    conn: sqlite3.Connection, after_rowid: int
+) -> list[tuple[int, datetime, datetime]]:
+    """meta.forget markers newer than `after_rowid`: (rowid, start, end)."""
+    out = []
+    for row in conn.execute(
+        "SELECT rowid, payload FROM events WHERE source = 'meta' AND type = 'forget' AND rowid > ? "
+        "ORDER BY rowid",
+        (after_rowid,),
+    ):
+        p = MetaEvent.model_validate_json(row[1])
+        if p.range_start and p.range_end:
+            out.append((int(row[0]), p.range_start, p.range_end))
+    return out
+
+
+def max_rowid(conn: sqlite3.Connection) -> int:
+    return int(conn.execute("SELECT coalesce(max(rowid), 0) FROM events").fetchone()[0])
 
 
 def checkpoint(conn: sqlite3.Connection) -> None:

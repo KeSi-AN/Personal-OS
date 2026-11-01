@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 
 from personal_os.config.schema import Config
 from personal_os.core.bus import EventBus
 from personal_os.core.clock import Clock
+from personal_os.core.events import Event
 from personal_os.core.pause import PauseGate
 from personal_os.core.pipeline import Pipeline
 from personal_os.privacy.filter import PrivacyFilter
@@ -21,9 +23,14 @@ def build_pipeline(
     *,
     bus: EventBus | None = None,
     honour_pause: bool = True,
+    pause_gate: Callable[[Event], bool] | None = None,
 ) -> Pipeline:
     rules = PrivacyRules.from_config(config.privacy, protected_dirs=[config.data_dir])
-    gate = PauseGate(conn, clock) if honour_pause else (lambda: False)
-    privacy = PrivacyFilter(rules, is_paused=gate)
+    """`pause_gate` overrides the default (the persisted pause setting, read once a second);
+    the daemon passes a time-aware gate so intervals closed at pause time still get stored."""
+    if pause_gate is None:
+        setting = PauseGate(conn, clock) if honour_pause else None
+        pause_gate = (lambda _e: setting()) if setting else (lambda _e: False)
+    privacy = PrivacyFilter(rules, is_paused=pause_gate)
     writer = EventWriter(conn, config.retention, clock)
     return Pipeline(privacy, writer, clock, bus=bus)

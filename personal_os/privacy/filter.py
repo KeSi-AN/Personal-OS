@@ -51,7 +51,7 @@ class PrivacyFilter:
         rules: PrivacyRules,
         redactor: TextRedactor | None = None,
         *,
-        is_paused: Callable[[], bool] = lambda: False,
+        is_paused: Callable[[Event], bool] = lambda _event: False,
     ) -> None:
         self.rules = rules
         self.redactor = redactor or TextRedactor()
@@ -80,7 +80,7 @@ class PrivacyFilter:
     # --- stages ----------------------------------------------------------------------------
 
     def _apply(self, event: Event) -> Event | None:
-        if event.source != Source.META and self.is_paused():
+        if event.source != Source.META and self.is_paused(event):
             self.counters.paused += 1
             return None
         if event.privacy_class == PrivacyClass.BLOCKED:
