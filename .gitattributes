@@ -1,0 +1,5 @@
+# Store text with LF in the repo and check it out with LF everywhere (Python, TOML, SQL, shell
+# and PowerShell all accept LF; bash scripts break with CRLF).
+* text=auto eol=lf
+*.png binary
+*.ico binary
