@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Protocol
 
 from pydantic import BaseModel
 
@@ -39,6 +39,25 @@ class ObserverHealth(BaseModel):
     last_error: str | None = None  # exception type + message, never event content
 
 
+class StateStore(Protocol):
+    """Small persistent JSON state for observers (e.g. last seen git HEADs). Never content."""
+
+    def get(self, key: str, default: Any = None) -> Any: ...
+
+    def set(self, key: str, value: Any) -> None: ...
+
+
+class MemoryStateStore:
+    def __init__(self) -> None:
+        self.data: dict[str, Any] = {}
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.data.get(key, default)
+
+    def set(self, key: str, value: Any) -> None:
+        self.data[key] = value
+
+
 @dataclass
 class ObserverContext:
     bus: EventBus
@@ -46,6 +65,7 @@ class ObserverContext:
     config: BaseModel | None
     log: logging.Logger
     paused: asyncio.Event = field(default_factory=asyncio.Event)  # set = paused
+    state: StateStore = field(default_factory=MemoryStateStore)
 
 
 class BaseObserver:
@@ -67,6 +87,14 @@ class BaseObserver:
         raise NotImplementedError
 
     async def stop(self) -> None:
+        return None
+
+    def forget(self, start: datetime, end: datetime) -> None:
+        """Drop any in-memory state overlapping a forgotten window (e.g. an open interval)."""
+        return None
+
+    def on_pause(self, at: datetime) -> None:
+        """Called just before capture pauses: close open intervals at `at` (emit still works)."""
         return None
 
     def emit(self, event: Event) -> bool:
@@ -134,11 +162,36 @@ class Supervisor:
         self._stopping = False
         self._log = get_logger("supervisor")
 
-    def add(self, observer: BaseObserver, *, enabled: bool = True) -> None:
+    def add(
+        self, observer: BaseObserver, *, enabled: bool = True, reason: str | None = None
+    ) -> None:
+        """Register an observer. A disabled one is listed in health() with `reason`."""
         if observer.name in self._slots:
             raise ValueError(f"observer {observer.name!r} already registered")
         state = ObserverState.STARTING if enabled else ObserverState.DISABLED
-        self._slots[observer.name] = _Slot(observer, enabled, state)
+        self._slots[observer.name] = _Slot(observer, enabled, state, last_error=reason)
+
+    @property
+    def observers(self) -> list[BaseObserver]:
+        return [s.observer for s in self._slots.values() if s.enabled]
+
+    def notify_pause(self, at: datetime) -> None:
+        for obs in self.observers:
+            try:
+                obs.on_pause(at)
+            except Exception as exc:
+                self._log.warning(
+                    "observer pause hook failed", extra=_fields(self._slots[obs.name], exc)
+                )
+
+    def notify_forget(self, start: datetime, end: datetime) -> None:
+        for obs in self.observers:
+            try:
+                obs.forget(start, end)
+            except Exception as exc:
+                self._log.warning(
+                    "observer forget hook failed", extra=_fields(self._slots[obs.name], exc)
+                )
 
     def start(self) -> None:
         for slot in self._slots.values():
