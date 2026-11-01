@@ -1,0 +1,180 @@
+# A synthetic morning: coding, a failing test, research, a commit, distractions that must be
+# blocked, and planted secrets that must never reach the database.
+# Planted markers: ZQXJTOKEN… strings and the hunter2 password.
+
+name = "workday"
+start = 2026-11-02T09:00:00+05:30
+
+[[steps]]
+action = "focus"
+app = "Code"
+exe = "Code.exe"
+title = "session.py - auth-service - Visual Studio Code"
+cwd = "C:/Users/addya/Documents/auth-service"
+
+[[steps]]
+action = "edit"
+path = "C:/Users/addya/Documents/auth-service/auth/session.py"
+repo_root = "C:/Users/addya/Documents/auth-service"
+saves = 6
+over = "20m"
+lines_added = 42
+lines_removed = 7
+symbols_added = ["refresh_token"]
+symbols_changed = ["SessionStore.get"]
+
+[[steps]]
+action = "command"
+command = "pytest tests/test_session.py -q"
+cwd = "C:/Users/addya/Documents/auth-service"
+repo_root = "C:/Users/addya/Documents/auth-service"
+branch = "feature/oauth"
+exit_code = 1
+duration = "14s"
+
+[[steps]]
+action = "command"
+command = 'curl -H "Authorization: Bearer ZQXJTOKENbearer7f3k9q2m" https://api.example.com/v1/me?api_key=ZQXJTOKENquery8812&utm_source=newsletter'
+cwd = "C:/Users/addya/Documents/auth-service"
+duration = "2s"
+
+[[steps]]
+action = "command"
+command = '$env:GITHUB_TOKEN = "ghp_ZQXJTOKENgithub000000000000000000000000"'
+duration = "1s"
+
+[[steps]]
+action = "command"
+command = "mysql -u root -phunter2 auth_dev"
+duration = "30s"
+
+[[steps]]
+action = "edit"
+path = "C:/Users/addya/Documents/auth-service/.env"
+repo_root = "C:/Users/addya/Documents/auth-service"
+saves = 1
+over = "30s"
+lines_added = 1
+
+[[steps]]
+action = "browse"
+url = "https://stackoverflow.com/questions/12345/httpx-refresh-token-retry?utm_source=google&utm_medium=organic"
+title = "How to retry httpx requests when the OAuth refresh token expires - Stack Overflow"
+search_query = "httpx refresh token retry"
+dwell = "4m"
+content_type = "stackoverflow"
+scroll_max_pct = 85
+
+[steps.extract]
+meta_description = "Retrying requests after a 401 by refreshing the OAuth token in an httpx Auth flow."
+headings = ["How to retry httpx requests when the OAuth refresh token expires", "Answer: use an httpx.Auth subclass"]
+main_text = "Subclass httpx.Auth and implement auth_flow. On a 401 response, call your refresh endpoint, update the Authorization header and yield the request again. Avoid retry loops by refreshing at most once per request."
+
+[[steps]]
+action = "browse"
+url = "https://www.python-httpx.org/advanced/authentication/"
+title = "Authentication - HTTPX"
+dwell = "3m"
+content_type = "docs"
+
+[steps.extract]
+headings = ["Authentication", "Custom authentication schemes"]
+main_text = "HTTPX supports Basic, Digest and custom authentication. Custom schemes subclass httpx.Auth and override auth_flow, which may yield more than one request."
+
+[[steps]]
+action = "browse"
+url = "https://web.whatsapp.com/"
+title = "WhatsApp"
+dwell = "5m"
+
+[[steps]]
+action = "browse"
+url = "https://www.instagram.com/reels/"
+title = "Instagram"
+dwell = "3m"
+
+[[steps]]
+action = "browse"
+url = "https://mail.google.com/mail/u/0/#inbox"
+title = "Inbox (12) - adham - Gmail"
+dwell = "2m"
+
+[steps.extract]
+main_text = "ZQXJTOKENmailbody Your OTP is 482913"
+
+[[steps]]
+action = "browse"
+url = "https://accounts.example.com/login"
+title = "Sign in"
+dwell = "40s"
+has_password_field = true
+
+[[steps]]
+action = "browse"
+url = "https://news.example.com/private-thing"
+title = "Something private"
+dwell = "6m"
+incognito = true
+
+[[steps]]
+action = "browse"
+url = "https://example.com/quick-bounce"
+title = "Bounced page"
+dwell = "2s"
+
+[[steps]]
+action = "focus"
+app = "WhatsApp"
+exe = "WhatsApp.exe"
+title = "WhatsApp"
+duration = "4m"
+
+[[steps]]
+action = "focus"
+app = "Code"
+exe = "Code.exe"
+title = "session.py - auth-service - Visual Studio Code"
+cwd = "C:/Users/addya/Documents/auth-service"
+
+[[steps]]
+action = "edit"
+path = "C:/Users/addya/Documents/auth-service/auth/session.py"
+repo_root = "C:/Users/addya/Documents/auth-service"
+saves = 3
+over = "8m"
+lines_added = 12
+lines_removed = 3
+symbols_changed = ["refresh_token"]
+
+[[steps]]
+action = "command"
+command = "pytest tests/test_session.py -q"
+cwd = "C:/Users/addya/Documents/auth-service"
+repo_root = "C:/Users/addya/Documents/auth-service"
+branch = "feature/oauth"
+exit_code = 0
+duration = "12s"
+
+[[steps]]
+action = "commit"
+repo_root = "C:/Users/addya/Documents/auth-service"
+branch = "feature/oauth"
+message = "Add refresh_token() with single retry on 401"
+files = ["auth/session.py", "tests/test_session.py"]
+insertions = 54
+deletions = 10
+
+[[steps]]
+action = "idle"
+duration = "12m"
+
+[[steps]]
+action = "lock"
+duration = "45m"
+
+[[steps]]
+action = "focus"
+app = "Windows Terminal"
+exe = "WindowsTerminal.exe"
+title = "PowerShell"
+duration = "1m"
