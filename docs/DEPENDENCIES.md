@@ -1,6 +1,6 @@
 # Dependencies
 
-Every dependency, with a one-line reason. Anything not listed here doesn't get added. Exact versions are pinned in `uv.lock`. Phase 0 uses only the phase 0 rows plus the dev tools; the rest are added in the phase that first needs them.
+Every dependency, with a one-line reason. Anything not listed here doesn't get added. Exact versions are pinned in `uv.lock`. Phases 0–1 use only the phase 0 and 1 rows plus the dev tools (the local API moved to phase 2, ADR-025); the rest are added in the phase that first needs them.
 
 Transitive packages pulled in by the ones below (for example `rich`, `click` and `shellingham` via `typer`, and `pydantic-core` via `pydantic`) aren't listed separately.
 
@@ -15,9 +15,9 @@ Transitive packages pulled in by the ones below (for example `rich`, `click` and
 | `watchdog` | 1 | Mature cross-platform filesystem events (ReadDirectoryChangesW, inotify, FSEvents). |
 | `psutil` | 1 | Process exe, cwd, and parent lookup; daemon CPU/RSS for `doctor` and the budget script; battery/AC state. |
 | `pathspec` | 1 | Exact `.gitignore` semantics. Hand-rolled gitignore matching is a known source of bugs. |
-| `fastapi` | 1 | Local ingest, control, and query API, plus the phase 6 dashboard. Validation through pydantic. |
-| `uvicorn` | 1 | ASGI server for FastAPI, run inside the daemon's own event loop. |
-| `httpx` | 1 | Async HTTP client for the native host → daemon relay and Ollama calls (no need for the `ollama` SDK). |
+| `fastapi` | 2 | Local ingest, control, and query API, plus the phase 6 dashboard. Validation through pydantic. |
+| `uvicorn` | 2 | ASGI server for FastAPI, run inside the daemon's own event loop. |
+| `httpx` | 2 | Async HTTP client for the native host → daemon relay and Ollama calls (no need for the `ollama` SDK). |
 | `sqlite-vec` | 4 | Vector search inside the same SQLite file. No separate vector database. |
 | `keyring` | 4+ | DPAPI / OS keychain storage for an optional encryption key (only if encryption is enabled). |
 | `pystray` + `Pillow` | 6 | System tray icon (Pillow is required by pystray for the icon image). |
@@ -31,6 +31,7 @@ Transitive packages pulled in by the ones below (for example `rich`, `click` and
 | `hypothesis` | Property tests for redaction (no planted secret survives) and debounce logic. |
 | `ruff` | Lint + format in one fast tool. |
 | `mypy` | Static checking of the event and payload types, the core contract of the system. |
+| `types-psutil` | Type stubs so mypy can check the psutil calls (process info, CPU/memory). |
 | `hatchling` (build backend) | Builds the package so `uv` can install the `personal-os` command. No configuration beyond one line. |
 
 ## Bundled into extensions (JavaScript, not Python)
@@ -43,9 +44,7 @@ Transitive packages pulled in by the ones below (for example `rich`, `click` and
 
 ## Vendored
 
-| Item | License | Why |
-|---|---|---|
-| `bash-preexec` | MIT | Standard `preexec`/`precmd` for Bash (used by Git Bash hooks). |
+Nothing. The bash hook is about 60 lines of our own (a `DEBUG` trap plus `PROMPT_COMMAND`) instead of vendoring `bash-preexec`, which is much larger than this needs.
 
 ## Explicitly not used
 

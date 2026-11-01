@@ -1,6 +1,6 @@
 # Personal OS — Design
 
-**Status:** v0.2, approved with your answers from 2026-11-02 (§10). Phase 0 in progress.
+**Status:** v0.3. Phase 0 done, phase 1 (live observers) built, awaiting your review.
 **Date:** 2026-11-02
 **Scope of this draft:** overall architecture, and the observation layer in detail (brief §4). Storage, the context engine, the action layer, and interfaces are covered only far enough to show the observation layer fits them. Each gets its own design section before its phase starts.
 
@@ -18,8 +18,8 @@ Where this draft departs from the brief, and why:
 | `GitPython` or the git CLI | git CLI only, with `--no-optional-locks` and porcelain v2 output | GitPython launches git processes anyway and adds a dependency. The CLI's porcelain output is a stable contract, and `--no-optional-locks` means we never fight your own git commands for `index.lock`. |
 | `pywin32` | `ctypes` against user32/kernel32/wtsapi32 | It's about 10 functions. Skips a heavy dependency with a post-install step. |
 | Native messaging or an authenticated WebSocket | Native messaging for the browser; token-authenticated HTTP on `127.0.0.1` for everything else | Native messaging pins the extension ID and opens no port to web pages. The editor extension and CLI need a normal API anyway. |
-| Observers as plugins that can crash independently | In-process asyncio tasks under a supervisor, with optional per-observer process isolation later | One process stays well inside the 300 MB budget. A Python exception in one observer can't affect the others. Only a native crash (bad `ctypes` call) could kill the daemon, and Task Scheduler restarts it. |
-| A daemon "always on" | Starts at login through **Task Scheduler** in your user session, not as a Windows service | Services run in session 0 and can't see your desktop windows, idle state, or lock events. |
+| Observers as plugins that can crash independently | In-process asyncio tasks under a supervisor, with optional per-observer process isolation later | One process stays well inside the 300 MB budget. A Python exception in one observer can't affect the others. Only a native crash (bad `ctypes` call) could kill the daemon, and the launcher restarts it (ADR-024). |
+| A daemon "always on" | Starts at login from your **Startup folder** in your user session, not as a Windows service, under a small launcher that restarts it if it crashes (ADR-024) | Services run in session 0 and can't see your desktop windows, idle state, or lock events. A Task Scheduler logon trigger would need admin rights. |
 
 ---
 
@@ -57,14 +57,14 @@ Where this draft departs from the brief, and why:
 ```
  Windows login session (user: addya)
  ┌──────────────────────────────────────────────────────────────────────────┐
- │  personal-os daemon  (pythonw, started by Task Scheduler at logon)       │
+ │  personal-os daemon  (pythonw, under the launcher; Startup folder entry) │
  │                                                                          │
  │   asyncio event loop (main thread)                                       │
  │    ├─ Supervisor ── observer tasks: window, idle/session, fs, git,       │
  │    │                 terminal-spool, (clipboard, …)                      │
  │    ├─ EventBus (bounded queue)                                           │
  │    ├─ Pipeline: PrivacyFilter → ProjectHint → BatchWriter (SQLite)       │
- │    ├─ Local API (uvicorn, 127.0.0.1, token) ── /ingest /control /query   │
+ │    ├─ Local API (phase 2: uvicorn, 127.0.0.1, token) ── /ingest /query   │
  │    └─ Job scheduler: retention, sessionizer, summarizer (LLM, gated)     │
  │                                                                          │
  │   worker threads: Win32 message-only window (lock/unlock, sleep/wake,    │
@@ -104,7 +104,7 @@ personal_os/
 extensions/browser/     MV3 extension (TypeScript, bundled with esbuild)
 extensions/vscode/      VS Code/Cursor extension (TypeScript)
 native_host/            native messaging host (Python) + manifests + registry installer
-shell_hooks/            powershell/ (profile block), bash/ (vendored bash-preexec + block)
+personal_os/hooks/      powershell.ps1, bash.sh, installer (marked profile block)
 tests/  docs/  scripts/
 ```
 
@@ -116,7 +116,7 @@ tests/  docs/  scripts/
 | Shell hooks | Append JSONL to `spool/terminal/<shell>-<pid>.jsonl` | Filesystem ACL (`%LOCALAPPDATA%` is user-private) | Daemon tails, ingests, and deletes the file. Survives daemon downtime. |
 | Browser extension | Native messaging (stdio) → host → `POST /v1/ingest` | Host manifest pins the extension ID; host reads the token file | No port is exposed to web pages. |
 | VS Code/Cursor ext. | `POST /v1/ingest` | Bearer token from `runtime/token` | |
-| CLI / tray / dashboard | `/v1/control/*`, `/v1/query/*` | Bearer token | |
+| CLI / tray / dashboard | Phase 1: the database (pause setting, `meta.forget` markers) plus a stop-request file. From phase 2: `/v1/query/*` | Filesystem ACL; later bearer token | The daemon polls once a second (ADR-025). |
 
 **API hardening:** binds `127.0.0.1` only. Rejects requests whose `Host` isn't `127.0.0.1:<port>` or `localhost:<port>` (blocks DNS rebinding). Rejects any request carrying a web `Origin` unless it's the dashboard's own origin (blocks pages calling the API from the browser). Constant-time token comparison. Token rotates on each daemon start. Port and token go in `runtime/runtime.json`.
 
@@ -135,7 +135,7 @@ tests/  docs/  scripts/
 | Failure | Effect | Handling |
 |---|---|---|
 | Observer raises | That source pauses | Supervisor restarts it with exponential backoff (1 s → 5 min cap, jitter). After 5 failures in 10 min it's marked `degraded` and shown in `doctor`. |
-| Daemon crashes or is killed | Capture stops | Task Scheduler restarts it on failure. Shell spool keeps terminal events. Browser extension buffers up to 1,000 events in `chrome.storage.local`. Open intervals were checkpointed (§4.1). |
+| Daemon crashes or is killed | Capture stops | The launcher restarts it with backoff (1 s up to 60 s). Shell spool keeps terminal events. Browser extension buffers up to 1,000 events in `chrome.storage.local`. Open intervals were checkpointed (§4.1). |
 | Bus full | Backpressure | Drop by priority (§4.2) and count drops. Never block the producer. |
 | SQLite busy or locked | Writes delayed | Writer retries with backoff while the bus buffers. If the bus is full, drop rules apply. |
 | Disk nearly full (< 2 GB free) | | Writer switches to essential-only (window, git, terminal) and `doctor` warns. |
@@ -282,7 +282,7 @@ Every event passes it, including events from the extensions and from replay. Sta
 
 | | |
 |---|---|
-| **Captured** | Create, modify, delete, and move under watched roots: path, root, kind, size, extension, file type (code/text/doc/image/binary/archive), `repo_root`, and for text/code files a **diff summary** `{lines_added, lines_removed, symbols_added/removed/changed}`. |
+| **Captured** | Create, modify, delete, and move under watched roots: path, root, kind, size, extension, file type (code/text/doc/image/binary/archive), `repo_root`, and for text/code files a **diff summary** `{lines_added, lines_removed, symbols_added/removed/changed}`. In a repo the line counts are the uncommitted totals against HEAD after that save; outside git, the change since the last save seen (ADR-026). |
 | **Mechanism** | `watchdog` (backed by `ReadDirectoryChangesW` on Windows), one recursive watch per root. Ignore rules are evaluated cheaply in the callback before anything reaches the bus. **Diff summary inside a git repo:** `git diff --numstat` for that path (vs index/HEAD), via the git observer's queue. **Outside git:** line-count and size delta only; we don't keep shadow copies of your files. **Symbols:** Python via `ast` (function and class names before and after, comparing only the name and signature sets); other languages via `tree-sitter` in a later phase. The previous symbol set is cached as **names only**, not content. |
 | **Ignore rules** | Global: `node_modules`, `.venv`/`venv`, `__pycache__`, `.git/objects`, `.git/lfs`, `dist`, `build`, `target`, `.next`, `.cache`, `.gradle`, `.idea`, `*.tmp`, `~$*` (Office lock files), editor swap and backup files, the PersonalOS data dir. Per repo: `.gitignore` via `pathspec`, cached and reloaded when `.gitignore` changes. Per user: config globs. |
 | **Debounce** | Per-path quiet window of 2 s (editors write temp file → rename → touch). Rename-and-replace saves collapse into a single `modified`. **Burst rule:** more than 50 events/s under one directory becomes one `fs/bulk_change {dir, count, kinds, sample_paths[≤5]}` (git checkout, npm install, build output). |
@@ -318,8 +318,8 @@ Every event passes it, including events from the extensions and from replay. Sta
 | | |
 |---|---|
 | **Captured** | Command line (redacted), cwd, repo root + branch (computed daemon-side from cwd, not in the hook), start time, duration, success flag, exit code, shell, shell session id, host (Windows Terminal/VS Code/conhost, from the parent process). |
-| **PowerShell 5.1 mechanism** | `install-hooks` adds a delimited block to `$PROFILE` (`# >>> personal-os >>>` … `# <<< personal-os <<<`). It wraps the existing `prompt` function. The first statement captures `$?` and `$LASTEXITCODE`, then `Get-History -Count 1` gives `Id, CommandLine, StartExecutionTime, EndExecutionTime`. If `Id` is unchanged since the last prompt (empty Enter), nothing is emitted. One JSON line is appended to `spool\terminal\pwsh-<PID>.jsonl` with `[IO.File]::AppendAllText`. Target cost is under 3 ms per prompt, measured in the phase 1 acceptance. Your original prompt output is preserved. The hook body runs in `try/catch`, so a bug can never break your prompt. |
-| **Git Bash mechanism** | Vendored `bash-preexec` (MIT) for `preexec`/`precmd` in `~/.bashrc`, the same marked block. `$EPOCHREALTIME` for timing. Appends to `spool/terminal/bash-<pid>.jsonl`. |
+| **PowerShell 5.1 mechanism** | `install-hooks` adds a delimited block to `$PROFILE` (`# >>> personal-os >>>` … `# <<< personal-os <<<`). It wraps the existing `prompt` function. The first statement captures `$?` and `$LASTEXITCODE`, then `Get-History -Count 1` gives `Id, CommandLine, StartExecutionTime, EndExecutionTime`. If `Id` is unchanged since the last prompt (empty Enter), nothing is emitted. One JSON line is appended to `spool\terminal\pwsh-<PID>.jsonl` with `[IO.File]::AppendAllText`. Measured cost is about 8–11 ms per prompt in PowerShell 5.1 (first estimate was 3 ms; see BUDGET.md). The record is hand-built JSON, because `ConvertTo-Json` alone costs several ms. Your original prompt output is preserved. The hook body runs in `try/catch`, so a bug can never break your prompt. |
+| **Git Bash mechanism** | A small `DEBUG` trap plus `PROMPT_COMMAND` hook (our own, about 60 lines) in `~/.bashrc`, the same marked block. One subshell per prompt (`history 1`); forks are slow on Windows. `$EPOCHREALTIME` for timing. Appends to `spool/terminal/bash-<pid>.jsonl`. |
 | **Private commands** | A command line beginning with a space is **never written to the spool** (checked inside the hook, before any I/O). The same holds for any command when `PERSONAL_OS_PAUSE=1` is set in that shell. |
 | **Redaction** | Done in the daemon's privacy filter (§4.3), not in the hook (keeps hooks tiny). **Risk, stated:** while the daemon is down, unredacted command lines sit in the spool, in your user-private `%LOCALAPPDATA%`. That's the same exposure PSReadLine already has with its own plain-text history file (`ConsoleHost_history.txt`). The daemon redacts and deletes spool files at startup. |
 | **Output capture** | **Not in v1.** PowerShell 5.1 and Windows Terminal have no hook for a command's output without wrapping every command or running `Start-Transcript` (which captures everything). Option for later: an explicit `pos run <cmd>` wrapper that tees the first/last N lines of failed commands. |
@@ -467,7 +467,7 @@ Calendar and Gmail come first (your answer); Obsidian and other notes come later
 | Window title churn floods events (browsers, music players) | 3 s title stability rule plus per-app "ignore title" rules. |
 | SQLCipher + sqlite-vec compatibility | Spike before committing to encryption (Q8). |
 | 4 GB VRAM limits model quality | Keep prompts small and structured, retrieval-first. Make "deep mode" explicit and slow-but-available. |
-| Python native crash takes down all observers | Task Scheduler restart-on-failure; keep the `ctypes` surface minimal and covered by live tests; per-observer subprocess isolation flag if it ever happens. |
+| Python native crash takes down all observers | The launcher restarts the daemon; keep the `ctypes` surface minimal and covered by live tests; per-observer subprocess isolation flag if it ever happens. |
 
 ---
 

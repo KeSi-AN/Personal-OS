@@ -2,12 +2,13 @@
 
 A local-first personal context and assistant layer. It observes your computer activity (under your control), remembers it as structured project context, answers questions about your own work, and acts through a permissioned tool registry. Everything runs on your machine.
 
-**Status:** Phase 0 complete (event schema, bus, privacy filter, storage, simulator, CLI skeleton). No live capture yet.
+**Status:** Phase 1 built: live capture of the active window, idle/lock/sleep, files under Documents, git repos and terminal commands, in a background daemon with `doctor`, pause and forget. Awaiting the 1-hour acceptance run.
 
 - Design: [docs/DESIGN.md](docs/DESIGN.md)
 - Decisions: [docs/DECISIONS.md](docs/DECISIONS.md)
 - Dependencies: [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)
-- Phase 0 demo: [docs/PHASE0_DEMO.md](docs/PHASE0_DEMO.md)
+- Demos: [phase 0 (simulator)](docs/PHASE0_DEMO.md), [phase 1 (live capture)](docs/PHASE1_DEMO.md)
+- Resource budget: [docs/BUDGET.md](docs/BUDGET.md)
 
 ## Development
 
