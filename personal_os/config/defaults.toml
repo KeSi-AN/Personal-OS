@@ -1,0 +1,112 @@
+# Personal OS configuration.
+# Written on first run. Edit freely; comments are preserved when settings are changed from the CLI.
+# Safe defaults: only window, git and terminal capture are on, and only after `install-hooks`.
+
+# Where the database, logs, spool and runtime files live. Empty = %LOCALAPPDATA%\PersonalOS.
+data_dir = ""
+
+# Folders whose files and git repos are observed. Nothing outside these is watched.
+watched_roots = ["~/Documents"]
+
+[observers.window]
+enabled = true
+poll_interval_s = 1.0
+min_focus_s = 2.0          # shorter focus (Alt-Tab passing through) is merged into its neighbour
+title_stable_s = 3.0       # a title change must hold this long before it splits an interval
+
+[observers.idle]
+enabled = true
+threshold_s = 300          # no input for this long = idle
+
+[observers.fs]
+enabled = false            # turned on by the first-run wizard
+debounce_s = 2.0
+burst_events_per_s = 50
+
+[observers.git]
+enabled = true
+safety_poll_active_s = 300
+safety_poll_inactive_s = 3600
+
+[observers.terminal]
+enabled = true
+
+[observers.browser]
+enabled = false            # needs the extension + native host (phase 2)
+
+[observers.editor]
+enabled = false            # needs the VS Code extension
+
+[observers.clipboard]
+enabled = false            # opt-in only, text only, 24 h retention
+
+[privacy]
+# Allowlist mode: when true, only domains in allowed_domains are captured by the browser.
+allowlist_mode = false
+allowed_domains = []
+min_dwell_s = 5
+
+# Apps whose activity is never stored (matched case-insensitively on the executable name).
+blocked_apps = [
+    "KeePass.exe", "KeePassXC.exe", "1Password.exe", "Bitwarden.exe", "Dashlane.exe",
+    "CredentialUIBroker.exe", "consent.exe",
+    "WhatsApp.exe", "WhatsApp.Root.exe",
+]
+
+# Domains never captured (subdomains included).
+blocked_domains = [
+    "whatsapp.com", "whatsapp.net", "instagram.com",
+    "messenger.com", "web.telegram.org", "discord.com", "signal.org",
+    "paypal.com",
+]
+# Any domain label containing one of these words is blocked (catches most bank sites).
+blocked_domain_keywords = ["bank", "netbanking"]
+
+# Visits are kept as "domain + time" only, with no title or page text.
+sensitive_domains = ["mail.google.com", "outlook.live.com", "outlook.office.com"]
+
+# Window titles matching these regexes are stored as [redacted] (the app name is kept).
+# Private/incognito markers catch the browser window title of a private tab; the exact suffix
+# each browser uses is verified in phase 1. Mail titles carry email subjects.
+redact_title_patterns = [
+    "(?i)\\bwhatsapp\\b", "(?i)\\binstagram\\b",
+    "(?i)\\b(?:incognito|inprivate|private browsing|private window)\\b",
+    "(?i)\\bgmail\\b", "(?i)- outlook\\b",
+]
+
+# Titles containing these words make the event sensitive (free text removed, short retention).
+sensitive_keywords = ["password", "passcode", "otp", "diagnosis", "prescription", "net banking"]
+
+# Files matching these globs are never read; only "it changed" is recorded.
+secret_path_globs = [
+    ".env", ".env.*", "*.pem", "*.key", "*.pfx", "*.p12", "id_rsa*", "id_ed25519*", "id_ecdsa*",
+    "credentials", "credentials.*", "*.kdbx", ".git-credentials", ".npmrc", ".pypirc", "secrets.*",
+    ".netrc", "*.keystore",
+]
+secret_dir_names = [".ssh", ".aws", ".gnupg", ".azure", ".kube"]
+
+[retention]
+raw_days = 30
+sensitive_days = 7         # events classified sensitive (free text already removed)
+page_text_days = 90
+terminal_output_days = 14
+clipboard_hours = 24
+
+[llm]
+provider = "ollama"
+base_url = "http://127.0.0.1:11434"
+fast_model = "qwen3:4b"
+reasoning_model = "qwen3:4b"
+embedding_model = "qwen3-embedding:0.6b"
+only_on_ac_power = true
+min_user_idle_s = 120
+
+[api]
+host = "127.0.0.1"
+port = 47821
+
+[api.lan]
+enabled = false            # phone access (phase 6): HTTPS + per-device pairing
+
+[actions]
+auto_allow_tiers = [0, 1]  # only for requests you make directly; see DESIGN.md section 6.3
