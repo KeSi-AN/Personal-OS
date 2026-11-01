@@ -1,7 +1,7 @@
 # Personal OS — Design
 
-**Status:** Draft v0.1, awaiting review.
-**Date:** 2026-11-01
+**Status:** v0.2, approved with your answers from 2026-11-02 (§10). Phase 0 in progress.
+**Date:** 2026-11-02
 **Scope of this draft:** overall architecture, and the observation layer in detail (brief §4). Storage, the context engine, the action layer, and interfaces are covered only far enough to show the observation layer fits them. Each gets its own design section before its phase starts.
 
 ---
@@ -33,11 +33,11 @@ Where this draft departs from the brief, and why:
 | Disk | C: 94 GB free, D: 45 GB free | Data dir defaults to `%LOCALAPPDATA%\PersonalOS` on C:. Expected growth is under 1 GB/month. |
 | Python | 3.13.5 (python.org), 3.11 (Store + uv), `uv` installed | Project pinned to **CPython 3.12 via uv** for the widest wheel coverage (voice/ML packages in phase 7). Phases 0–6 also run on 3.13. |
 | SQLite | 3.49.1, FTS5 works, `enable_load_extension` available | `sqlite-vec` can load. No custom SQLite build needed. |
-| Ollama | 0.32.6, models: `qwen3:4b`, `gemma4:e2b`, `gpt-oss:20b` | Use what's there; add one embedding model. |
-| Shells | Windows PowerShell 5.1 (no PowerShell 7), Git Bash, Windows Terminal | Hooks for PS 5.1 and Bash. `cmd.exe` has no hook point and isn't supported. |
-| Browsers | **Brave (default)**, Chrome, Edge, Firefox | One Manifest V3 extension covers Brave, Chrome, and Edge. Firefox later. |
-| Editors | VS Code (54 extensions), Cursor | One VS Code extension also installs in Cursor (a VS Code fork). |
-| Repos | 24 git repos under `Documents` (within 3 levels) | Default watched root candidate is `Documents` (to confirm, Q2). |
+| Ollama | 0.32.6, models: `qwen3:4b`, `gemma4:e2b`, `gpt-oss:20b` | **Qwen only** (your answer): `qwen3:4b` for everything, plus `qwen3-embedding:0.6b` for vectors. The other installed models are ignored. |
+| Shells | Windows PowerShell 5.1 (no PowerShell 7), Git Bash, Windows Terminal | **PowerShell 5.1 hook first** (most likely in Windows Terminal), Git Bash second. `cmd.exe` has no hook point and isn't supported. |
+| Browsers | **Brave (default)**, Chrome, Edge, Firefox | One Manifest V3 extension covers Brave, Chrome, and Edge. **Development and testing happen in Chrome first**, then Brave is verified. Firefox later. |
+| Editors | VS Code (54 extensions), Cursor | **VS Code** is the target; the same extension should install in Cursor too. |
+| Repos | 24 git repos under `Documents` (within 3 levels) | **`Documents` is the only watched root** for now. |
 | Shell profiles | No PowerShell profile or `.bashrc` yet | The hook installer creates them and marks its block clearly. |
 
 ---
@@ -151,22 +151,28 @@ tests/  docs/  scripts/
 
 ```python
 class Observer(Protocol):
-    name: ClassVar[str]                 # "window", "fs", …
-    version: ClassVar[str]              # semver; stamped into events as observer_version
-    async def start(self, ctx: ObserverContext) -> None: ...   # runs until stop() or exception
-    async def stop(self) -> None: ...                          # must return within 5 s
-    def health(self) -> ObserverHealth: ...                    # cheap, non-blocking
+    name: ClassVar[str]  # "window", "fs", …
+    version: ClassVar[str]  # semver; stamped into events as observer_version
 
-class ObserverContext:              # handed in by the supervisor
-    bus: EventBus; clock: Clock; config: ObserverConfig; log: Logger
-    paused: asyncio.Event           # observers check this and also stop emitting while paused
+    async def start(self, ctx: ObserverContext) -> None: ...  # runs until stop() or exception
+    async def stop(self) -> None: ...  # must return within 5 s
+    def health(self) -> ObserverHealth: ...  # cheap, non-blocking
+
+
+class ObserverContext:  # handed in by the supervisor
+    bus: EventBus
+    clock: Clock
+    config: ObserverConfig
+    log: Logger
+    paused: asyncio.Event  # observers check this and also stop emitting while paused
+
 
 class ObserverHealth(BaseModel):
-    state: Literal["starting","running","paused","degraded","crashed","disabled"]
+    state: Literal["starting", "running", "paused", "degraded", "crashed", "disabled"]
     last_event_at: datetime | None
     events_last_hour: int
     restarts: int
-    last_error: str | None          # exception type + message, never event content
+    last_error: str | None  # exception type + message, never event content
 ```
 
 Observers are discovered through a registry (entry points later), enabled per `config.toml`, and each one runs in its own supervised task. Platform-specific code lives behind probes (`WindowProbe`, `IdleProbe`, `SessionProbe`). The Windows implementation is real; Linux and macOS raise `NotSupported` with a clear message.
@@ -175,21 +181,25 @@ Observers are discovered through a registry (entry points later), enabled per `c
 
 ```python
 class Event(BaseModel):
-    id: UUID                                # UUIDv7
-    ts_start: datetime                      # UTC
-    ts_end: datetime | None                 # None = interval still open; point events: ts_end == ts_start
-    source: Source                          # window|idle|system|browser|fs|git|editor|terminal|clipboard|meta
-    type: str                               # e.g. "focus", "page_visit", "command"
-    payload: Payload                        # discriminated union keyed on (source, type), validated
-    project_hint: str | None = None         # cheap hint from the observer (repo root, cwd); resolver decides later
-    confidence: float = 1.0                 # observer's confidence in the payload itself
-    privacy_class: Literal["normal","sensitive","blocked"] = "normal"   # set/raised by the filter, never lowered
+    id: UUID  # UUIDv7
+    ts_start: datetime  # UTC
+    ts_end: datetime | None  # None = interval still open; point events: ts_end == ts_start
+    source: Source  # window|idle|system|browser|fs|git|editor|terminal|clipboard|meta
+    type: str  # e.g. "focus", "page_visit", "command"
+    payload: Payload  # discriminated union keyed on (source, type), validated
+    project_hint: str | None = (
+        None  # cheap hint from the observer (repo root, cwd); resolver decides later
+    )
+    confidence: float = 1.0  # observer's confidence in the payload itself
+    privacy_class: Literal["normal", "sensitive", "blocked"] = (
+        "normal"  # set/raised by the filter, never lowered
+    )
     observer_version: str
     tz_offset_min: int
-    retention: RetentionClass               # raw|page_text|terminal_output|clipboard|summary
+    retention: RetentionClass  # raw|page_text|terminal_output|clipboard|summary
 ```
 
-**Interval events are upserted by id.** An observer emits an interval with `ts_end=None` when it opens, re-emits the same id with an updated `ts_end` every 60 s as a checkpoint, and emits it a final time when it closes. The writer does `INSERT … ON CONFLICT(id) DO UPDATE`. A crash loses at most 60 s of an open interval. On startup, any interval still open from a previous run is closed at its last checkpoint and flagged `truncated=true`.
+**Interval events are upserted by id.** An observer emits an interval with `ts_end=None` when it opens. Every 60 s it re-emits the same id, still with `ts_end=None`, and an updated `last_seen` (the checkpoint). It emits the event a final time with `ts_end` set when the interval closes. The writer does `INSERT … ON CONFLICT(id) DO UPDATE`, never moves `ts_end` backwards, and never reopens a closed interval. A crash loses at most 60 s of an open interval. On startup, any interval still open from a previous run is closed at its `last_seen` and flagged `truncated=true`.
 
 ### 4.2 Event bus, backpressure, batching
 
@@ -202,7 +212,7 @@ class Event(BaseModel):
 Every event passes it, including events from the extensions and from replay. Stages, in order:
 
 1. **Pause gate.** While paused, drop everything except `meta` events (pause and resume markers).
-2. **Hard blocks → `blocked`, dropped.** App executables (default: password managers such as `KeePassXC.exe` and `1Password.exe`, and banking apps), title regexes, domain categories (banking, health, webmail bodies, DMs: see the default list in the config), incognito, and pages with password fields. **Blocked events are never stored.** Only a per-source counter is incremented, so `doctor` can say "42 events blocked today".
+2. **Hard blocks → `blocked`, dropped.** App executables (default: password managers such as `KeePassXC.exe` and `1Password.exe`, Windows credential and UAC prompts, **the WhatsApp desktop app**), domain categories (banking, health, DMs; **`whatsapp.com` and `instagram.com` are blocked entirely**, along with the other web messengers in the default list), incognito, and pages with password fields. Window titles matching a blocklist regex (default: `WhatsApp`, `Instagram`) don't drop the focus event; the title is replaced with `[redacted]`, so time spent stays visible but not what was on screen. **Blocked events are never stored.** Only a per-source counter is incremented, so `doctor` can say "42 events blocked today".
 3. **Secret paths → `sensitive`.** `.env*`, `*.pem`, `*.key`, `*.pfx`, `id_rsa*`, `id_ed25519*`, `credentials*`, `*.kdbx`, `.aws/`, `.ssh/`, `.git-credentials`, `.npmrc`, `.pypirc`, `secrets.*`. Only path, kind, and time are kept, and the file is **never read**.
 4. **Redaction** of every free-text field (titles, URLs, commands, commit messages, selections, extracts):
    - URLs: tracking parameters stripped (`utm_*`, `fbclid`, `gclid`, `mc_eid`, `ref_src`, …), `user:pass@` removed, query values whose key looks secret (`token`, `key`, `code`, `state`, `sig`, `password`, `auth`) replaced with `[redacted]`.
@@ -347,7 +357,7 @@ Measurement: `scripts/measure_budget.py --minutes 60` samples `psutil.Process(da
 
 ### 4.13 Fake desktop simulator
 
-- **Scenario DSL** (YAML): a timeline of human-level actions ("09:00 focus Code in repo `foo` on `src/auth.py` for 25 m; save 6 times adding `refresh_token`; run `pytest` → exit 1; open Brave, search 'httpx timeout retry', read SO question 4 min; commit 'add refresh'"). The generator expands each action into the exact events each real observer would emit, including flicker, debounce artifacts, and idle gaps.
+- **Scenario DSL** (TOML, read with the stdlib `tomllib`, so no YAML dependency): a timeline of human-level actions ("09:00 focus Code in repo `foo` on `src/auth.py` for 25 m; save 6 times adding `refresh_token`; run `pytest` → exit 1; open Brave, search 'httpx timeout retry', read SO question 4 min; commit 'add refresh'"). The generator expands each action into the exact events each real observer would emit, including flicker, debounce artifacts, and idle gaps.
 - **Recorder/replayer:** `personal-os record --minutes 60` writes post-filter events to JSONL (already redacted). `personal-os replay file.jsonl --speed 60x --clock sim` feeds them through the real pipeline into a scratch DB.
 - **Fault injection:** observer crash, bus full, DB locked, Ollama down, clock jump (sleep), duplicate events.
 - The simulator publishes through the same `EventBus` and pipeline as live capture. Only the observers are swapped out, so end-to-end tests cover the real filter, writer, and later the context engine.
@@ -365,7 +375,9 @@ Measurement: `scripts/measure_budget.py --minutes 60` samples `psutil.Process(da
 
 ## 5. Storage (overview; full schema in phase 0)
 
-### 5.1 Tables (first migration)
+### 5.1 Tables
+
+Migration `0001` creates only what phase 0 uses: `events`, `page_extracts`, both FTS tables, `counters`, and `kv_settings`. Each later table arrives in its own migration in the phase that first needs it, which also exercises the migration path early. Timestamps are stored as integer Unix milliseconds (UTC).
 
 - `events` (`id` PK, `source`, `type`, `ts_start`, `ts_end`, `tz_offset_min`, `project_id`, `project_confidence`, `privacy_class`, `retention`, `expires_at`, `observer_version`, `payload` JSON). Indexes on `(ts_start)`, `(source, type, ts_start)`, `(project_id, ts_start)`.
 - `page_extracts` (`id`, `event_id`, `content_hash`, `title`, `meta_description`, `headings` JSON, `main_text`, `expires_at`), deduplicated by `content_hash`.
@@ -378,7 +390,7 @@ Numbered SQL files (`0001_init.sql`, …) applied in order inside a transaction,
 
 ### 5.3 Encryption at rest
 
-Phase 0 ships plaintext SQLite in the user-private `%LOCALAPPDATA%` (protected by your Windows account; Windows 11 Home may have "Device encryption" on, which you can check in Settings → Privacy & security). Option for later: SQLCipher via `sqlcipher3` wheels, with the key protected by Windows DPAPI through `keyring`. **Risk:** sqlite-vec has to be validated against the SQLCipher build. See Q8.
+Phase 0 ships plaintext SQLite in the user-private `%LOCALAPPDATA%` (protected by your Windows account; Windows 11 Home may have "Device encryption" on, which you can check in Settings → Privacy & security). Option for later: SQLCipher via `sqlcipher3` wheels, with the key protected by Windows DPAPI through `keyring`. **Risk:** sqlite-vec has to be validated against the SQLCipher build. Deferred (your answer to Q8): plaintext for now, encryption added in a later phase.
 
 ### 5.4 Retention defaults
 
@@ -394,21 +406,43 @@ Signal order as in the brief. The cheap rules-based hint (repo root, cwd, path u
 
 ### 6.2 Local models for this hardware (GTX 1650 4 GB, 16 GB RAM)
 
-| Role | Proposal | Reason |
+Decided (your answer): **Qwen only.**
+
+| Role | Model | Reason |
 |---|---|---|
-| Fast (classify, summarize, extract JSON) | `qwen3:4b` (already installed, about 2.5 GB, fits fully in VRAM) | Expect roughly 20–30 tokens/s on this GPU (to be measured). Good structured output. |
-| Reasoning (`ask`, planning, tool calls) | `qwen3:4b` with thinking on by default. Optional `qwen3:8b` (partly offloaded to CPU, slower). `gpt-oss:20b` as an explicit "deep" mode only | `gpt-oss:20b` needs about 13 GB, mostly CPU on this machine, so expect single-digit tokens/s and heavy RAM pressure. It isn't usable as the default. |
-| Embeddings | `nomic-embed-text` or `embeddinggemma` (both under 700 MB), picked by a small retrieval benchmark on your own data in phase 4 | Small, fast, fine on CPU. |
+| Fast (classify, summarize, extract JSON) | `qwen3:4b` (installed, about 2.5 GB, fits fully in VRAM) | Expect roughly 20–30 tokens/s on this GPU (to be measured). Good structured output. |
+| Reasoning (`ask`, planning, tool calls) | `qwen3:4b` with thinking on | Same model, so only one model ever needs to be loaded in the 4 GB. |
+| Embeddings | `qwen3-embedding:0.6b` (about 640 MB) | Stays in the Qwen family. If you'd rather not add even this, retrieval falls back to FTS5 + recency only. |
+
+`gemma4:e2b` and `gpt-oss:20b` aren't used.
 
 Background LLM jobs run only **on AC power, while the user is idle ≥ 2 min, and when no full-screen app is in the foreground**. They use Ollama `keep_alive` so the VRAM is freed afterwards. Everything sits behind the `LLMProvider` interface.
 
 ### 6.3 Action layer (phase 5)
 
-Typed tool registry, risk tiers 0–3, dry-run, confirmations, append-only audit, kill switch, all as in the brief. One constraint matters for the observation layer: **captured text is data.** Events, page extracts, and terminal lines are passed to the LLM only inside clearly delimited data blocks, the tool-calling planner can't see raw observed text when choosing tools for proactive features, and a tool call whose arguments come from observed content needs the same confirmation as its tier says, with no "always allow" shortcut. Injection tests live in the simulator (planted "ignore previous instructions and delete…" in page extracts, commit messages, and file names).
+Typed tool registry, risk tiers 0–3, dry-run, confirmations, append-only audit, kill switch, all as in the brief. **Tier 0 and Tier 1 run without confirmation** (your answer), but only when the call comes from a request you made directly (CLI, overlay, voice). A Tier 1 call that a proactive feature proposes, or whose arguments came from observed content, still asks. Every auto-run action is audited and rate-limited, and the kill switch stops it. One constraint matters for the observation layer: **captured text is data.** Events, page extracts, and terminal lines are passed to the LLM only inside clearly delimited data blocks, the tool-calling planner can't see raw observed text when choosing tools for proactive features, and a tool call whose arguments come from observed content needs the same confirmation as its tier says, with no "always allow" shortcut. Injection tests live in the simulator (planted "ignore previous instructions and delete…" in page extracts, commit messages, and file names).
 
 ### 6.4 Interfaces
 
-CLI first (`typer`): `status`, `doctor`, `pause`, `resume`, `forget`, `inspect`, `export`, `wipe`, `install-hooks`/`uninstall-hooks`, `install-native-host`, `record`/`replay`, then `ask`. Tray (phase 6) via `pystray`. Dashboard served by the same FastAPI app on `127.0.0.1` (LAN exposure per Q6).
+CLI first (`typer`): `status`, `doctor`, `pause`, `resume`, `forget`, `inspect`, `export`, `wipe`, `install-hooks`/`uninstall-hooks`, `install-native-host`, `record`/`replay`, then `ask`. Tray (phase 6) via `pystray`.
+
+**Dashboard reachable from your phone** (your answer). The core API never leaves `127.0.0.1`. In phase 6 the dashboard gets a **second listener** on your LAN address with these rules:
+
+- **Off until you enable it.** HTTPS with a self-signed certificate generated locally.
+- **Device pairing.** You scan a QR code shown on the laptop, and each phone gets its own revocable token.
+- **Limited routes.** Only dashboard and query routes, never `/ingest`. Control actions limited to pause and forget.
+- **No action confirmations from the phone at first.** Tier 2+ can't be confirmed from it.
+- **Firewall.** Windows Firewall needs an inbound rule, which takes admin rights. The app prints the exact command for you to run; it doesn't change firewall settings itself.
+- **Away from home.** Reaching it from outside your network (for example over Tailscale) is out of scope until you ask.
+
+### 6.5 Google integrations (phase 7)
+
+Calendar and Gmail come first (your answer); Obsidian and other notes come later. These are the system's **first cloud calls**, so they're opt-in per feature:
+
+- **Sign-in.** OAuth through the installed-app loopback flow, so the sign-in happens in your browser. Refresh tokens are stored with `keyring`, which uses Windows Credential Manager.
+- **Read-only scopes first.** Write scopes (create events, send mail) are added only together with their Tier 2 tools.
+- **Email bodies stay out of storage and LLM prompts by default.** Headers, sender, and subject are used for triage.
+- **Not in `wipe`.** A wipe deletes the local tokens, but revoking access in your Google account is a separate step that you do in Google's settings.
 
 ---
 
@@ -451,6 +485,15 @@ CLI first (`typer`): `status`, `doctor`, `pause`, `resume`, `forget`, `inspect`,
 
 ---
 
-## 10. Open questions for you
+## 10. Your answers (2026-11-02)
 
-See the list in chat. Answers will be folded into this document and `DECISIONS.md` before phase 0 starts.
+| # | Question | Answer | Where it changed the design |
+|---|---|---|---|
+| 1 | Daily tools | Brave is the default; test with Chrome for now. VS Code. Terminal is my call | §1. PowerShell 5.1 hook first, then Git Bash. |
+| 2 | Project folders | `Documents` only | §1, `defaults.toml` (`watched_roots`). |
+| 3 | Never observe | Messaging sites like WhatsApp and Instagram | §4.3. Domains blocked, desktop app blocked, titles redacted. |
+| 4 | Dashboard reach | Reachable from phone too | §6.4. Separate LAN listener, HTTPS, pairing, phase 6. |
+| 5 | Action aggressiveness | Allow Tier 1 automatically | §6.3. Only for requests you made directly. |
+| 6 | Integrations first | Google (calendar, email); Obsidian etc. later | §6.5. Phase 7. |
+| 7 | Models | Qwen only | §6.2. `qwen3:4b` + `qwen3-embedding:0.6b`. |
+| 8 | Encryption, location | Later; data on C: | §5.3 unchanged. Data dir `%LOCALAPPDATA%\PersonalOS`. |

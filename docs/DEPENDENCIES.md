@@ -1,6 +1,8 @@
 # Dependencies
 
-Every dependency, with a one-line reason. Anything not listed here doesn't get added. Status is **proposed** until the design is approved; versions are pinned in `uv.lock` when each one is first used.
+Every dependency, with a one-line reason. Anything not listed here doesn't get added. Exact versions are pinned in `uv.lock`. Phase 0 uses only the phase 0 rows plus the dev tools; the rest are added in the phase that first needs them.
+
+Transitive packages pulled in by the ones below (for example `rich`, `click` and `shellingham` via `typer`, and `pydantic-core` via `pydantic`) aren't listed separately.
 
 ## Runtime
 
@@ -29,6 +31,7 @@ Every dependency, with a one-line reason. Anything not listed here doesn't get a
 | `hypothesis` | Property tests for redaction (no planted secret survives) and debounce logic. |
 | `ruff` | Lint + format in one fast tool. |
 | `mypy` | Static checking of the event and payload types, the core contract of the system. |
+| `hatchling` (build backend) | Builds the package so `uv` can install the `personal-os` command. No configuration beyond one line. |
 
 ## Bundled into extensions (JavaScript, not Python)
 

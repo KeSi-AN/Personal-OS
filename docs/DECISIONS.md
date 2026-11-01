@@ -1,21 +1,29 @@
 # Architecture Decision Log
 
-Each entry has a status (Proposed, Accepted, Superseded) and a one-paragraph rationale. Everything below is **Proposed** until you approve `DESIGN.md`.
+Each entry has a status (Proposed, Accepted, Superseded) and a short rationale. ADR-001 to ADR-015 were accepted with the design on 2026-11-02.
 
 | # | Decision | Status | Why |
 |---|---|---|---|
-| ADR-001 | Single daemon process, asyncio, observers as supervised in-process tasks | Proposed | Fits the 300 MB budget and is simple to debug. Python exceptions are isolated per observer by the supervisor. Per-observer subprocess isolation stays as a config flag if a native crash ever happens. |
-| ADR-002 | Daemon runs at logon in the user session through Task Scheduler, not as a Windows service | Proposed | Services live in session 0 and can't see foreground windows, idle time, or lock events. Task Scheduler gives restart-on-failure without admin rights. |
-| ADR-003 | Browser → daemon over native messaging; everything else over token-authenticated HTTP on 127.0.0.1 | Proposed | Native messaging pins the extension ID and opens no port to web pages. The CLI, editor extension, and dashboard need an API anyway. Host and Origin checks block DNS rebinding and web-page access. |
-| ADR-004 | Shell hooks always append to a per-shell spool file, which the daemon tails | Proposed | Prompt latency can't depend on the daemon. Appending to a file is around a millisecond and can't hang. One delivery path covers both "daemon up" and "daemon down". |
-| ADR-005 | git CLI (porcelain v2, `--no-optional-locks`) instead of GitPython | Proposed | Stable output contract, one less dependency, and it never competes with the user's git for `index.lock`. |
-| ADR-006 | `ctypes` instead of `pywin32` for Win32 calls | Proposed | About 10 API functions are needed. Avoids a large dependency with a post-install step. |
-| ADR-007 | Interval events are upserted by id, checkpointed every 60 s | Proposed | A crash loses at most 60 s of an open interval. One table holds both open and closed intervals. |
-| ADR-008 | Privacy filter is a single choke point that fails closed | Proposed | A filter bug may lose data but can never leak it. |
-| ADR-009 | Plain SQL migrations tracked with `PRAGMA user_version`; no ORM | Proposed | SQLite-specific features (FTS5, vec0, upserts, triggers) are easier in SQL. Fewer dependencies. |
-| ADR-010 | CPython 3.12 managed by `uv` | Proposed | Widest wheel availability for later phases (voice/ML). 3.13 also works for phases 0–6. |
-| ADR-011 | `forget` tombstones action-audit arguments instead of deleting the rows | Proposed | Keeps the audit log append-only (who did what, when) while still removing captured content from the forgotten window. |
-| ADR-012 | Own UUIDv7 implementation for event ids | Proposed | Time-sortable ids with no dependency. The stdlib only gets `uuid7` in 3.14. |
-| ADR-013 | No file shadow copies; diff summaries come from git numstat, or line/size deltas outside git | Proposed | Storing copies of your files would contradict "context, not logs" and enlarge the privacy surface. |
-| ADR-014 | LLM background jobs gated on AC power + user idle + no full-screen app | Proposed | Laptop with a 4 GB GPU. Summaries mustn't drain the battery or slow down active work or games. |
-| ADR-015 | Default data dir `%LOCALAPPDATA%\PersonalOS`, outside Documents and OneDrive | Proposed | User-private ACL, not synced to the cloud, and never inside a watched root. |
+| ADR-001 | Single daemon process, asyncio, observers as supervised in-process tasks | Accepted | Fits the 300 MB budget and is simple to debug. Python exceptions are isolated per observer by the supervisor. Per-observer subprocess isolation stays as a config flag if a native crash ever happens. |
+| ADR-002 | Daemon runs at logon in the user session through Task Scheduler, not as a Windows service | Accepted | Services live in session 0 and can't see foreground windows, idle time, or lock events. Task Scheduler gives restart-on-failure without admin rights. |
+| ADR-003 | Browser → daemon over native messaging; everything else over token-authenticated HTTP on 127.0.0.1 | Accepted | Native messaging pins the extension ID and opens no port to web pages. The CLI, editor extension, and dashboard need an API anyway. Host and Origin checks block DNS rebinding and web-page access. |
+| ADR-004 | Shell hooks always append to a per-shell spool file, which the daemon tails | Accepted | Prompt latency can't depend on the daemon. Appending to a file is around a millisecond and can't hang. One delivery path covers both "daemon up" and "daemon down". |
+| ADR-005 | git CLI (porcelain v2, `--no-optional-locks`) instead of GitPython | Accepted | Stable output contract, one less dependency, and it never competes with the user's git for `index.lock`. |
+| ADR-006 | `ctypes` instead of `pywin32` for Win32 calls | Accepted | About 10 API functions are needed. Avoids a large dependency with a post-install step. |
+| ADR-007 | Interval events are upserted by id, checkpointed every 60 s | Accepted | A crash loses at most 60 s of an open interval. One table holds both open and closed intervals. |
+| ADR-008 | Privacy filter is a single choke point that fails closed | Accepted | A filter bug may lose data but can never leak it. |
+| ADR-009 | Plain SQL migrations tracked with `PRAGMA user_version`; no ORM | Accepted | SQLite-specific features (FTS5, vec0, upserts, triggers) are easier in SQL. Fewer dependencies. |
+| ADR-010 | CPython 3.12 managed by `uv` | Accepted | Widest wheel availability for later phases (voice/ML). 3.12.11 is already installed through uv. |
+| ADR-011 | `forget` tombstones action-audit arguments instead of deleting the rows | Accepted | Keeps the audit log append-only (who did what, when) while still removing captured content from the forgotten window. |
+| ADR-012 | Own UUIDv7 implementation for event ids | Accepted | Time-sortable ids with no dependency. The stdlib only gets `uuid7` in 3.14. |
+| ADR-013 | No file shadow copies; diff summaries come from git numstat, or line/size deltas outside git | Accepted | Storing copies of your files would contradict "context, not logs" and enlarge the privacy surface. |
+| ADR-014 | LLM background jobs gated on AC power + user idle + no full-screen app | Accepted | Laptop with a 4 GB GPU. Summaries mustn't drain the battery or slow down active work or games. |
+| ADR-015 | Default data dir `%LOCALAPPDATA%\PersonalOS` on C:, outside Documents and OneDrive | Accepted | User-private ACL, not synced to the cloud, and never inside a watched root. Confirmed by your answer to Q8. |
+| ADR-016 | Qwen only: `qwen3:4b` for fast and reasoning roles, `qwen3-embedding:0.6b` for embeddings | Accepted | Your answer to Q7. One chat model means nothing else competes for the 4 GB of VRAM. |
+| ADR-017 | Tier 0–1 actions auto-run only for direct user requests; proactive or content-derived calls still confirm | Accepted | Your answer to Q5 (allow Tier 1), combined with the brief's rule that observed content must never trigger tools. |
+| ADR-018 | Phone access through a separate, opt-in LAN listener (HTTPS, per-device pairing, limited routes); the core API stays on loopback | Accepted | Your answer to Q4. Keeps ingest and control off the network, and lets one phone be revoked without touching the rest. |
+| ADR-019 | Google Calendar and Gmail as the first cloud integrations, opt-in, read-only scopes first, tokens in Windows Credential Manager | Accepted | Your answer to Q6. These are the first cloud calls, so they're explicit and minimal. |
+| ADR-020 | Simulator scenarios written in TOML | Accepted | `tomllib` is in the stdlib, so no YAML dependency. |
+| ADR-021 | Timestamps stored as integer Unix milliseconds (UTC) plus `tz_offset_min` | Accepted | Cheap comparisons and range indexes. No string-format ambiguity. Local-day queries use the stored offset. |
+| ADR-022 | Migration 0001 creates only the tables phase 0 uses; later tables come in their own migrations | Accepted | No empty speculative schema, and the migration path gets exercised from phase 1 on. |
+| ADR-023 | FTS5 tables use the `secure-delete` option, alongside `PRAGMA secure_delete=ON` | Accepted | `forget` must not leave deleted text in the full-text index or in free pages. Verified by a test that scans the database file bytes. |
