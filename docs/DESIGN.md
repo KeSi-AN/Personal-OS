@@ -488,7 +488,64 @@ The answer ends with its confidence and the numbered evidence (time, kind, what,
 
 ### 6.3 Action layer (phase 5)
 
-Typed tool registry, risk tiers 0–3, dry-run, confirmations, append-only audit, kill switch, all as in the brief. **Tier 0 and Tier 1 run without confirmation** (your answer), but only when the call comes from a request you made directly (CLI, overlay, voice). A Tier 1 call that a proactive feature proposes, or whose arguments came from observed content, still asks. Every auto-run action is audited and rate-limited, and the kill switch stops it. One constraint matters for the observation layer: **captured text is data.** Events, page extracts, and terminal lines are passed to the LLM only inside clearly delimited data blocks, the tool-calling planner can't see raw observed text when choosing tools for proactive features, and a tool call whose arguments come from observed content needs the same confirmation as its tier says, with no "always allow" shortcut. Injection tests live in the simulator (planted "ignore previous instructions and delete…" in page extracts, commit messages, and file names).
+**Tools.** Every action is a typed tool in a registry. A tool has:
+
+- a name and a one-line description;
+- a pydantic argument model;
+- a risk tier and whether it can be undone;
+- a `preview` (exactly what will happen: the path, the command line, the diff) used for dry runs and confirmations;
+- `run`, which returns a result and, where possible, an undo recipe.
+
+There is no free-form shell: an LLM can only fill in a tool's arguments.
+
+| Tier | Tools in phase 5 | Policy |
+|---|---|---|
+| 0, read-only | `search_context`, `read_file`, `list_folder`, `system_status` | Runs without asking |
+| 1, low-risk, reversible | `open_path`, `open_url`, `open_app`, `create_note`, `copy_to_clipboard`, `media` (play/pause, next, previous, mute, volume), `screenshot`, `window` (focus, minimize, maximize, restore) | Runs without asking when you asked for it directly (your answer to Q5). Asks when the request was proactive, or when its arguments could have come from captured content |
+| 2, confirm every time | `create_file`, `edit_file` (shown as a diff), `move_path`, `run_command` (named commands from config only), `git_commit`, `git_switch`, `git_stash` | Always asks. There's no "always allow" |
+| 3, blocked | `delete_path` (to the Recycle Bin), `run_shell` (a command outside the named list) | Blocked. `actions unlock TOOL --minutes N` (confirmed at the keyboard) allows it for a while, and each use still asks. Never for tainted or proactive calls |
+
+Not in phase 5:
+
+- **Need phase 6 notifications:** brightness, do-not-disturb, timers and reminders.
+- **Phase 7:** email, calendar and package installs.
+- **Web search:** an `open_url` with a search URL does the job without an API.
+
+**Where a request comes from.** Each call carries an origin and a taint flag:
+
+- `user`: you named the tool yourself (`personal-os actions run …`).
+- `planned`: the planner chose it from words you typed (`personal-os do "…"`).
+- `proactive`: a later phase suggested it.
+
+**Taint.** A call is tainted once anything captured has been put in front of the planner, such as a `search_context` or `read_file` result in the same request. From then on, tier 1 asks, and tier 3 is blocked even if unlocked.
+
+**Safety rails, checked before any confirmation:**
+
+- **Paths:** paths must resolve, after following links, inside your watched folders, the notes and screenshots folders, or `actions.allowed_paths`. They're never secret paths (the privacy filter's globs: `.env`, keys, `.ssh` and so on), and never the data folder itself.
+- **URLs:** only http(s), never a blocked domain.
+- **Commands:** run as argument lists without a shell, with a timeout.
+- **Rate limits:** 30 actions a minute, 10 of tier 2 or above.
+- **Exfiltration guard:** a network-capable call (`open_url`) whose arguments contain a long run of text read earlier in the same request is blocked.
+
+**Confirmation** shows the tool, tier, origin and preview, and waits for **y** typed at the keyboard. With no keyboard (a background process, a test), it's declined.
+
+**Audit log.** `action_audit` is append-only (SQLite triggers refuse updates and deletes). Every stage gets its own row: proposed, auto-allowed / confirmed / declined / blocked (with the reason), started, succeeded / failed / cancelled, undone. Each row records the origin, taint, arguments, result and undo recipe. `forget` replaces the arguments in its window with a tombstone instead of deleting rows (ADR-011). `personal-os actions log` shows it. `personal-os actions undo ID` runs the undo recipe through the same policy.
+
+- `edit_file` keeps the original in `undo/` (deleted after 7 days or by `forget`) so it can be restored. An undo is refused if the file changed since.
+
+**Kill switch.** `personal-os actions kill`, or the global hotkey **Ctrl+Alt+Shift+K** registered by the daemon, does three things:
+
+- it cancels whatever is running (a command's process is terminated);
+- the planner stops;
+- everything goes **observe-only** until `personal-os actions resume`.
+
+**Planner** (`personal-os do "…"`). The model returns a JSON plan, `{calls: [{tool, args}], reply}`, constrained by a schema with thinking off. It took 1.3–3.4 s per plan in testing; native tool calling made `qwen3:4b` think first (5–42 s).
+
+- **What the planner sees:** your request, the tool list (tiers 0–2; tier 3 never), project names and folders, app names and named commands. No captured content.
+- **Two-round requests:** if a plan uses a tier-0 lookup, its result comes back inside a data block for one more round, and every call after that is tainted.
+- **Checking:** each call is validated against the tool's argument model and then goes through the policy.
+
+Injection tests (planted instructions in page text, commit messages, file names and command output) run in the simulator against a worst-case fake model that obeys them. They also run against `qwen3:4b`.
 
 ### 6.4 Interfaces
 

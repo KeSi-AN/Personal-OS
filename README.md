@@ -9,6 +9,7 @@ A local-first personal context and assistant layer. It observes your computer ac
 - Dependencies: [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)
 - Demos: [phase 0 (simulator)](docs/PHASE0_DEMO.md), [phase 1 (live capture)](docs/PHASE1_DEMO.md), [phase 2 (browser)](docs/PHASE2_DEMO.md), [phase 3 (projects)](docs/PHASE3_DEMO.md), [phase 4 (ask)](docs/PHASE4_DEMO.md)
 - Resource budget: [docs/BUDGET.md](docs/BUDGET.md)
+- Roadmap and post-MVP backlog: [docs/ROADMAP.md](docs/ROADMAP.md)
 
 ## Development
 
