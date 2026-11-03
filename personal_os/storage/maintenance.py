@@ -44,6 +44,7 @@ def forget(
             params,
         ).fetchone()[0]
         n_events = conn.execute(f"DELETE FROM events WHERE {overlap}", params).rowcount
+        conn.execute("DELETE FROM sessions WHERE ts_start < :end AND ts_end >= :start", params)
         if marker:
             event = Event.point(
                 MetaEvent(kind="meta.forget", range_start=start, range_end=end),
@@ -148,7 +149,15 @@ class Inspection:
 def inspect(conn: sqlite3.Connection, db_path: Path | None) -> Inspection:
     tables = {
         name: conn.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
-        for name in ("events", "page_extracts", "counters", "kv_settings")
+        for name in (
+            "events",
+            "page_extracts",
+            "projects",
+            "assignment_rules",
+            "sessions",
+            "counters",
+            "kv_settings",
+        )
     }
     by_source = [
         (r[0], r[1], r[2], r[3] or 0)

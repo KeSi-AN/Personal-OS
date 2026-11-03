@@ -48,6 +48,7 @@ ON CONFLICT (id) DO UPDATE SET
     confidence = excluded.confidence,
     expires_at = min(coalesce(events.expires_at, excluded.expires_at), excluded.expires_at),
     truncated = max(events.truncated, excluded.truncated),
+    assigned_at = CASE WHEN events.assign_source = 'user' THEN events.assigned_at ELSE NULL END,
     updated_at = excluded.updated_at
 WHERE events.source = excluded.source AND events.type = excluded.type
 """
