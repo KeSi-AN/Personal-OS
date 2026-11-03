@@ -1,6 +1,6 @@
 # Personal OS — Design
 
-**Status:** v0.3. Phase 0 done, phase 1 (live observers) built, awaiting your review.
+**Status:** v0.3. Phases 0 and 1 done and accepted (2026-11-03). Phase 2 (browser) next.
 **Date:** 2026-11-02
 **Scope of this draft:** overall architecture, and the observation layer in detail (brief §4). Storage, the context engine, the action layer, and interfaces are covered only far enough to show the observation layer fits them. Each gets its own design section before its phase starts.
 

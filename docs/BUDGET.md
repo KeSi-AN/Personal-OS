@@ -22,4 +22,13 @@ Startup costs a short burst, about 1.5% for the first few seconds, while git tak
 
 The PowerShell hook adds about **8–11 ms** per prompt on this machine (measured by `tests/test_hooks.py -m live` over 20 prompts in Windows PowerShell 5.1). That's below what you'd notice, but above the 3 ms first estimated in the design: PowerShell 5.1 is slow at `Get-History` and string work.
 
-The phase 1 acceptance run (1 hour of normal work) is still to do; append its result here.
+### 2026-11-03 18:30 — phase 1 acceptance run, 26.7 min of normal use
+
+- Setup: real data dir, all observers on (window, session, fs on `Documents`, git across 26 repos, terminal hook in PowerShell). Usage covered a video call, VS Code, File Explorer, the browser, terminal commands, a commit and a `git pull`.
+- Machine: 8 logical CPUs, 15.8 GB RAM, AC power
+- CPU (% of machine): **0.065% average** over the whole run (8.3 CPU-seconds in 26.7 min, from the OS's own process CPU time)
+- Memory: 46 MB at the end, **53 MB peak** working set
+- Bus: 235 events received, 235 stored, 0 dropped, high-water 15; no filter errors, no observer restarts
+- Result: **within budget**
+
+You chose to stop at about 25 minutes instead of 60, so this uses the daemon's lifetime CPU time rather than the sampling script. That's the same measure, averaged over the whole run instead of 5-second samples.
