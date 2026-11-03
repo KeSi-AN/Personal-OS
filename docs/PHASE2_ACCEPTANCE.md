@@ -48,3 +48,19 @@ Also: settings added in a newer version now fill in from the defaults for existi
 ## Not exercised live
 
 Brave (same extension; its native-host key is registered by `personal-os browser install`), bookmarks, and a page with a password field (covered by tests).
+
+## Cross-source audit (2026-11-03, after acceptance)
+
+You asked for a thorough recheck. I compared every browser visit against the window record, read both terminal tabs, and checked the process tree. What I found and changed:
+
+| Finding | Change |
+|---|---|
+| Active time disagreed with the window record (100 s vs about 59 s; 11 s vs about 84 s). Chrome's focus events are unreliable on Windows. | Active time now comes from the window record (ADR-033). `personal-os browser recompute-dwell` brought 17 stored visits in line. |
+| `events` showed how long a tab stayed open (1046 s), not active time, and showed search URLs instead of queries. | Page visits show active time ("+" while open). Searches and selections show their text; hidden visits show the site. |
+| The daemon ran inside a visible Windows Terminal window. Closing it killed capture. | Windowless start (ADR-034). Verified: two `pythonw.exe` processes, no console. |
+| A Gmail visit stayed "open" forever after the extension was reloaded. | Browser visits that stop checking in for 3 minutes are closed at their last checkpoint. |
+| The password-page counter grew by one per minute for a single open tab; a visit stored before its password field appeared was never removed. | Count once per visit; retract the stored row (ADR-035). |
+| Every daemon restart re-recorded all 26 repos' git state. | Unchanged repos aren't re-recorded. Verified: second restart added 0 rows. |
+| Deleting a build folder (`dist`) showed as a file change. | Ignored, like the folder's contents. |
+| One terminal tab recorded nothing. | Not a bug: that PowerShell started before the hook was installed. A shell only loads its profile when it starts. Open a new one. |
+| A search for a word from an email returned nothing. | By design: mail is kept as site and time only. |
