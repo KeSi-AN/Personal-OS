@@ -1,6 +1,6 @@
 # Personal OS — Design
 
-**Status:** v0.4. Phases 0, 1 and 2 accepted (2026-11-03). Phase 3 (project resolver, sessions) next.
+**Status:** v0.5. Phases 0, 1 and 2 accepted (2026-11-03). Phase 3 (project resolver, sessions) built, awaiting review. Phase 4 (LLM summaries, `ask`) next.
 **Date:** 2026-11-02
 **Scope of this draft:** overall architecture, and the observation layer in detail (brief §4). Storage, the context engine, the action layer, and interfaces are covered only far enough to show the observation layer fits them. Each gets its own design section before its phase starts.
 
@@ -400,9 +400,34 @@ Raw events 30 days, page text 90 days, terminal output (when enabled) 14 days, c
 
 ## 6. Upper layers (sketch, designed in detail at their phase)
 
-### 6.1 Project resolver and context engine (phases 3–4)
+### 6.1 Project resolver and sessions (phase 3)
 
-Signal order as in the brief. The cheap rules-based hint (repo root, cwd, path under root) is computed at ingest; embeddings and temporal smoothing run in a background job. Sessions split on 15 min idle or a project switch lasting ≥ 10 min. Summaries are JSON validated by pydantic, cite event ids, and are regenerated when their evidence changes (for example after `forget`).
+**Projects.** Every git repo the system has seen becomes a project automatically. Its id is the folder name (with a suffix if two repos share a name), its root is the repo path, and its GitHub `owner/repo` comes from the remote URL (credentials stripped). You can add projects that aren't repos (`personal-os projects add NAME --root PATH --keyword ...`), rename or archive them, and there's a built-in `none` project meaning "not project work" (Netflix, personal mail, chats).
+
+**Resolver.** A background job, every 30 s, gives each new event a project and a confidence. Each signal proposes candidates; the highest confidence wins:
+
+| Signal | Applies to | Confidence |
+|---|---|---|
+| Your correction of this event | any | 1.0, never overwritten |
+| Path under a project root (repo root, file path, terminal cwd, editor workspace) | git, fs, terminal, editor, window cwd | git 1.0, fs 0.98, terminal/editor 0.95, window cwd 0.6 |
+| Window title names a project folder ("file - **folder** - Visual Studio Code", "**folder** - File Explorer") | window | editors 0.9, others 0.65 |
+| GitHub page of a project's repo (`owner/repo` matches the remote) | browser | 0.9 |
+| Rules learned from your corrections (site, GitHub repo, path, app + title, app) | browser, window, terminal, fs | GitHub repo up to 0.95, path 0.9, app + title 0.85, site 0.8; 0.1 less while fewer than two corrections back it. A whole app is weaker: 0.55, then 0.65, then 0.8 as corrections agree |
+| Keyword overlap between the page/title and the project's vocabulary (name, plus words from its commit messages, files and confidently assigned pages: TF-IDF across projects) | browser, editor windows | 0.45 + 0.05 per matching word, at most 0.7. Only with at least two words each seen twice in the project, at least one word that few projects use, and a winner 1.6× ahead of the runner-up |
+| Page: a browser window follows the page visit it shows (a hidden window pairs with a hidden visit by time) | window | 0.95 × the page's confidence |
+| Temporal: what you were working on in the 10 minutes around it (only confident, direct neighbours count) | browser, window, terminal outside repos | 0.6 × the neighbours' agreement + 0.05, at most 0.65, needs 70% agreement |
+
+When two weaker signals agree on the same project (say a keyword match and the temporal context), they combine as independent evidence, 1 − (1 − a)(1 − b), capped at 0.84 so a combination never looks like a direct signal.
+
+Below 0.5 an event stays **unassigned** and goes to the inbox. System, idle and meta events never get a project. Embeddings join the keyword signal in phase 4, when the local embedding model arrives; phase 3 uses words only.
+
+**Inbox and learning.** `personal-os inbox` groups unassigned items, and guesses below 0.7 that came only from keywords or timing, by what they have in common (a site, an app and title, a folder), with counts, time spent and the current guess, so one `personal-os assign <group> <project>` fixes many. Assigning a group stores a rule for it; assigning one event only fixes that event (add `--learn` for a rule). The resolver then re-runs over the last 30 days except your corrections, so the rule applies straight away and to future events. A site used for several projects (Stack Overflow) gets conflicting corrections, which lowers its rule's confidence, so the keyword and temporal signals win there.
+
+**Sessions.** Rebuilt every 5 minutes for the last 24 hours, and for any range on demand. The day is cut into one-minute buckets, each labelled with the project that had the most time in it (window time by its resolved project, plus a little for each other event). A gap of 15 minutes or more (idle, locked, asleep or nothing happening) ends a session. Within a block, project runs shorter than 10 minutes are absorbed by their neighbours, so a quick Stack Overflow detour doesn't split a coding session. Each session stores its start, end, project, active time and stats: apps and time, files touched, pages read, commands run (and how many failed), commits. Phase 4 summarises sessions with the LLM.
+
+**Privacy.** Learned keyword profiles are recomputed from stored events and never stored themselves, so `forget` removes their source. `forget` also deletes overlapping sessions, which are rebuilt from what's left. Rules hold only what you typed in a correction: a site, a path or an app.
+
+**Acceptance.** Labelled simulated days across three projects plus personal browsing, including deliberately ambiguous research pages. Day 1 is a cold start; simulated corrections are made through the inbox (a group is assigned only if 80% of it belongs to one project, otherwise its items one by one); day 2 must score at least 90% of events correct (an unassigned event counts as wrong), and at least 85% of time. A second, harder day 2 was written after tuning as a hold-out (ADR-042).
 
 ### 6.2 Local models for this hardware (GTX 1650 4 GB, 16 GB RAM)
 
