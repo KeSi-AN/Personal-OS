@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "Personal OS",
+  "version": "1.0.0",
+  "description": "Sends page context (never raw HTML, passwords or incognito) to your local Personal OS.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwN2SlTz36Q12g4DuTY60+ZEsIlimNxXK3qwgLGmasErQi3bo/wnpcZNiT9CE2/MxTQ9JUP6AoGHJ9TC1s7lFFOEpIjuwTpVzTH1YqmZHqnMuy49BnPYWL1wUdrmNi8udMyZr7CrsVdMyjYEb9SeOnpta4XWdzZajNbrrpfH27YVdVaGq0/5JqlQ3PZUBT7+Ko+Wfvw54Hvmb3UlNiWyvL9GaXo6lYuT5i0zadzn1pIwF2TbAJfIlyMFdmyyA+2HD7dqxM7fGVMMKeNHVmCqcDm42R9PIIdqE1f69wMADEcCkgLMjHb0JwfUyTYwy8/rwY95qhyQk94tsyYGTay7SxwIDAQAB",
+  "minimum_chrome_version": "116",
+  "incognito": "not_allowed",
+  "permissions": [
+    "tabs",
+    "webNavigation",
+    "idle",
+    "storage",
+    "alarms",
+    "nativeMessaging",
+    "bookmarks"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "action": {
+    "default_title": "Personal OS"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "personal-os-extension",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Personal OS browser extension (Manifest V3).",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node build.mjs --test && node --test \"dist-test/*.test.mjs\""
+  },
+  "devDependencies": {
+    "@mozilla/readability": "0.6.0",
+    "@types/chrome": "0.1.12",
+    "@types/node": "22.15.30",
+    "esbuild": "0.25.10",
+    "typescript": "5.9.2"
+  }
+}

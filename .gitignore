@@ -19,3 +19,6 @@ extensions/*/out/
 runtime/
 spool/
 .env
+# extension build output (rebuild with `npm run build` in extensions/browser)
+extensions/browser/dist/
+extensions/browser/dist-test/
