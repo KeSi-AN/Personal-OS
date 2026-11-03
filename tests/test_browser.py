@@ -295,3 +295,28 @@ def test_host_files_pin_origin_and_isolate_python(tmp_path: Path):
     bat = Path(data["path"]).read_text("utf-8")
     assert " -I -m personal_os.browser.native_host --browser=chrome" in bat
     assert f'--home="{tmp_path / "home"}"' in bat
+
+
+def test_titles_search_urls_and_documents_are_cleaned(config: Config):
+    events = parse_record(visit(url="https://www.google.com/search?q=sqlite+wal&oq=sq&gs_lcrp=EgZjaHJ&sourceid=chrome&ie=UTF-8",
+                                title="(3995) sqlite wal - Google Search"))  # fmt: skip
+    assert events is not None
+    p = events[0].payload
+    assert p.url == "https://www.google.com/search?q=sqlite+wal"  # type: ignore[union-attr]
+    assert p.title == "sqlite wal - Google Search"  # type: ignore[union-attr]
+
+    from personal_os.privacy.filter import PrivacyFilter
+    from personal_os.privacy.rules import PrivacyRules
+
+    f = PrivacyFilter(PrivacyRules.from_config(config.privacy))
+    doc = parse_record(visit(url="https://docs.google.com/document/d/abc/edit", title="Plan - Google Docs",
+                             extract={"text": "my private plan; me@example.com", "title": "Plan"}))  # fmt: skip
+    assert doc is not None and doc[0].payload.content_type == "document"  # type: ignore[union-attr]
+    stored = f.apply(doc[0])
+    assert stored is not None and stored.payload.extract is None  # type: ignore[union-attr]
+    assert stored.payload.title == "Plan - Google Docs"  # type: ignore[union-attr]
+
+    other = f.apply(
+        parse_record(visit(extract={"text": "write to addya.someone+x@gmail.com today"}))[0]
+    )  # type: ignore[index]
+    assert other is not None and "gmail.com" not in other.payload.extract.main_text  # type: ignore[union-attr]

@@ -180,3 +180,11 @@ def test_property_known_secret_never_survives(prefix: str, secret: str, suffix: 
 def test_property_redactor_never_raises(text: str):
     R.redact(text, "text")
     R.redact_url(text)
+
+
+def test_email_addresses_are_redacted():
+    assert redact("Account me.someone+tag@gmail.com signed in") == "Account [redacted] signed in"
+    assert redact("npm install @types/node") == "npm install @types/node"
+    assert redact(
+        "git@github.com:a/b.git", "git"
+    ) == "[redacted]:a/b.git" or "@github.com" not in redact("git@github.com:a/b.git")

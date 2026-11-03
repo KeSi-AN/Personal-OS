@@ -52,7 +52,19 @@ def load_config(home: Path | None = None, *, create: bool = True) -> Config:
     return _build(tomllib.loads(path.read_text("utf-8")), home)
 
 
+def _merge(defaults: dict[str, Any], user: dict[str, Any]) -> dict[str, Any]:
+    """Your values win; settings added in a newer version come from the defaults."""
+    out = dict(defaults)
+    for key, value in user.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
 def _build(raw: dict[str, Any], home: Path) -> Config:
+    raw = _merge(tomllib.loads(defaults_text()), raw)
     data_dir = raw.get("data_dir") or ""
     raw["data_dir"] = Path(data_dir).expanduser() if data_dir else home
     raw["watched_roots"] = [Path(p).expanduser() for p in raw.get("watched_roots", [])]

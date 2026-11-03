@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 _SEARCH_ENGINES: list[tuple[re.Pattern[str], str, str, str]] = [
     # (host regex, path prefix, query param, engine name)
@@ -31,6 +31,12 @@ _DOCS_HOSTS = re.compile(
     r"(^docs\.|\.readthedocs\.io$|^developer\.mozilla\.org$|^learn\.microsoft\.com$|"
     r"^pkg\.go\.dev$|^docs\.rs$|^doc\.rust-lang\.org$|^devdocs\.io$|^nodejs\.org$|"
     r"^react\.dev$|^nextjs\.org$|^fastapi\.tiangolo\.com$|^pydantic\.dev$|^kotlinlang\.org$)"
+)
+# Your own documents (Google Docs/Sheets/Slides/Drive, Office online): not developer docs.
+_DOCUMENT_HOSTS = re.compile(
+    r"^(docs\.google\.com|drive\.google\.com|sheets\.google\.com|slides\.google\.com|"
+    r"onedrive\.live\.com|([a-z0-9-]+\.)?sharepoint\.com|www\.office\.com|"
+    r"([a-z0-9-]+\.)?notion\.so|([a-z0-9-]+\.)?notion\.site)$"
 )
 _MAIL_HOSTS = re.compile(r"^(mail\.google\.com|outlook\.(live|office|office365)\.com)$")
 _CHAT_HOSTS = re.compile(
@@ -61,6 +67,31 @@ def search_query(url: str) -> tuple[str, str] | None:
             if values and values[0].strip():
                 return engine, values[0].strip()[:300]
     return None
+
+
+def clean_search_url(url: str) -> str:
+    """A search results URL reduced to its query (drops oq, gs_lcrp, sourceid, ie, ...)."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    host = (parts.hostname or "").lower()
+    for host_re, path, param, _engine in _SEARCH_ENGINES:
+        if host_re.search(host) and parts.path.startswith(path):
+            values = parse_qs(parts.query).get(param)
+            if values:
+                return urlunsplit(
+                    (parts.scheme, parts.netloc, parts.path, urlencode({param: values[0]}), "")
+                )
+    return url
+
+
+_TITLE_COUNTER_RE = re.compile(r"^\(\d+\+?\)\s*")
+
+
+def clean_title(title: str) -> str:
+    """Drop notification counters like "(3995) " that sites put in front of page titles."""
+    return _TITLE_COUNTER_RE.sub("", title).strip()
 
 
 def map_transition(
@@ -183,6 +214,8 @@ def classify(
         return "video", info
     if host == "youtu.be" and path:
         return "video", {"video_id": path[0]}
+    if _DOCUMENT_HOSTS.match(host):
+        return "document", {}
     if _MAIL_HOSTS.match(host):
         return "mail", {}
     if _MEETING_HOSTS.match(host):

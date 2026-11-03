@@ -48,3 +48,14 @@ def test_tier_two_cannot_be_auto_allowed(home: Path):
     load_config(home)
     with pytest.raises(ValidationError):
         set_value("actions.auto_allow_tiers", [0, 1, 2], home)
+
+
+def test_settings_added_later_come_from_defaults(home: Path):
+    path = config_path(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # an old config written before no_text_domains existed, with one customised value
+    path.write_text('[privacy]\nsensitive_domains = ["mail.example"]\n', encoding="utf-8")
+    cfg = load_config(home)
+    assert cfg.privacy.sensitive_domains == ["mail.example"]  # yours kept
+    assert "docs.google.com" in cfg.privacy.no_text_domains  # new default filled in
+    assert "instagram.com" in cfg.privacy.blocked_domains

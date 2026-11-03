@@ -58,12 +58,13 @@ class PrivacyConfig(_Section):
     blocked_domains: list[str] = []
     blocked_domain_keywords: list[str] = []
     sensitive_domains: list[str] = []
+    no_text_domains: list[str] = []
     redact_title_patterns: list[str] = []
     sensitive_keywords: list[str] = []
     secret_path_globs: list[str] = []
     secret_dir_names: list[str] = []
 
-    @field_validator("allowed_domains", "blocked_domains", "sensitive_domains")
+    @field_validator("allowed_domains", "blocked_domains", "sensitive_domains", "no_text_domains")
     @classmethod
     def _lower_domains(cls, v: list[str]) -> list[str]:
         return [d.strip().lower().lstrip(".") for d in v if d.strip()]

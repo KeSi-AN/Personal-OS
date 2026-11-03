@@ -121,6 +121,14 @@ class PrivacyFilter:
         ):
             cls = stricter(cls, PrivacyClass.SENSITIVE)
 
+        if (
+            isinstance(payload, PageVisit)
+            and payload.extract is not None
+            and self.rules.is_no_text_domain(_domain(payload))
+        ):
+            payload = payload.model_copy(update={"extract": None})
+            self.counters.redactions["no_text_domain"] += 1
+
         payload = self._redact(payload)
 
         if cls == PrivacyClass.NORMAL and self._has_sensitive_keyword(payload):

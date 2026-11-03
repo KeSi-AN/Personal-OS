@@ -17,7 +17,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from personal_os.browser.enrich import classify, host_of, map_transition, search_query
+from personal_os.browser.enrich import (
+    classify,
+    clean_search_url,
+    clean_title,
+    host_of,
+    map_transition,
+    search_query,
+)
 from personal_os.core.events import BrowserSignal, Event, PageExtract, PageVisit
 from personal_os.core.observer import BaseObserver, ObserverContext, StateStore
 from personal_os.observers.spool import SpoolStats, drain
@@ -99,7 +106,7 @@ class Returns:
 
 
 def parse_visit(rec: dict[str, Any], returns: Returns | None = None) -> list[Event]:
-    url = str(rec["url"])
+    url = clean_search_url(str(rec["url"]))
     visit_id = _uuid(rec.get("id"))
     if visit_id is None:
         return []
@@ -120,7 +127,7 @@ def parse_visit(rec: dict[str, Any], returns: Returns | None = None) -> list[Eve
     payload = PageVisit(
         url=url,
         domain=host_of(url),
-        title=str(rec.get("title") or "")[:500],
+        title=clean_title(str(rec.get("title") or ""))[:500],
         tab_id=_int(rec.get("tabId"), None),
         window_id=_int(rec.get("windowId"), None),
         transition=transition,

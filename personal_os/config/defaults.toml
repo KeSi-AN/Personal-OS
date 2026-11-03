@@ -65,6 +65,12 @@ blocked_domain_keywords = ["bank", "netbanking"]
 # Visits are kept as "domain + time" only, with no title or page text.
 sensitive_domains = ["mail.google.com", "outlook.live.com", "outlook.office.com"]
 
+# Visits are kept with title and time, but the page text is never stored (your own documents).
+no_text_domains = [
+    "docs.google.com", "drive.google.com", "sheets.google.com", "slides.google.com",
+    "onedrive.live.com", "sharepoint.com", "notion.so", "notion.site",
+]
+
 # Window titles matching these regexes are stored as [redacted] (the app name is kept).
 # Private/incognito markers catch the browser window title of a private tab; the exact suffix
 # each browser uses is verified in phase 1. Mail titles carry email subjects.

@@ -50,6 +50,7 @@ class PrivacyRules:
     blocked_domains: tuple[str, ...] = ()
     blocked_domain_keywords: tuple[str, ...] = ()
     sensitive_domains: tuple[str, ...] = ()
+    no_text_domains: tuple[str, ...] = ()
     allowlist_mode: bool = False
     allowed_domains: tuple[str, ...] = ()
     redact_title_res: tuple[re.Pattern[str], ...] = ()
@@ -72,6 +73,7 @@ class PrivacyRules:
             blocked_domains=tuple(cfg.blocked_domains),
             blocked_domain_keywords=tuple(k.lower() for k in cfg.blocked_domain_keywords),
             sensitive_domains=tuple(cfg.sensitive_domains),
+            no_text_domains=tuple(cfg.no_text_domains),
             allowlist_mode=cfg.allowlist_mode,
             allowed_domains=tuple(cfg.allowed_domains),
             redact_title_res=tuple(re.compile(p) for p in cfg.redact_title_patterns),
@@ -97,6 +99,9 @@ class PrivacyRules:
 
     def is_sensitive_domain(self, domain: str) -> bool:
         return bool(domain) and _in_domains(domain, self.sensitive_domains)
+
+    def is_no_text_domain(self, domain: str) -> bool:
+        return bool(domain) and _in_domains(domain, self.no_text_domains)
 
     def title_needs_redaction(self, title: str) -> bool:
         return any(r.search(title) for r in self.redact_title_res)

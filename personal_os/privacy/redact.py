@@ -65,6 +65,10 @@ DEFAULT_PATTERNS: tuple[PatternRedactor, ...] = (
         "pem_private_key",
         r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\Z)",
     ),
+    _p(
+        "email",
+        r"(?<![\w.+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b",
+    ),
     _p("aws_access_key", r"\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b"),
     _p("github_token", r"\b(?:gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255})"),
     _p("gitlab_token", r"\bglpat-[A-Za-z0-9_\-]{20,}"),
