@@ -60,6 +60,15 @@ def test_rejects_private_and_malformed(bad):
     assert parse_record(rec(**bad)) is None
 
 
+def test_editor_shell_integration_bootstrap_is_not_a_user_command():
+    vscode = (
+        'try { . "c:\\Users\\me\\AppData\\Local\\Programs\\Microsoft VS Code\\2c33b\\resources\\app'
+        '\\out\\vs\\workbench\\contrib\\terminal\\common\\scripts\\shellIntegration.ps1" } catch {}'
+    )
+    assert parse_record(rec(command=vscode)) is None
+    assert parse_record(rec(command="code shellIntegration-notes.md")) is not None
+
+
 def test_msys_path():
     if sys.platform == "win32":
         assert msys_to_windows("/d/work/x") == "D:/work/x" and msys_to_windows("/c") == "C:/"

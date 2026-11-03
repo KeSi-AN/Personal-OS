@@ -39,6 +39,17 @@ def msys_to_windows(path: str) -> str:
     return path
 
 
+# Commands an editor injects into its integrated terminal at startup (not typed by you).
+_BOOTSTRAP_RE = re.compile(
+    r"shellIntegration\.(ps1|bash|zsh|fish)|VSCODE_SHELL_INTEGRATION|cursor-shell-integration",
+    re.IGNORECASE,
+)
+
+
+def is_tool_bootstrap(command: str) -> bool:
+    return bool(_BOOTSTRAP_RE.search(command))
+
+
 def _epoch(value: Any) -> float:
     return float(str(value).replace(",", "."))
 
@@ -57,6 +68,8 @@ def parse_record(rec: dict[str, Any]) -> Event | None:
         return None
     if command.startswith(" "):
         return None  # private-command convention; the hooks already skip these
+    if is_tool_bootstrap(command):
+        return None
     try:
         if "start_epoch" in rec:  # bash: $EPOCHREALTIME (decimal comma in some locales)
             start = datetime.fromtimestamp(_epoch(rec["start_epoch"]), UTC)
