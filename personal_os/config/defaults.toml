@@ -104,8 +104,17 @@ base_url = "http://127.0.0.1:11434"
 fast_model = "qwen3:4b"
 reasoning_model = "qwen3:4b"
 embedding_model = "qwen3-embedding:0.6b"
+enabled = true
+num_ctx = 8192
+gpu_layers = 99            # every layer on the GPU (-1 = let Ollama decide; it offloads too few here)
+embedding_dims = 512       # first N dims of the embedding, renormalised (the model supports this)
+timeout_s = 180
+keep_alive = "2m"          # free the VRAM this long after the last call
+# Background summaries and embeddings run only when all of these hold:
 only_on_ac_power = true
 min_user_idle_s = 120
+skip_when_fullscreen = true
+summarize_min_active_s = 300   # sessions shorter than this aren't summarised
 
 [api]
 host = "127.0.0.1"
