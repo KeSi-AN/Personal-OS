@@ -2,7 +2,7 @@
 
 A local-first personal context and assistant layer. It observes your computer activity (under your control), remembers it as structured project context, answers questions about your own work, and acts through a permissioned tool registry. Everything runs on your machine.
 
-**Status:** Phase 1 built: live capture of the active window, idle/lock/sleep, files under Documents, git repos and terminal commands, in a background daemon with `doctor`, pause and forget. Accepted 2026-11-03 ([acceptance notes](docs/PHASE1_ACCEPTANCE.md)). Phase 2 (browser extension) built, awaiting review.
+**Status:** Phase 1 built: live capture of the active window, idle/lock/sleep, files under Documents, git repos and terminal commands, in a background daemon with `doctor`, pause and forget. Accepted 2026-11-03 ([acceptance notes](docs/PHASE1_ACCEPTANCE.md)). Phase 2 (browser extension) accepted 2026-11-03 ([notes](docs/PHASE2_ACCEPTANCE.md)).
 
 - Design: [docs/DESIGN.md](docs/DESIGN.md)
 - Decisions: [docs/DECISIONS.md](docs/DECISIONS.md)
