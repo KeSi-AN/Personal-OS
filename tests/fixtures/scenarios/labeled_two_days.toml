@@ -1,0 +1,551 @@
+# Phase 3 acceptance: two labelled days across three projects plus personal time.
+#
+# Day 1 is the "learning" day: the resolver starts cold, then a simulated user corrects the
+# inbox once. Day 2 (from `evaluate_from`) is the test: same habits, different pages, files
+# and commands. Every step carries its true project in `project` (ground truth only; it is
+# never put into events). Generic apps (Claude, Windows Terminal, File Explorer) and shared
+# sites (Stack Overflow, Google, YouTube) are used for different projects on purpose.
+
+name = "labeled-two-days"
+start = 2026-11-02T09:00:00+05:30
+evaluate_from = 2026-11-03T00:00:00+05:30
+
+# ===================================== DAY 1 =====================================
+
+[[steps]]
+action = "focus"
+project = "auth-service"
+app = "Visual Studio Code"
+exe = "Code.exe"
+title = "session.py - auth-service - Visual Studio Code"
+
+[[steps]]
+action = "edit"
+project = "auth-service"
+path = "C:/Users/me/Documents/auth-service/auth/session.py"
+repo_root = "C:/Users/me/Documents/auth-service"
+saves = 4
+over = "14m"
+lines_added = 38
+symbols_added = ["refresh_token"]
+
+[[steps]]
+action = "command"
+project = "auth-service"
+command = "pytest tests/test_session.py -q"
+cwd = "C:/Users/me/Documents/auth-service"
+repo_root = "C:/Users/me/Documents/auth-service"
+branch = "feature/oauth"
+exit_code = 1
+duration = "11s"
+
+[[steps]]
+action = "browse"
+project = "auth-service"
+url = "https://stackoverflow.com/questions/7111/how-to-refresh-an-oauth-token-with-httpx"
+title = "How to refresh an OAuth token with httpx - Stack Overflow"
+search_query = "httpx oauth refresh token"
+dwell = "3m"
+content_type = "stackoverflow"
+[steps.extract]
+headings = ["How to refresh an OAuth token with httpx", "Use an httpx.Auth flow"]
+main_text = "Subclass httpx.Auth and refresh the OAuth access token when the server answers 401, then retry the request once with the new bearer token."
+
+[[steps]]
+action = "browse"
+project = "auth-service"
+url = "https://www.python-httpx.org/advanced/authentication/"
+title = "Authentication - HTTPX"
+dwell = "2m"
+[steps.extract]
+headings = ["Authentication", "Custom authentication schemes"]
+main_text = "HTTPX supports basic, digest and custom authentication flows; an auth flow can yield a request again after refreshing a token."
+
+[[steps]]
+action = "focus"
+project = "auth-service"
+app = "Claude"
+exe = "claude.exe"
+title = "Claude"
+duration = "4m"
+
+[[steps]]
+action = "focus"
+project = "auth-service"
+app = "Visual Studio Code"
+exe = "Code.exe"
+title = "test_session.py - auth-service - Visual Studio Code"
+
+[[steps]]
+action = "edit"
+project = "auth-service"
+path = "C:/Users/me/Documents/auth-service/tests/test_session.py"
+repo_root = "C:/Users/me/Documents/auth-service"
+saves = 3
+over = "9m"
+lines_added = 25
+symbols_added = ["test_refresh_token_retries_once"]
+
+[[steps]]
+action = "command"
+project = "auth-service"
+command = "pytest -q"
+cwd = "C:/Users/me/Documents/auth-service"
+repo_root = "C:/Users/me/Documents/auth-service"
+branch = "feature/oauth"
+exit_code = 0
+duration = "9s"
+
+[[steps]]
+action = "commit"
+project = "auth-service"
+repo_root = "C:/Users/me/Documents/auth-service"
+remote = "github.com/me/auth-service"
+branch = "feature/oauth"
+message = "Add OAuth token refresh with a single retry"
+files = ["auth/session.py", "tests/test_session.py"]
+insertions = 63
+
+[[steps]]
+action = "browse"
+project = "auth-service"
+url = "https://github.com/me/auth-service/pull/3"
+title = "Add OAuth token refresh by me - Pull Request #3 - me/auth-service - GitHub"
+dwell = "2m"
+
+[[steps]]
+action = "browse"
+project = "none"
+url = "https://www.youtube.com/watch?v=lofi24"
+title = "lofi hip hop radio - beats to relax/study to - YouTube"
+dwell = "6m"
+content_type = "video"
+
+[[steps]]
+action = "browse"
+project = "none"
+url = "https://www.netflix.com/browse"
+title = "Home - Netflix"
+dwell = "9m"
+
+[[steps]]
+action = "idle"
+duration = "20m"
+
+[[steps]]
+action = "focus"
+project = "portfolio-site"
+app = "Windows Explorer"
+exe = "explorer.exe"
+title = "portfolio-site - File Explorer"
+duration = "40s"
+
+[[steps]]
+action = "focus"
+project = "portfolio-site"
+app = "Visual Studio Code"
+exe = "Code.exe"
+title = "Hero.tsx - portfolio-site - Visual Studio Code"
+
+[[steps]]
+action = "edit"
+project = "portfolio-site"
+path = "C:/Users/me/Documents/portfolio-site/src/components/Hero.tsx"
+repo_root = "C:/Users/me/Documents/portfolio-site"
+saves = 5
+over = "18m"
+lines_added = 70
+lines_removed = 12
+
+[[steps]]
+action = "command"
+project = "portfolio-site"
+command = "npm run dev"
+cwd = "C:/Users/me/Documents/portfolio-site"
+repo_root = "C:/Users/me/Documents/portfolio-site"
+duration = "4s"
+
+[[steps]]
+action = "browse"
+project = "portfolio-site"
+url = "https://motion.dev/docs/stagger"
+title = "Stagger children animations - Motion for React"
+search_query = "framer motion stagger children hero"
+dwell = "3m"
+[steps.extract]
+headings = ["Stagger", "Stagger children with variants"]
+main_text = "Use variants with staggerChildren to animate a hero title letter by letter in React; each child animation starts after a short delay."
+
+[[steps]]
+action = "browse"
+project = "portfolio-site"
+url = "https://stackoverflow.com/questions/8222/react-useeffect-cleanup-animation-frame"
+title = "React useEffect cleanup for requestAnimationFrame - Stack Overflow"
+dwell = "2m"
+content_type = "stackoverflow"
+[steps.extract]
+headings = ["React useEffect cleanup for requestAnimationFrame"]
+main_text = "Return a cleanup function from useEffect that cancels the animation frame so the hero component does not leak when it unmounts."
+
+[[steps]]
+action = "focus"
+project = "portfolio-site"
+app = "Windows Terminal"
+exe = "WindowsTerminal.exe"
+title = "Windows PowerShell"
+duration = "2m"
+
+[[steps]]
+action = "focus"
+project = "portfolio-site"
+app = "Visual Studio Code"
+exe = "Code.exe"
+title = "Hero.tsx - portfolio-site - Visual Studio Code"
+duration = "6m"
+
+[[steps]]
+action = "commit"
+project = "portfolio-site"
+repo_root = "C:/Users/me/Documents/portfolio-site"
+remote = "github.com/me/portfolio-site"
+message = "Animate the hero title with staggered letters"
+files = ["src/components/Hero.tsx"]
+insertions = 70
+deletions = 12
+
+[[steps]]
+action = "browse"
+project = "none"
+url = "https://mail.google.com/mail/u/0/#inbox"
+title = "Inbox (4) - me@example.com - Gmail"
+dwell = "5m"
+
+[[steps]]
+action = "lock"
+duration = "45m"
+
+[[steps]]
+action = "focus"
+project = "churn-model"
+app = "Visual Studio Code"
+exe = "Code.exe"
+title = "train.py - churn-model - Visual Studio Code"
+
+[[steps]]
+action = "edit"
+project = "churn-model"
+path = "C:/Users/me/Documents/ml/churn-model/train.py"
+repo_root = "C:/Users/me/Documents/ml/churn-model"
+saves = 4
+over = "16m"
+lines_added = 44
+symbols_added = ["load_features", "train_model"]
+
+[[steps]]
+action = "command"
+project = "churn-model"
+command = "python train.py --epochs 20"
+cwd = "C:/Users/me/Documents/ml/churn-model"
+repo_root = "C:/Users/me/Documents/ml/churn-model"
+duration = "3m"
+
+[[steps]]
+action = "browse"
+project = "churn-model"
+url = "https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.rolling.html"
+title = "pandas.DataFrame.rolling - pandas documentation"
+search_query = "pandas groupby rolling mean customer"
+dwell = "3m"
+[steps.extract]
+headings = ["pandas.DataFrame.rolling"]
+main_text = "Provide rolling window calculations on a pandas DataFrame, for example a rolling mean of monthly spend per customer to build churn features."
+
+[[steps]]
+action = "browse"
+project = "churn-model"
+url = "https://stackoverflow.com/questions/9333/gradient-boosting-class-imbalance-sklearn"
+title = "Gradient boosting with imbalanced classes in sklearn - Stack Overflow"
+dwell = "2m"
+content_type = "stackoverflow"
+[steps.extract]
+headings = ["Gradient boosting with imbalanced classes in sklearn"]
+main_text = "Use sample weights or class_weight to train a gradient boosting classifier on an imbalanced churn dataset; evaluate with ROC AUC rather than accuracy."
+
+[[steps]]
+action = "focus"
+project = "churn-model"
+app = "Claude"
+exe = "claude.exe"
+title = "Claude"
+duration = "5m"
+
+[[steps]]
+action = "focus"
+project = "churn-model"
+app = "Windows Explorer"
+exe = "explorer.exe"
+title = "churn-model - File Explorer"
+duration = "35s"
+
+[[steps]]
+action = "commit"
+project = "churn-model"
+repo_root = "C:/Users/me/Documents/ml/churn-model"
+message = "Add rolling spend features and class weights"
+files = ["train.py"]
+insertions = 44
+
+[[steps]]
+action = "browse"
+project = "none"
+url = "https://news.ycombinator.com/"
+title = "Hacker News"
+dwell = "5m"
+
+[[steps]]
+action = "browse"
+project = "none"
+url = "https://www.youtube.com/watch?v=trailer9"
+title = "Official Trailer - YouTube"
+dwell = "4m"
+content_type = "video"
+
+[[steps]]
+action = "sleep"
+duration = "13h"
+
+# ===================================== DAY 2 =====================================
+
+[[steps]]
+action = "browse"
+project = "none"
+url = "https://mail.google.com/mail/u/0/#inbox"
+title = "Inbox (9) - me@example.com - Gmail"
+dwell = "6m"
+
+[[steps]]
+action = "focus"
+project = "churn-model"
+app = "Visual Studio Code"
+exe = "Code.exe"
+title = "features.py - churn-model - Visual Studio Code"
+
+[[steps]]
+action = "edit"
+project = "churn-model"
+path = "C:/Users/me/Documents/ml/churn-model/features.py"
+repo_root = "C:/Users/me/Documents/ml/churn-model"
+change = "created"
+saves = 3
+over = "12m"
+lines_added = 52
+symbols_added = ["tenure_buckets"]
+
+[[steps]]
+action = "browse"
+project = "churn-model"
+url = "https://pandas.pydata.org/docs/reference/api/pandas.merge.html"
+title = "pandas.merge - pandas documentation"
+search_query = "pandas merge customer features left join"
+dwell = "2m"
+[steps.extract]
+headings = ["pandas.merge"]
+main_text = "Merge DataFrame objects with a database-style join; a left join keeps every customer when adding monthly spend features."
+
+[[steps]]
+action = "focus"
+project = "churn-model"
+app = "Claude"
+exe = "claude.exe"
+title = "Claude"
+duration = "3m"
+
+[[steps]]
+action = "command"
+project = "churn-model"
+command = "python train.py --epochs 40"
+cwd = "C:/Users/me/Documents/ml/churn-model"
+repo_root = "C:/Users/me/Documents/ml/churn-model"
+duration = "4m"
+
+[[steps]]
+action = "commit"
+project = "churn-model"
+repo_root = "C:/Users/me/Documents/ml/churn-model"
+message = "Add tenure buckets"
+files = ["features.py"]
+insertions = 52
+
+[[steps]]
+action = "browse"
+project = "none"
+url = "https://www.youtube.com/watch?v=lofi24"
+title = "lofi hip hop radio - beats to relax/study to - YouTube"
+dwell = "5m"
+content_type = "video"
+
+[[steps]]
+action = "idle"
+duration = "25m"
+
+[[steps]]
+action = "focus"
+project = "auth-service"
+app = "Visual Studio Code"
+exe = "Code.exe"
+title = "client.py - auth-service - Visual Studio Code"
+
+[[steps]]
+action = "edit"
+project = "auth-service"
+path = "C:/Users/me/Documents/auth-service/auth/client.py"
+repo_root = "C:/Users/me/Documents/auth-service"
+saves = 4
+over = "15m"
+lines_added = 31
+symbols_changed = ["refresh_token"]
+symbols_added = ["with_backoff"]
+
+[[steps]]
+action = "browse"
+project = "auth-service"
+url = "https://stackoverflow.com/questions/7555/httpx-retry-with-exponential-backoff-on-timeout"
+title = "httpx retry with exponential backoff on timeout - Stack Overflow"
+search_query = "httpx retry backoff timeout token refresh"
+dwell = "3m"
+content_type = "stackoverflow"
+[steps.extract]
+headings = ["httpx retry with exponential backoff on timeout"]
+main_text = "Wrap the httpx client in a transport that retries on timeout with exponential backoff; keep the OAuth token refresh separate from network retries."
+
+[[steps]]
+action = "browse"
+project = "auth-service"
+url = "https://github.com/me/auth-service/issues/5"
+title = "Token refresh loops forever on 401 - Issue #5 - me/auth-service - GitHub"
+dwell = "2m"
+
+[[steps]]
+action = "focus"
+project = "auth-service"
+app = "Windows Terminal"
+exe = "WindowsTerminal.exe"
+title = "Windows PowerShell"
+duration = "2m"
+
+[[steps]]
+action = "command"
+project = "auth-service"
+command = "pytest -q tests/test_client.py"
+cwd = "C:/Users/me/Documents/auth-service"
+repo_root = "C:/Users/me/Documents/auth-service"
+branch = "feature/oauth"
+exit_code = 0
+duration = "12s"
+
+[[steps]]
+action = "commit"
+project = "auth-service"
+repo_root = "C:/Users/me/Documents/auth-service"
+remote = "github.com/me/auth-service"
+branch = "feature/oauth"
+message = "Retry token refresh with exponential backoff"
+files = ["auth/client.py"]
+insertions = 31
+
+[[steps]]
+action = "browse"
+project = "none"
+url = "https://www.netflix.com/browse"
+title = "Home - Netflix"
+dwell = "12m"
+
+[[steps]]
+action = "lock"
+duration = "50m"
+
+[[steps]]
+action = "focus"
+project = "portfolio-site"
+app = "Windows Explorer"
+exe = "explorer.exe"
+title = "portfolio-site - File Explorer"
+duration = "30s"
+
+[[steps]]
+action = "focus"
+project = "portfolio-site"
+app = "Visual Studio Code"
+exe = "Code.exe"
+title = "Projects.tsx - portfolio-site - Visual Studio Code"
+
+[[steps]]
+action = "edit"
+project = "portfolio-site"
+path = "C:/Users/me/Documents/portfolio-site/src/components/Projects.tsx"
+repo_root = "C:/Users/me/Documents/portfolio-site"
+change = "created"
+saves = 4
+over = "17m"
+lines_added = 88
+
+[[steps]]
+action = "browse"
+project = "portfolio-site"
+url = "https://motion.dev/docs/react-layout-animations"
+title = "Layout animations - Motion for React"
+search_query = "motion react layout animation card grid"
+dwell = "3m"
+[steps.extract]
+headings = ["Layout animations", "Animating a grid of cards"]
+main_text = "Add the layout prop to animate a React grid of project cards when filters change; children animate with variants."
+
+[[steps]]
+action = "browse"
+project = "portfolio-site"
+url = "https://stackoverflow.com/questions/8444/react-filter-grid-animation-flicker"
+title = "React card grid flickers when filtering with animation - Stack Overflow"
+dwell = "2m"
+content_type = "stackoverflow"
+[steps.extract]
+headings = ["React card grid flickers when filtering with animation"]
+main_text = "Give each card a stable key and wrap the grid in AnimatePresence so React does not remount the animated components."
+
+[[steps]]
+action = "focus"
+project = "portfolio-site"
+app = "Claude"
+exe = "claude.exe"
+title = "Claude"
+duration = "4m"
+
+[[steps]]
+action = "command"
+project = "portfolio-site"
+command = "npm run build"
+cwd = "C:/Users/me/Documents/portfolio-site"
+repo_root = "C:/Users/me/Documents/portfolio-site"
+duration = "40s"
+
+[[steps]]
+action = "commit"
+project = "portfolio-site"
+repo_root = "C:/Users/me/Documents/portfolio-site"
+remote = "github.com/me/portfolio-site"
+message = "Add animated projects grid"
+files = ["src/components/Projects.tsx"]
+insertions = 88
+
+[[steps]]
+action = "browse"
+project = "none"
+url = "https://news.ycombinator.com/"
+title = "Hacker News"
+dwell = "6m"
+
+[[steps]]
+action = "browse"
+project = "none"
+url = "https://mail.google.com/mail/u/0/#inbox"
+title = "Inbox (2) - me@example.com - Gmail"
+dwell = "3m"

@@ -1,0 +1,532 @@
+# Phase 3 HOLD-OUT: the same learning day, then a harder test day written after the resolver
+# was tuned on labeled_two_days.toml, and never tuned against. Its score is reported as is.
+#
+# Original header:
+#
+# Day 1 is the "learning" day: the resolver starts cold, then a simulated user corrects the
+# inbox once. Day 2 (from `evaluate_from`) is the test: same habits, different pages, files
+# and commands. Every step carries its true project in `project` (ground truth only; it is
+# never put into events). Generic apps (Claude, Windows Terminal, File Explorer) and shared
+# sites (Stack Overflow, Google, YouTube) are used for different projects on purpose.
+
+name = "labeled-holdout"
+start = 2026-11-02T09:00:00+05:30
+evaluate_from = 2026-11-03T00:00:00+05:30
+
+# ===================================== DAY 1 =====================================
+
+[[steps]]
+action = "focus"
+project = "auth-service"
+app = "Visual Studio Code"
+exe = "Code.exe"
+title = "session.py - auth-service - Visual Studio Code"
+
+[[steps]]
+action = "edit"
+project = "auth-service"
+path = "C:/Users/me/Documents/auth-service/auth/session.py"
+repo_root = "C:/Users/me/Documents/auth-service"
+saves = 4
+over = "14m"
+lines_added = 38
+symbols_added = ["refresh_token"]
+
+[[steps]]
+action = "command"
+project = "auth-service"
+command = "pytest tests/test_session.py -q"
+cwd = "C:/Users/me/Documents/auth-service"
+repo_root = "C:/Users/me/Documents/auth-service"
+branch = "feature/oauth"
+exit_code = 1
+duration = "11s"
+
+[[steps]]
+action = "browse"
+project = "auth-service"
+url = "https://stackoverflow.com/questions/7111/how-to-refresh-an-oauth-token-with-httpx"
+title = "How to refresh an OAuth token with httpx - Stack Overflow"
+search_query = "httpx oauth refresh token"
+dwell = "3m"
+content_type = "stackoverflow"
+[steps.extract]
+headings = ["How to refresh an OAuth token with httpx", "Use an httpx.Auth flow"]
+main_text = "Subclass httpx.Auth and refresh the OAuth access token when the server answers 401, then retry the request once with the new bearer token."
+
+[[steps]]
+action = "browse"
+project = "auth-service"
+url = "https://www.python-httpx.org/advanced/authentication/"
+title = "Authentication - HTTPX"
+dwell = "2m"
+[steps.extract]
+headings = ["Authentication", "Custom authentication schemes"]
+main_text = "HTTPX supports basic, digest and custom authentication flows; an auth flow can yield a request again after refreshing a token."
+
+[[steps]]
+action = "focus"
+project = "auth-service"
+app = "Claude"
+exe = "claude.exe"
+title = "Claude"
+duration = "4m"
+
+[[steps]]
+action = "focus"
+project = "auth-service"
+app = "Visual Studio Code"
+exe = "Code.exe"
+title = "test_session.py - auth-service - Visual Studio Code"
+
+[[steps]]
+action = "edit"
+project = "auth-service"
+path = "C:/Users/me/Documents/auth-service/tests/test_session.py"
+repo_root = "C:/Users/me/Documents/auth-service"
+saves = 3
+over = "9m"
+lines_added = 25
+symbols_added = ["test_refresh_token_retries_once"]
+
+[[steps]]
+action = "command"
+project = "auth-service"
+command = "pytest -q"
+cwd = "C:/Users/me/Documents/auth-service"
+repo_root = "C:/Users/me/Documents/auth-service"
+branch = "feature/oauth"
+exit_code = 0
+duration = "9s"
+
+[[steps]]
+action = "commit"
+project = "auth-service"
+repo_root = "C:/Users/me/Documents/auth-service"
+remote = "github.com/me/auth-service"
+branch = "feature/oauth"
+message = "Add OAuth token refresh with a single retry"
+files = ["auth/session.py", "tests/test_session.py"]
+insertions = 63
+
+[[steps]]
+action = "browse"
+project = "auth-service"
+url = "https://github.com/me/auth-service/pull/3"
+title = "Add OAuth token refresh by me - Pull Request #3 - me/auth-service - GitHub"
+dwell = "2m"
+
+[[steps]]
+action = "browse"
+project = "none"
+url = "https://www.youtube.com/watch?v=lofi24"
+title = "lofi hip hop radio - beats to relax/study to - YouTube"
+dwell = "6m"
+content_type = "video"
+
+[[steps]]
+action = "browse"
+project = "none"
+url = "https://www.netflix.com/browse"
+title = "Home - Netflix"
+dwell = "9m"
+
+[[steps]]
+action = "idle"
+duration = "20m"
+
+[[steps]]
+action = "focus"
+project = "portfolio-site"
+app = "Windows Explorer"
+exe = "explorer.exe"
+title = "portfolio-site - File Explorer"
+duration = "40s"
+
+[[steps]]
+action = "focus"
+project = "portfolio-site"
+app = "Visual Studio Code"
+exe = "Code.exe"
+title = "Hero.tsx - portfolio-site - Visual Studio Code"
+
+[[steps]]
+action = "edit"
+project = "portfolio-site"
+path = "C:/Users/me/Documents/portfolio-site/src/components/Hero.tsx"
+repo_root = "C:/Users/me/Documents/portfolio-site"
+saves = 5
+over = "18m"
+lines_added = 70
+lines_removed = 12
+
+[[steps]]
+action = "command"
+project = "portfolio-site"
+command = "npm run dev"
+cwd = "C:/Users/me/Documents/portfolio-site"
+repo_root = "C:/Users/me/Documents/portfolio-site"
+duration = "4s"
+
+[[steps]]
+action = "browse"
+project = "portfolio-site"
+url = "https://motion.dev/docs/stagger"
+title = "Stagger children animations - Motion for React"
+search_query = "framer motion stagger children hero"
+dwell = "3m"
+[steps.extract]
+headings = ["Stagger", "Stagger children with variants"]
+main_text = "Use variants with staggerChildren to animate a hero title letter by letter in React; each child animation starts after a short delay."
+
+[[steps]]
+action = "browse"
+project = "portfolio-site"
+url = "https://stackoverflow.com/questions/8222/react-useeffect-cleanup-animation-frame"
+title = "React useEffect cleanup for requestAnimationFrame - Stack Overflow"
+dwell = "2m"
+content_type = "stackoverflow"
+[steps.extract]
+headings = ["React useEffect cleanup for requestAnimationFrame"]
+main_text = "Return a cleanup function from useEffect that cancels the animation frame so the hero component does not leak when it unmounts."
+
+[[steps]]
+action = "focus"
+project = "portfolio-site"
+app = "Windows Terminal"
+exe = "WindowsTerminal.exe"
+title = "Windows PowerShell"
+duration = "2m"
+
+[[steps]]
+action = "focus"
+project = "portfolio-site"
+app = "Visual Studio Code"
+exe = "Code.exe"
+title = "Hero.tsx - portfolio-site - Visual Studio Code"
+duration = "6m"
+
+[[steps]]
+action = "commit"
+project = "portfolio-site"
+repo_root = "C:/Users/me/Documents/portfolio-site"
+remote = "github.com/me/portfolio-site"
+message = "Animate the hero title with staggered letters"
+files = ["src/components/Hero.tsx"]
+insertions = 70
+deletions = 12
+
+[[steps]]
+action = "browse"
+project = "none"
+url = "https://mail.google.com/mail/u/0/#inbox"
+title = "Inbox (4) - me@example.com - Gmail"
+dwell = "5m"
+
+[[steps]]
+action = "lock"
+duration = "45m"
+
+[[steps]]
+action = "focus"
+project = "churn-model"
+app = "Visual Studio Code"
+exe = "Code.exe"
+title = "train.py - churn-model - Visual Studio Code"
+
+[[steps]]
+action = "edit"
+project = "churn-model"
+path = "C:/Users/me/Documents/ml/churn-model/train.py"
+repo_root = "C:/Users/me/Documents/ml/churn-model"
+saves = 4
+over = "16m"
+lines_added = 44
+symbols_added = ["load_features", "train_model"]
+
+[[steps]]
+action = "command"
+project = "churn-model"
+command = "python train.py --epochs 20"
+cwd = "C:/Users/me/Documents/ml/churn-model"
+repo_root = "C:/Users/me/Documents/ml/churn-model"
+duration = "3m"
+
+[[steps]]
+action = "browse"
+project = "churn-model"
+url = "https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.rolling.html"
+title = "pandas.DataFrame.rolling - pandas documentation"
+search_query = "pandas groupby rolling mean customer"
+dwell = "3m"
+[steps.extract]
+headings = ["pandas.DataFrame.rolling"]
+main_text = "Provide rolling window calculations on a pandas DataFrame, for example a rolling mean of monthly spend per customer to build churn features."
+
+[[steps]]
+action = "browse"
+project = "churn-model"
+url = "https://stackoverflow.com/questions/9333/gradient-boosting-class-imbalance-sklearn"
+title = "Gradient boosting with imbalanced classes in sklearn - Stack Overflow"
+dwell = "2m"
+content_type = "stackoverflow"
+[steps.extract]
+headings = ["Gradient boosting with imbalanced classes in sklearn"]
+main_text = "Use sample weights or class_weight to train a gradient boosting classifier on an imbalanced churn dataset; evaluate with ROC AUC rather than accuracy."
+
+[[steps]]
+action = "focus"
+project = "churn-model"
+app = "Claude"
+exe = "claude.exe"
+title = "Claude"
+duration = "5m"
+
+[[steps]]
+action = "focus"
+project = "churn-model"
+app = "Windows Explorer"
+exe = "explorer.exe"
+title = "churn-model - File Explorer"
+duration = "35s"
+
+[[steps]]
+action = "commit"
+project = "churn-model"
+repo_root = "C:/Users/me/Documents/ml/churn-model"
+message = "Add rolling spend features and class weights"
+files = ["train.py"]
+insertions = 44
+
+[[steps]]
+action = "browse"
+project = "none"
+url = "https://news.ycombinator.com/"
+title = "Hacker News"
+dwell = "5m"
+
+[[steps]]
+action = "browse"
+project = "none"
+url = "https://www.youtube.com/watch?v=trailer9"
+title = "Official Trailer - YouTube"
+dwell = "4m"
+content_type = "video"
+
+[[steps]]
+action = "sleep"
+duration = "13h"
+
+# ================================ DAY 2 (hold-out) ================================
+# Harder on purpose: projects interleaved within minutes, a YouTube tutorial for work (YouTube
+# was learned as personal), research with no shared vocabulary, and a new script outside any
+# repo that only the surrounding activity can place.
+
+[[steps]]
+action = "focus"
+project = "portfolio-site"
+app = "Visual Studio Code"
+exe = "Code.exe"
+title = "Footer.tsx - portfolio-site - Visual Studio Code"
+
+[[steps]]
+action = "edit"
+project = "portfolio-site"
+path = "C:/Users/me/Documents/portfolio-site/src/components/Footer.tsx"
+repo_root = "C:/Users/me/Documents/portfolio-site"
+saves = 2
+over = "6m"
+lines_added = 20
+
+[[steps]]
+action = "focus"
+project = "auth-service"
+app = "Visual Studio Code"
+exe = "Code.exe"
+title = "session.py - auth-service - Visual Studio Code"
+
+[[steps]]
+action = "edit"
+project = "auth-service"
+path = "C:/Users/me/Documents/auth-service/auth/session.py"
+repo_root = "C:/Users/me/Documents/auth-service"
+saves = 2
+over = "5m"
+lines_added = 6
+symbols_changed = ["refresh_token"]
+
+[[steps]]
+action = "browse"
+project = "auth-service"
+url = "https://www.youtube.com/watch?v=oauth101"
+title = "OAuth 2.0 refresh tokens explained in 10 minutes - YouTube"
+search_query = "oauth refresh token rotation explained"
+dwell = "8m"
+content_type = "video"
+
+[[steps]]
+action = "focus"
+project = "auth-service"
+app = "Visual Studio Code"
+exe = "Code.exe"
+title = "session.py - auth-service - Visual Studio Code"
+
+[[steps]]
+action = "edit"
+project = "auth-service"
+path = "C:/Users/me/Documents/auth-service/auth/session.py"
+repo_root = "C:/Users/me/Documents/auth-service"
+saves = 3
+over = "9m"
+lines_added = 18
+symbols_added = ["rotate_refresh_token"]
+
+[[steps]]
+action = "browse"
+project = "auth-service"
+url = "https://datatracker.ietf.org/doc/html/rfc6749"
+title = "RFC 6749 - The OAuth 2.0 Authorization Framework"
+dwell = "4m"
+[steps.extract]
+headings = ["The OAuth 2.0 Authorization Framework", "Refreshing an Access Token"]
+main_text = "If the authorization server issued a refresh token to the client, the client makes a refresh request to the token endpoint."
+
+[[steps]]
+action = "focus"
+project = "portfolio-site"
+app = "Visual Studio Code"
+exe = "Code.exe"
+title = "Footer.tsx - portfolio-site - Visual Studio Code"
+
+[[steps]]
+action = "edit"
+project = "portfolio-site"
+path = "C:/Users/me/Documents/portfolio-site/src/components/Footer.tsx"
+repo_root = "C:/Users/me/Documents/portfolio-site"
+saves = 3
+over = "11m"
+lines_added = 35
+
+[[steps]]
+action = "browse"
+project = "portfolio-site"
+url = "https://css-tricks.com/snippets/css/a-guide-to-flexbox/"
+title = "A Complete Guide to Flexbox | CSS-Tricks"
+dwell = "4m"
+[steps.extract]
+headings = ["A Complete Guide to Flexbox", "Properties for the Parent"]
+main_text = "Flexbox makes it easier to design flexible responsive layout structures without using float or positioning."
+
+[[steps]]
+action = "commit"
+project = "portfolio-site"
+repo_root = "C:/Users/me/Documents/portfolio-site"
+remote = "github.com/me/portfolio-site"
+message = "Responsive footer"
+files = ["src/components/Footer.tsx"]
+insertions = 55
+
+[[steps]]
+action = "browse"
+project = "none"
+url = "https://www.netflix.com/browse"
+title = "Home - Netflix"
+dwell = "15m"
+
+[[steps]]
+action = "idle"
+duration = "30m"
+
+[[steps]]
+action = "focus"
+project = "churn-model"
+app = "Visual Studio Code"
+exe = "Code.exe"
+title = "evaluate.py - churn-model - Visual Studio Code"
+
+[[steps]]
+action = "edit"
+project = "churn-model"
+path = "C:/Users/me/Documents/ml/churn-model/evaluate.py"
+repo_root = "C:/Users/me/Documents/ml/churn-model"
+change = "created"
+saves = 3
+over = "12m"
+lines_added = 40
+symbols_added = ["roc_report"]
+
+[[steps]]
+action = "command"
+project = "churn-model"
+command = "python evaluate.py"
+cwd = "C:/Users/me/Documents/ml/churn-model"
+repo_root = "C:/Users/me/Documents/ml/churn-model"
+duration = "1m"
+
+[[steps]]
+action = "browse"
+project = "churn-model"
+url = "https://scikit-learn.org/stable/modules/generated/sklearn.metrics.roc_auc_score.html"
+title = "roc_auc_score - scikit-learn documentation"
+search_query = "sklearn roc auc score imbalanced"
+dwell = "3m"
+[steps.extract]
+headings = ["sklearn.metrics.roc_auc_score"]
+main_text = "Compute Area Under the Receiver Operating Characteristic Curve (ROC AUC) from prediction scores."
+
+[[steps]]
+action = "browse"
+project = "churn-model"
+url = "https://stackoverflow.com/questions/9777/plot-roc-curve-matplotlib-two-models"
+title = "Plot ROC curves of two models in one matplotlib figure - Stack Overflow"
+dwell = "2m"
+content_type = "stackoverflow"
+[steps.extract]
+headings = ["Plot ROC curves of two models in one matplotlib figure"]
+main_text = "Call RocCurveDisplay.from_estimator for each model with the same axes object."
+
+[[steps]]
+action = "focus"
+project = "churn-model"
+app = "Windows Terminal"
+exe = "WindowsTerminal.exe"
+title = "Windows PowerShell"
+duration = "3m"
+
+[[steps]]
+action = "command"
+project = "churn-model"
+command = "python C:/Users/me/Downloads/plot_roc.py"
+cwd = "C:/Users/me/Downloads"
+duration = "20s"
+
+[[steps]]
+action = "focus"
+project = "churn-model"
+app = "Claude"
+exe = "claude.exe"
+title = "Claude"
+duration = "4m"
+
+[[steps]]
+action = "commit"
+project = "churn-model"
+repo_root = "C:/Users/me/Documents/ml/churn-model"
+message = "Add ROC report"
+files = ["evaluate.py"]
+insertions = 40
+
+[[steps]]
+action = "browse"
+project = "none"
+url = "https://www.youtube.com/watch?v=standup77"
+title = "Stand-up comedy special - YouTube"
+dwell = "10m"
+content_type = "video"
+
+[[steps]]
+action = "browse"
+project = "none"
+url = "https://mail.google.com/mail/u/0/#inbox"
+title = "Inbox (5) - me@example.com - Gmail"
+dwell = "4m"

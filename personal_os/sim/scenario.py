@@ -54,6 +54,9 @@ Duration = Annotated[float, BeforeValidator(parse_duration)]
 class _Step(BaseModel):
     model_config = ConfigDict(extra="forbid")
     gap: Duration = 0.0  # wait this long before the step starts
+    # Ground truth for evaluation only (which project this activity really belonged to);
+    # never put into events. Use "none" for activity that isn't project work.
+    project: str | None = None
 
 
 class FocusStep(_Step):
@@ -119,6 +122,7 @@ class CommitStep(_Step):
     action: Literal["commit"]
     repo_root: str
     message: str
+    remote: str | None = None
     sha: str | None = None
     branch: str | None = None
     files: list[str] = []
@@ -150,6 +154,8 @@ class Scenario(BaseModel):
     name: str
     start: AwareDatetime
     idle_threshold_s: int = 300
+    # Project-resolution evaluation: events before this are the "learning" day, after it the test.
+    evaluate_from: AwareDatetime | None = None
     steps: list[AnyStep]
 
 
