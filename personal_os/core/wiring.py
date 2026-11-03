@@ -25,9 +25,9 @@ def build_pipeline(
     honour_pause: bool = True,
     pause_gate: Callable[[Event], bool] | None = None,
 ) -> Pipeline:
-    rules = PrivacyRules.from_config(config.privacy, protected_dirs=[config.data_dir])
     """`pause_gate` overrides the default (the persisted pause setting, read once a second);
     the daemon passes a time-aware gate so intervals closed at pause time still get stored."""
+    rules = PrivacyRules.from_config(config.privacy, protected_dirs=[config.data_dir])
     if pause_gate is None:
         setting = PauseGate(conn, clock) if honour_pause else None
         pause_gate = (lambda _e: setting()) if setting else (lambda _e: False)

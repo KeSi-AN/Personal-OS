@@ -68,7 +68,14 @@ def default_profile(shell: Shell) -> Path:
 
 
 def execution_policy() -> str | None:
-    return _run_powershell("Get-ExecutionPolicy")
+    """The policy a *new* terminal gets. Process scope is skipped: it only describes the
+    process asking (e.g. an IDE or agent started with -ExecutionPolicy Bypass)."""
+    return _run_powershell(
+        "& { $l = Get-ExecutionPolicy -List; "
+        "foreach ($s in 'MachinePolicy','UserPolicy','CurrentUser','LocalMachine') { "
+        "$p = [string]($l | Where-Object Scope -eq $s).ExecutionPolicy; "
+        "if ($p -and $p -ne 'Undefined') { return $p } }; 'Restricted' }"
+    )
 
 
 def block_for(shell: Shell, hook_file: Path) -> str:
