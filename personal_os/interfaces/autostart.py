@@ -1,14 +1,16 @@
 """Start at logon via the per-user Startup folder (no admin rights, easy to see and remove).
 
 Task Scheduler logon triggers need administrator rights, so the Startup folder is used
-instead (ADR-024). The entry is a tiny .vbs that starts the launcher with no console window.
+instead (ADR-024). The entry is a tiny .vbs that starts the launcher with no window at all:
+it runs the base interpreter's pythonw.exe through personal_os/boot.py (see core/spawn.py).
 """
 
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
+
+from personal_os.core import spawn
 
 ENTRY_NAME = "PersonalOS.vbs"
 
@@ -24,23 +26,22 @@ def entry_path() -> Path:
     return startup_dir() / ENTRY_NAME
 
 
-def pythonw() -> Path:
-    exe = Path(sys.executable)
-    candidate = exe.with_name("pythonw.exe")
-    return candidate if candidate.exists() else exe
+def _vbs_quote(text: str) -> str:
+    return '"' + text.replace('"', '""') + '"'
 
 
 def script(home: Path | None) -> str:
-    env = ""
+    command = " ".join(f'"{part}"' for part in spawn.module_command("personal_os.launcher"))
+    lines = [
+        "' Personal OS: start the capture daemon at logon. "
+        "Remove with `personal-os autostart disable`.",
+        'Set sh = CreateObject("WScript.Shell")',
+        f'sh.Environment("PROCESS")("{spawn.SITE_ENV}") = {_vbs_quote(spawn.site_packages())}',
+    ]
     if home is not None:
-        env = f'sh.Environment("PROCESS")("PERSONAL_OS_HOME") = "{home}"\n'
-    return (
-        "' Personal OS: start the capture daemon at logon. Remove with "
-        "`personal-os autostart disable`.\n"
-        'Set sh = CreateObject("WScript.Shell")\n'
-        f"{env}"
-        f'sh.Run """{pythonw()}"" -m personal_os.launcher", 0, False\n'
-    )
+        lines.append(f'sh.Environment("PROCESS")("PERSONAL_OS_HOME") = {_vbs_quote(str(home))}')
+    lines.append(f"sh.Run {_vbs_quote(command)}, 0, False")
+    return "\n".join(lines) + "\n"
 
 
 def enable(home: Path | None = None) -> Path:

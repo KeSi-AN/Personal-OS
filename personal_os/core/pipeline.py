@@ -85,7 +85,9 @@ class Pipeline:
             batch = [e for e in batch if not self._is_forgotten(e)]
             self.forget_dropped += before - len(batch)
         kept = [self.hint(e) for e in self.privacy.apply_many(batch)]
-        stored = self.writer.write(kept)
+        kept_ids = {e.id for e in kept}
+        dropped = [e.id for e in batch if e.id not in kept_ids and e.source != "meta"]
+        stored = self.writer.write(kept, retract=dropped)
         self.stats.stored += stored
         self.flush_counters()
         return stored

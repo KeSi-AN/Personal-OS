@@ -91,6 +91,17 @@ def close_open_intervals(conn: sqlite3.Connection) -> int:
         ).rowcount
 
 
+def close_stale(conn: sqlite3.Connection, source: str, older_than: datetime) -> int:
+    """End open intervals of `source` whose producer stopped re-sending them (the browser
+    extension re-sends open visits every minute) at their last checkpoint."""
+    with transaction(conn):
+        return conn.execute(
+            "UPDATE events SET ts_end = coalesce(last_seen, ts_start), truncated = 1 "
+            "WHERE source = ? AND ts_end IS NULL AND coalesce(last_seen, ts_start) < ?",
+            (source, to_ms(older_than)),
+        ).rowcount
+
+
 def close_open_at(conn: sqlite3.Connection, at: datetime) -> int:
     """On pause: end every open interval now (observers drop them from memory)."""
     with transaction(conn):

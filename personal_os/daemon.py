@@ -13,7 +13,7 @@ import os
 import sqlite3
 import sys
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import psutil
@@ -162,13 +162,15 @@ class Daemon:
 
         sup = Supervisor(make_context, self.clock)
         oc = cfg.observers
+        window: WindowObserver | None = None
         if self.window_probe and self.session_watcher:
             sup.add(
                 SessionObserver(self.session_watcher, self.session, on_hotkey=self.toggle_pause),
                 enabled=oc.window.enabled,
             )
+            window = WindowObserver(self.window_probe, self.session, oc.window, oc.idle)
             sup.add(
-                WindowObserver(self.window_probe, self.session, oc.window, oc.idle),
+                window,
                 enabled=oc.window.enabled,
                 reason=None if oc.window.enabled else "disabled in config",
             )
@@ -197,7 +199,10 @@ class Daemon:
             reason=None if oc.terminal.enabled else "disabled in config",
         )
         sup.add(
-            BrowserObserver(cfg.spool_dir / "browser"),
+            BrowserObserver(
+                cfg.spool_dir / "browser",
+                foreground=window.foreground_ms if window and oc.window.enabled else None,
+            ),
             enabled=oc.browser.enabled,
             reason=None
             if oc.browser.enabled
@@ -208,7 +213,7 @@ class Daemon:
     # --- control loop ----------------------------------------------------------------------
 
     async def _control_loop(self) -> None:
-        last_health = last_retention = -1e18
+        last_health = last_retention = last_stale = -1e18
         while not self.stop_event.is_set():
             if runtime.stop_requested(self.config.runtime_dir):
                 runtime.clear_stop(self.config.runtime_dir)
@@ -219,6 +224,11 @@ class Daemon:
             if mono - last_health >= self.health_every_s:
                 last_health = mono
                 self._write_health()
+            if mono - last_stale >= 60:
+                last_stale = mono
+                maintenance.close_stale(
+                    self.control_conn, "browser", self.clock.now() - timedelta(minutes=3)
+                )
             if mono - last_retention >= RETENTION_EVERY_S:
                 last_retention = mono
                 await asyncio.to_thread(self._retention)

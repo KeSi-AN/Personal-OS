@@ -9,11 +9,11 @@ YouTube details, search queries) happens here, so the extension stays small.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import re
 import time
 import uuid
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -118,7 +118,34 @@ def _best_title(rec: dict[str, Any], extract: PageExtract | None) -> str:
     return tab_title[:500]
 
 
-def parse_visit(rec: dict[str, Any], returns: Returns | None = None) -> list[Event]:
+ForegroundFn = Callable[[set[str], set[str], datetime, datetime], "int | None"]
+_BROWSER_EXES = {
+    "chrome": {"chrome.exe", "brave.exe"},  # Brave identifies itself as Chrome
+    "edge": {"msedge.exe"},
+}
+
+
+def _active_ms(
+    rec: dict[str, Any],
+    titles: set[str],
+    start: datetime,
+    end: datetime,
+    foreground: ForegroundFn | None,
+) -> tuple[int, str]:
+    """Active time and where it came from. The window record (browser window in front showing
+    this page, user not idle) is preferred: the extension can't see other apps reliably."""
+    reported = max(0, _int(rec.get("activeMs")) or 0)
+    if foreground is not None:
+        exes = _BROWSER_EXES.get(str(rec.get("browser")), {"chrome.exe", "brave.exe", "msedge.exe"})
+        measured = foreground(exes, titles, start, end)
+        if measured:  # 0 usually means the title changed mid-visit: keep the extension's figure
+            return measured, "window"
+    return reported, "extension"
+
+
+def parse_visit(
+    rec: dict[str, Any], returns: Returns | None = None, foreground: ForegroundFn | None = None
+) -> list[Event]:
     url = clean_search_url(str(rec["url"]))
     visit_id = _uuid(rec.get("id"))
     if visit_id is None:
@@ -134,20 +161,24 @@ def parse_visit(rec: dict[str, Any], returns: Returns | None = None) -> list[Eve
     referrer = str(rec["referrer"]) if rec.get("referrer") else None
     transition = map_transition(rec.get("transition"), rec.get("qualifiers"), referrer)
     sq = search_query(url)
+    raw_title = clean_title(str(rec.get("title") or ""))
+    title = _best_title(rec, extract)
+    titles = {t for t in (raw_title, title, extract.title if extract else "") if t}
+    active_ms, dwell_source = _active_ms(rec, titles, start, end or last_seen, foreground)
     returned = 0
     if returns is not None:
         returned = returns.count_and_record(url, str(visit_id), int(start.timestamp() // 86400))
     payload = PageVisit(
         url=url,
         domain=host_of(url),
-        title=_best_title(rec, extract),
+        title=title,
         tab_id=_int(rec.get("tabId"), None),
         window_id=_int(rec.get("windowId"), None),
         transition=transition,
         referrer=referrer,
         opener_visit_id=_uuid(rec.get("openerVisitId")),
         chain_id=_uuid(rec.get("chainId")),
-        active_dwell_ms=max(0, _int(rec.get("activeMs")) or 0),
+        active_dwell_ms=active_ms,
         scroll_max_pct=min(100, max(0, v))
         if (v := _int(rec.get("scrollMax"), None)) is not None
         else None,
@@ -161,7 +192,11 @@ def parse_visit(rec: dict[str, Any], returns: Returns | None = None) -> list[Eve
         incognito=bool(rec.get("incognito")),
         has_password_field=bool(rec.get("hasPassword")),
         extract=extract,
-        enrichment={**enrichment, "browser": str(rec.get("browser") or "chromium")[:20]},
+        enrichment={
+            **enrichment,
+            "browser": str(rec.get("browser") or "chromium")[:20],
+            "dwell_source": dwell_source,
+        },
     )
     events = [
         Event.interval(
@@ -201,10 +236,12 @@ def parse_signal(rec: dict[str, Any]) -> list[Event]:
     return [Event.point(payload, _when(rec["at"]), observer_version=VERSION)]
 
 
-def parse_record(rec: dict[str, Any], returns: Returns | None = None) -> list[Event] | None:
+def parse_record(
+    rec: dict[str, Any], returns: Returns | None = None, foreground: ForegroundFn | None = None
+) -> list[Event] | None:
     kind = rec.get("type")
     if kind == "visit":
-        events = parse_visit(rec, returns)
+        events = parse_visit(rec, returns, foreground)
     elif kind == "signal":
         events = parse_signal(rec)
     else:
@@ -212,8 +249,13 @@ def parse_record(rec: dict[str, Any], returns: Returns | None = None) -> list[Ev
     return events or None
 
 
-def ingest(spool: Path, stats: SpoolStats, returns: Returns | None = None) -> list[Event]:
-    batches = drain(spool, lambda r: parse_record(r, returns), stats)
+def ingest(
+    spool: Path,
+    stats: SpoolStats,
+    returns: Returns | None = None,
+    foreground: ForegroundFn | None = None,
+) -> list[Event]:
+    batches = drain(spool, lambda r: parse_record(r, returns, foreground), stats)
     return [e for batch in batches for e in batch]
 
 
@@ -221,9 +263,12 @@ class BrowserObserver(BaseObserver):
     name = "browser"
     version = VERSION
 
-    def __init__(self, spool_dir: Path, *, poll_s: float = 1.0) -> None:
+    def __init__(
+        self, spool_dir: Path, *, poll_s: float = 1.0, foreground: ForegroundFn | None = None
+    ) -> None:
         super().__init__()
         self.spool_dir = spool_dir
+        self.foreground = foreground
         self.poll_s = poll_s
         self.stats = SpoolStats()
         self.returns: Returns | None = None
@@ -234,7 +279,9 @@ class BrowserObserver(BaseObserver):
         self.returns = Returns(ctx.state)
         while True:
             if not ctx.paused.is_set():
-                events = await asyncio.to_thread(ingest, self.spool_dir, self.stats, self.returns)
+                # Not in a worker thread: the foreground lookup reads the window observer's
+                # in-memory history, which only the event loop touches. Spool files are small.
+                events = ingest(self.spool_dir, self.stats, self.returns, self.foreground)
                 if events:
                     self.last_record_at = time.time()
                     self.returns.save()

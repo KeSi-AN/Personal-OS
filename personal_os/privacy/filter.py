@@ -10,6 +10,7 @@ from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
+from uuid import UUID
 
 from personal_os.core.events import (
     BrowserSignal,
@@ -57,6 +58,7 @@ class PrivacyFilter:
         self.redactor = redactor or TextRedactor()
         self.is_paused = is_paused
         self.counters = FilterCounters()
+        self._blocked_ids: set[UUID] = set()
 
     def apply_many(self, events: Iterable[Event]) -> list[Event]:
         return [e for e in (self.apply(ev) for ev in events) if e is not None]
@@ -84,11 +86,11 @@ class PrivacyFilter:
             self.counters.paused += 1
             return None
         if event.privacy_class == PrivacyClass.BLOCKED:
-            self._block("observer_marked_blocked")
+            self._block("observer_marked_blocked", event)
             return None
         reason = self._block_reason(event)
         if reason:
-            self._block(reason)
+            self._block(reason, event)
             return None
 
         cls: PrivacyClass = event.privacy_class
@@ -138,9 +140,14 @@ class PrivacyFilter:
 
         return event.model_copy(update={"payload": payload, "privacy_class": cls})
 
-    def _block(self, reason: str) -> None:
+    def _block(self, reason: str, event: Event) -> None:
+        # Re-sends of the same open interval (a browser tab re-sent every minute) count once.
+        if event.id in self._blocked_ids:
+            return
+        if len(self._blocked_ids) > 10_000:
+            self._blocked_ids.clear()
+        self._blocked_ids.add(event.id)
         self.counters.blocked[reason] += 1
-        return None
 
     def _block_reason(self, event: Event) -> str | None:
         p = event.payload

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 import time
 import urllib.request
 from datetime import datetime
@@ -18,7 +17,7 @@ import typer
 from personal_os.browser import install as browser_install
 from personal_os.config.loader import set_value
 from personal_os.core import pause as pause_mod
-from personal_os.core import runtime
+from personal_os.core import runtime, spawn
 from personal_os.core.clock import SystemClock
 from personal_os.hooks import installer
 from personal_os.interfaces import autostart
@@ -76,20 +75,11 @@ def daemon_start() -> None:
         typer.echo(f"Already running (pid {info.pid}).")
         return
     runtime.clear_stop(cfg.runtime_dir)
-    env = os.environ.copy()
-    if _state.home:
-        env["PERSONAL_OS_HOME"] = str(_state.home)
-    flags = 0
-    if sys.platform == "win32":
-        flags = (
-            subprocess.DETACHED_PROCESS
-            | subprocess.CREATE_NEW_PROCESS_GROUP
-            | subprocess.CREATE_NO_WINDOW
-        )
+    env = spawn.child_env({"PERSONAL_OS_HOME": str(_state.home)} if _state.home else None)
     subprocess.Popen(
-        [str(autostart.pythonw()), "-m", "personal_os.launcher"],
+        spawn.module_command("personal_os.launcher"),
         env=env,
-        creationflags=flags,
+        creationflags=spawn.creation_flags(detached=True),
         close_fds=True,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,

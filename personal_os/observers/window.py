@@ -7,6 +7,7 @@ feeds it a sample from the platform probe once per poll interval.
 from __future__ import annotations
 
 import re
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from uuid import UUID
@@ -69,6 +70,11 @@ class FocusTracker:
     candidate: _Candidate | None = None
     last_tick: datetime | None = None
     _out: list[Event] = field(default_factory=list)
+    # Recent closed focus intervals (exe, title, start, end), in memory only, never stored as
+    # such: lets other observers ask "was this window in front, and for how long?".
+    history: deque[tuple[str, str, datetime, datetime]] = field(
+        default_factory=lambda: deque(maxlen=5000)
+    )
 
     def tick(
         self, now: datetime, sample: WindowSample | None, idle_s: float, locked: bool = False
@@ -196,6 +202,8 @@ class FocusTracker:
 
     def _close(self, o: _Open, at: datetime) -> None:
         end = max(at, o.start)
+        if isinstance(o.payload, WindowFocus) and end > o.start:
+            self.history.append(((o.payload.exe or "").lower(), o.payload.title, o.start, end))
         self._out.append(
             Event.interval(
                 o.payload, o.start, end, id=o.id, last_seen=end, observer_version=self.version
@@ -255,6 +263,52 @@ class WindowObserver(BaseObserver):
     def forget(self, start: datetime, end: datetime) -> None:
         self.tracker.reset()
 
+    def foreground_ms(
+        self, exes: set[str], titles: set[str], start: datetime, end: datetime
+    ) -> int | None:
+        """How long, within [start, end], a window of one of `exes` showing one of `titles`
+        was in front (idle and locked time excluded: those close focus intervals).
+        None when there's no window record covering `start` (e.g. the daemon started later)."""
+        return foreground_overlap(self.tracker, exes, titles, start, end)
+
     def on_pause(self, at: datetime) -> None:
         for event in self.tracker.close_all(at.astimezone()):
             self.emit(event)
+
+
+# Separator: hyphen, en dash or em dash. Edge's window title contains a zero-width space
+# (U+200B) inside "Microsoft Edge". Code points via chr() keep the source plain ASCII.
+_DASHES = "-" + chr(0x2013) + chr(0x2014)
+_BROWSER_SUFFIX_RE = re.compile(
+    r"\s+["
+    + _DASHES
+    + r"]\s+(?:Google Chrome|Brave|Microsoft"
+    + chr(0x200B)
+    + r"?\s?Edge|Chromium)$"
+)
+
+
+def browser_page_title(window_title: str) -> str:
+    """ "What is GraphRAG? - Google Chrome" -> "What is GraphRAG?" (also strips a profile name)."""
+    return _BROWSER_SUFFIX_RE.sub("", window_title).strip()
+
+
+def foreground_overlap(
+    tracker: FocusTracker, exes: set[str], titles: set[str], start: datetime, end: datetime
+) -> int | None:
+    intervals = list(tracker.history)
+    if tracker.focus is not None and isinstance(tracker.focus.payload, WindowFocus):
+        p = tracker.focus.payload
+        now = tracker.last_tick or tracker.focus.start
+        intervals.append(((p.exe or "").lower(), p.title, tracker.focus.start, now))
+    if not intervals or min(i[2] for i in intervals) > start + timedelta(seconds=5):
+        return None
+    wanted = {normalize_title(t).casefold() for t in titles if t}
+    total = 0.0
+    for exe, title, a, b in intervals:
+        if exe not in exes or normalize_title(browser_page_title(title)).casefold() not in wanted:
+            continue
+        overlap = (min(b, end) - max(a, start)).total_seconds()
+        if overlap > 0:
+            total += overlap
+    return int(total * 1000)

@@ -6,13 +6,12 @@ entry from `personal-os autostart enable`). A clean daemon exit or a stop reques
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 import time
 
 from personal_os.config.loader import ensure_dirs, load_config
-from personal_os.core import runtime
+from personal_os.core import runtime, spawn
 from personal_os.core.logging import get_logger, setup_logging
 
 EXIT_ALREADY_RUNNING = 3
@@ -28,15 +27,14 @@ def main() -> int:
         lock.acquire()
     except runtime.AlreadyRunningError:
         return EXIT_ALREADY_RUNNING
-    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     backoff = 1.0
     try:
         while True:
             started = time.monotonic()
             child = subprocess.run(
-                [sys.executable, "-m", "personal_os.daemon"],
-                env=os.environ.copy(),
-                creationflags=flags,
+                spawn.module_command("personal_os.daemon"),
+                env=spawn.child_env(),
+                creationflags=spawn.creation_flags(detached=False),
                 check=False,
             )
             code = child.returncode
