@@ -170,7 +170,7 @@ def tokens(text: str) -> list[str]:
 
 
 def title_segments(title: str) -> list[str]:
-    """'audit.md - qubenest-premium-landing - Visual Studio Code' -> its ' - ' parts."""
+    """'notes.md - my-repo - Visual Studio Code' -> its ' - ' parts."""
     return [s.strip() for s in _SPLIT_RE.split(title or "") if s.strip()]
 
 
