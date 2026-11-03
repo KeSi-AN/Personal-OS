@@ -1,6 +1,6 @@
 # Personal OS — Design
 
-**Status:** v0.5. Phases 0, 1 and 2 accepted (2026-11-03). Phase 3 (project resolver, sessions) built, awaiting review. Phase 4 (LLM summaries, `ask`) next.
+**Status:** v0.6. Phases 0, 1 and 2 accepted (2026-11-03). Phase 3 (project resolver, sessions) and phase 4 (local model: summaries, hybrid search, `ask`) built, awaiting review. Phase 5 (action layer) next.
 **Date:** 2026-11-02
 **Scope of this draft:** overall architecture, and the observation layer in detail (brief §4). Storage, the context engine, the action layer, and interfaces are covered only far enough to show the observation layer fits them. Each gets its own design section before its phase starts.
 
@@ -419,7 +419,7 @@ Raw events 30 days, page text 90 days, terminal output (when enabled) 14 days, c
 
 When two weaker signals agree on the same project (say a keyword match and the temporal context), they combine as independent evidence, 1 − (1 − a)(1 − b), capped at 0.84 so a combination never looks like a direct signal.
 
-Below 0.5 an event stays **unassigned** and goes to the inbox. System, idle and meta events never get a project. Embeddings join the keyword signal in phase 4, when the local embedding model arrives; phase 3 uses words only.
+Below 0.5 an event stays **unassigned** and goes to the inbox. System, idle and meta events never get a project. The resolver uses words only. Embeddings arrived in phase 4 for retrieval; adding them to this signal is deferred until they've proved themselves there (§6.2).
 
 **Inbox and learning.** `personal-os inbox` groups unassigned items, and guesses below 0.7 that came only from keywords or timing, by what they have in common (a site, an app and title, a folder), with counts, time spent and the current guess, so one `personal-os assign <group> <project>` fixes many. Assigning a group stores a rule for it; assigning one event only fixes that event (add `--learn` for a rule). The resolver then re-runs over the last 30 days except your corrections, so the rule applies straight away and to future events. A site used for several projects (Stack Overflow) gets conflicting corrections, which lowers its rule's confidence, so the keyword and temporal signals win there.
 
@@ -429,19 +429,62 @@ Below 0.5 an event stays **unassigned** and goes to the inbox. System, idle and 
 
 **Acceptance.** Labelled simulated days across three projects plus personal browsing, including deliberately ambiguous research pages. Day 1 is a cold start; simulated corrections are made through the inbox (a group is assigned only if 80% of it belongs to one project, otherwise its items one by one); day 2 must score at least 90% of events correct (an unassigned event counts as wrong), and at least 85% of time. A second, harder day 2 was written after tuning as a hold-out (ADR-042).
 
-### 6.2 Local models for this hardware (GTX 1650 4 GB, 16 GB RAM)
+### 6.2 Local models, summaries, retrieval and `ask` (phase 4)
 
-Decided (your answer): **Qwen only.**
+**Models** (your answer: Qwen only), measured on this laptop on 2026-11-04:
 
-| Role | Model | Reason |
+| Role | Model | Measured |
 |---|---|---|
-| Fast (classify, summarize, extract JSON) | `qwen3:4b` (installed, about 2.5 GB, fits fully in VRAM) | Expect roughly 20–30 tokens/s on this GPU (to be measured). Good structured output. |
-| Reasoning (`ask`, planning, tool calls) | `qwen3:4b` with thinking on | Same model, so only one model ever needs to be loaded in the 4 GB. |
-| Embeddings | `qwen3-embedding:0.6b` (about 640 MB) | Stays in the Qwen family. If you'd rather not add even this, retrieval falls back to FTS5 + recency only. |
+| Summaries and answers | `qwen3:4b`, thinking off | About 45 tokens/s and 680 prompt tokens/s with every layer on the GPU (3.8 GB at an 8k context). Ollama's own estimate put only 2.3 GB on the GPU and ran at 7.5 tokens/s, so the provider asks for all layers (`gpu_layers`) and retries without that if loading fails. |
+| Deeper answers | the same model with thinking on, only with `ask --think` | About 60 s per answer (2,000+ thinking tokens). Too slow to be the default. |
+| Embeddings | `qwen3-embedding:0.6b` | Background batches on the GPU (about 550 tokens/s). A question is embedded on the CPU (0.5 s), so it doesn't push the chat model out of the 4 GB. |
 
-`gemma4:e2b` and `gpt-oss:20b` aren't used.
+Everything goes through an `LLMProvider` interface (`chat_json`, `embed`, `health`). The Ollama provider uses the standard library's HTTP client, so there's no new dependency. It accepts only a loopback `base_url`: captured context never leaves the machine. Structured output uses Ollama's JSON-schema `format`, then pydantic validation, with one retry that shows the model its validation error.
 
-Background LLM jobs run only **on AC power, while the user is idle ≥ 2 min, and when no full-screen app is in the foreground**. They use Ollama `keep_alive` so the VRAM is freed afterwards. Everything sits behind the `LLMProvider` interface.
+**Background jobs** (summaries, embeddings) run only **on AC power, while you've been idle for 2 minutes, with no full-screen app in front, and not while capture is paused** (ADR-014). They work one item at a time, recheck between items, and stop as soon as you come back. Models are loaded with a short `keep_alive`, so the VRAM is freed a couple of minutes later.
+
+**Session summaries.** A session is summarised once it has ended (15 quiet minutes) and had at least 5 active minutes. The model gets an **evidence pack**, not raw events. Each line has a number and stands for one or more events:
+
+- Window time is grouped by app and title.
+- File saves are grouped by file.
+- Repeated commands are folded together.
+- Commits, failed commands, searches and pages read appear with their details: a page's title, site, time spent and description.
+
+The pack is capped at about 80 lines, keeping commits, failures, files and pages before plain window time. The model returns JSON:
+
+- `goal` and a confidence for it.
+- `actions`, `outcomes` and `open_threads`, each an item with text and the lines it rests on.
+- An optional `next_step`.
+
+Validation drops any item whose line numbers aren't in the pack, so every remaining statement cites real events. The stored summary keeps the event ids behind those lines (`evidence_event_ids`). It also keeps a hash of the pack, so a session whose events change (a correction, a later event) is summarised again, and an unchanged one never is. Sensitive events appear only as "site, time". Their content never reaches the model.
+
+**Embeddings** are stored as float32 vectors in an ordinary table (the first 512 of the model's 1024 dimensions, renormalised; the model is trained for this). They're searched by brute force, with no `sqlite-vec`. Embedded:
+
+- Page visits: title, description, headings and the start of the text.
+- Searches.
+- Commits.
+- Session summaries.
+
+Sensitive events are never embedded. Deleting an event, an extract or a summary deletes its vector through triggers, and `secure_delete` zeroes it, so `forget` and retention keep their guarantees (ADR-044).
+
+**Retrieval** is hybrid. Full-text search (events, page text, summaries) and vector similarity each give a ranked list. They're fused by reciprocal rank, plus a recency term, inside an optional project and time filter. Without the embedding model it falls back to full-text plus recency, and says so.
+
+**`ask`.** A question is parsed without the model, so routing is predictable and testable:
+
+- A project, by id, name or words of its name.
+- A time range: today, yesterday, this or last week, the last N days, since a day, between two times.
+- An intent: where I left off, what I did, research on a topic, a bug, weekly progress, what changed since I last touched a project, or a general search.
+
+Each intent collects its own evidence. For "where I left off" that's the project's last session and its summary, the last commits, files and commands, the last failing command, and the repo's current git state. The evidence becomes one numbered pack.
+
+- **No evidence:** the answer is "I don't have data on that", with what was looked for. The model isn't asked.
+- **Otherwise:** the model answers as JSON sentences, each citing pack lines. Sentences without a valid citation are dropped. If none survive, or Ollama isn't running, `ask` falls back to listing the facts it found.
+
+The answer ends with its confidence and the numbered evidence (time, kind, what, event id).
+
+**Captured text is data.** Page text, titles, commands and commit messages are passed only inside a delimited data block. The prompt says plainly that the block's content is never instructions. In phase 4 the model has no tools at all. The phase 5 injection tests build on this.
+
+**Not in phase 4:** stored daily and weekly rollups (weekly questions are answered from session summaries at question time), the stored "current state" note per project (assembled at question time), conversation memory, and embeddings in the project resolver (later, once the vectors have proved themselves in retrieval).
 
 ### 6.3 Action layer (phase 5)
 
