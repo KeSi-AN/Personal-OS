@@ -45,6 +45,8 @@ def forget(
         ).fetchone()[0]
         n_events = conn.execute(f"DELETE FROM events WHERE {overlap}", params).rowcount
         conn.execute("DELETE FROM sessions WHERE ts_start < :end AND ts_end >= :start", params)
+        # Summaries are derived from what's being forgotten; their vectors go with them (trigger).
+        conn.execute("DELETE FROM summaries WHERE ts_start < :end AND ts_end >= :start", params)
         if marker:
             event = Event.point(
                 MetaEvent(kind="meta.forget", range_start=start, range_end=end),
@@ -155,6 +157,8 @@ def inspect(conn: sqlite3.Connection, db_path: Path | None) -> Inspection:
             "projects",
             "assignment_rules",
             "sessions",
+            "summaries",
+            "embeddings",
             "counters",
             "kv_settings",
         )
