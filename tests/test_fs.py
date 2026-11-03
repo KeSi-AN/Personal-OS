@@ -172,6 +172,37 @@ async def test_change_inside_repo_uses_git_numstat_and_notifies(tmp_path: Path, 
     assert any(r.endswith("proj") for r in obs.repos_seen)  # type: ignore[attr-defined]
 
 
+async def test_changes_made_by_git_operations_are_marked(tmp_path: Path, observer):
+    obs, _ = observer
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+    (repo / "a.py").write_text("x = 1\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "init")
+    _git(repo, "checkout", "-qb", "other")
+    (repo / "a.py").write_text("x = 2\n")
+    _git(repo, "commit", "-qam", "change")
+
+    # your own edit, then a commit: commits don't count as worktree operations
+    (repo / "a.py").write_text("x = 3\n")
+    obs.on_raw("modified", str(repo / "a.py"), None)
+    obs.on_raw("modified", str(repo / ".git" / "refs" / "heads" / "other"), None)
+    obs.on_raw("modified", str(repo / ".git" / "logs" / "HEAD"), None)
+    mine = await obs.pump(time.monotonic() + 3)
+    assert mine and mine[0].payload.via_git is False
+
+    # a checkout rewrites the worktree and HEAD
+    _git(repo, "checkout", "-q", "--", "a.py")
+    _git(repo, "checkout", "-q", "main")
+    obs.on_raw("modified", str(repo / ".git" / "HEAD"), None)
+    obs.on_raw("modified", str(repo / "a.py"), None)
+    theirs = await obs.pump(time.monotonic() + 3)
+    assert theirs and theirs[0].payload.via_git is True
+
+
 async def test_secret_files_are_never_read(tmp_path: Path, observer, monkeypatch):
     obs, _ = observer
     secret = tmp_path / ".env"

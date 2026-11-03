@@ -213,6 +213,7 @@ class FsChange(Payload):
     symbols_removed: list[str] = []
     symbols_changed: list[str] = []
     sensitive: bool = False
+    via_git: bool = False  # made by a git operation (pull, merge, checkout, rebase), not by hand
 
     TEXT_FIELDS = ("symbols_added", "symbols_removed", "symbols_changed")
     PATH_FIELDS = ("path", "dest_path", "root", "repo_root")

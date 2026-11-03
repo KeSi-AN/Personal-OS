@@ -185,6 +185,19 @@ def classify_path(path: str, extra_ignored: frozenset[str] = frozenset()) -> str
     return "file"
 
 
+# .git entries that git writes when an operation rewrites the worktree. A commit doesn't touch
+# these (it updates refs/ and logs/), so your own edits right before a commit aren't affected.
+_WORKTREE_OPS = ("HEAD", "ORIG_HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD",
+                 "rebase-merge", "rebase-apply")  # fmt: skip
+GIT_OP_WINDOW_S = 10.0
+
+
+def git_internal_name(path: str) -> str:
+    """'C:/r/.git/refs/heads/x' -> 'refs/heads/x'."""
+    p = norm(path)
+    return p.split("/.git/", 1)[1] if "/.git/" in p else ""
+
+
 def git_root_of_internal(path: str) -> str:
     p = norm(path)
     return p[: p.index("/.git/")] if "/.git/" in p else p
@@ -422,6 +435,7 @@ class FsObserver(BaseObserver):
         )
         self._symbols: dict[str, dict[str, str]] = {}  # path -> {symbol: hash}; names only
         self._lines: dict[str, int] = {}
+        self._git_ops: dict[str, float] = {}  # repo (lower-case) -> monotonic time of last op
         self._watcher: object | None = None
         self.dropped_raw = 0
 
@@ -437,7 +451,7 @@ class FsObserver(BaseObserver):
                     (
                         "git",
                         git_root_of_internal(target),
-                        None,
+                        git_internal_name(target),
                         time.monotonic(),
                         datetime.now().astimezone(),
                     )
@@ -468,6 +482,8 @@ class FsObserver(BaseObserver):
                 break
             if kind == "git":
                 repos_touched.add(src)
+                if dest and dest.startswith(_WORKTREE_OPS):
+                    self._git_ops[norm(src).lower()] = t
                 continue
             self.debouncer.add(kind, src, t, wall, dest)  # type: ignore[arg-type]
         ready, bulks = self.debouncer.flush(now_t)
@@ -532,6 +548,7 @@ class FsObserver(BaseObserver):
             self._symbols.pop(norm(path), None)
             self._lines.pop(norm(path), None)
         payload = FsChange(
+            via_git=self._via_git(repo_root, pend.last_t),
             path=norm(pend.path),
             root=self._root_of(path),
             change=pend.kind,
@@ -587,6 +604,14 @@ class FsObserver(BaseObserver):
             if old is not None:
                 sym_added, sym_removed, sym_changed = diff_symbols(old, new)
         return added, removed, sym_added[:50], sym_removed[:50], sym_changed[:50]
+
+    def _via_git(self, repo_root: str | None, t: float) -> bool:
+        """Did a git operation that rewrites the worktree (pull, merge, checkout, rebase) run
+        in this repo around the time of the change? Then git made the change, not you."""
+        if not repo_root:
+            return False
+        op_t = self._git_ops.get(norm(repo_root).lower())
+        return op_t is not None and abs(t - op_t) <= GIT_OP_WINDOW_S
 
     def _root_of(self, path: str) -> str | None:
         p = norm(path).lower()
