@@ -99,6 +99,19 @@ function send(record: object): void {
 
 // --- visits -------------------------------------------------------------------------------
 
+/** Same page for the purpose of attaching a content report: same origin, path and main query
+ *  parameter. Single-page apps (YouTube) rewrite the URL with extra parameters after loading. */
+function samePage(a: string | undefined, b: string): boolean {
+  if (!a) return false;
+  try {
+    const x = new URL(a);
+    const y = new URL(b);
+    return x.origin === y.origin && x.pathname === y.pathname && x.searchParams.get("v") === y.searchParams.get("v");
+  } catch {
+    return false;
+  }
+}
+
 function finish(st: State, tabId: number, now: number): void {
   const v = st.visits[tabId];
   if (!v) return;
@@ -164,6 +177,17 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
   });
 });
 
+// Address-bar navigations are often pre-rendered in a hidden tab that then replaces the visible
+// one under a new id; onActivated doesn't fire for it, so carry "in front" over here.
+chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) =>
+  void withState((st) => {
+    const now = Date.now();
+    if (st.activeTab === removedTabId) st.activeTab = addedTabId;
+    finish(st, removedTabId, now);
+    syncActive(Object.values(st.visits), st, now);
+  }),
+);
+
 chrome.tabs.onRemoved.addListener((tabId) => void withState((st) => finish(st, tabId, Date.now())));
 
 chrome.tabs.onActivated.addListener(({ tabId }) =>
@@ -205,7 +229,7 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
   if (tabId === undefined || sender.tab?.incognito) return;
   void withState((st) => {
     const v = st.visits[tabId];
-    if (msg?.kind === "page" && v && sender.url?.split("#")[0] === v.url.split("#")[0]) {
+    if (msg?.kind === "page" && v && samePage(sender.url, v.url)) {
       if (msg.hasPassword) v.hasPassword = true;
       if (msg.extract && !v.hasPassword) v.extract = msg.extract;
       if (typeof msg.scrollMax === "number") v.scrollMax = Math.max(v.scrollMax ?? 0, msg.scrollMax);

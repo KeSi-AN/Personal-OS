@@ -179,7 +179,10 @@ setInterval(() => {
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg?.kind === "reextract") {
     scrollMax = 0;
-    scheduleExtract(700); // single-page app: give the new view a moment to render
+    // Single-page app: read the new view once it has rendered, then again once it has settled
+    // (YouTube fills in the title, description and channel a few seconds later).
+    scheduleExtract(700);
+    scheduleExtract(4000);
   }
 });
 

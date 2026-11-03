@@ -320,3 +320,13 @@ def test_titles_search_urls_and_documents_are_cleaned(config: Config):
         parse_record(visit(extract={"text": "write to addya.someone+x@gmail.com today"}))[0]
     )  # type: ignore[index]
     assert other is not None and "gmail.com" not in other.payload.extract.main_text  # type: ignore[union-attr]
+
+
+def test_flashing_chat_titles_fall_back_to_the_page_title():
+    e = parse_record(visit(title="Message from How can we help today?",
+                           extract={"title": "What is GraphRAG? | Neo4j", "text": "GraphRAG ..."}))  # fmt: skip
+    assert e is not None and e[0].payload.title == "What is GraphRAG? | Neo4j"  # type: ignore[union-attr]
+    keep = parse_record(
+        visit(title="Messages from the past: a history", extract={"title": "x", "text": "y"})
+    )
+    assert keep is not None and keep[0].payload.title == "Messages from the past: a history"  # type: ignore[union-attr]

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import time
 import uuid
 from datetime import datetime
@@ -105,6 +106,18 @@ class Returns:
             self.store.set(RETURNS_KEY, self.data)
 
 
+_FLASHING_TITLE = re.compile(r"^(\(\d+\)\s*)?(new )?message from |^new message|is typing", re.I)
+
+
+def _best_title(rec: dict[str, Any], extract: PageExtract | None) -> str:
+    """The tab title, unless a chat widget or notifier has replaced it ("Message from ..."):
+    then the title the page had when its text was read."""
+    tab_title = clean_title(str(rec.get("title") or ""))
+    if extract and extract.title and (not tab_title or _FLASHING_TITLE.search(tab_title)):
+        return clean_title(extract.title)[:500]
+    return tab_title[:500]
+
+
 def parse_visit(rec: dict[str, Any], returns: Returns | None = None) -> list[Event]:
     url = clean_search_url(str(rec["url"]))
     visit_id = _uuid(rec.get("id"))
@@ -127,7 +140,7 @@ def parse_visit(rec: dict[str, Any], returns: Returns | None = None) -> list[Eve
     payload = PageVisit(
         url=url,
         domain=host_of(url),
-        title=clean_title(str(rec.get("title") or ""))[:500],
+        title=_best_title(rec, extract),
         tab_id=_int(rec.get("tabId"), None),
         window_id=_int(rec.get("windowId"), None),
         transition=transition,
