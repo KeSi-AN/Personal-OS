@@ -1,6 +1,6 @@
 # Personal OS — Design
 
-**Status:** v0.3. Phases 0 and 1 done and accepted (2026-11-03). Phase 2 (browser) next.
+**Status:** v0.4. Phases 0 and 1 accepted (2026-11-03). Phase 2 (browser) built, awaiting your review.
 **Date:** 2026-11-02
 **Scope of this draft:** overall architecture, and the observation layer in detail (brief §4). Storage, the context engine, the action layer, and interfaces are covered only far enough to show the observation layer fits them. Each gets its own design section before its phase starts.
 
@@ -268,7 +268,7 @@ Every event passes it, including events from the extensions and from replay. Sta
 - `chrome://`, `brave://`, `edge://`, `about:`, `file://` (off by default), extension pages.
 - **Dwell under 5 s** is dropped unless the page was bookmarked, reached by a search, or later revisited.
 
-**Native messaging host:** `native_host/host.py`, run by a `.bat` launcher pointing at the venv's Python. stdio is set to binary with `msvcrt.setmode`. Messages are length-prefixed per the Chrome protocol (1 MB maximum host→browser; we only acknowledge). It forwards batches to `POST /v1/ingest`. If the daemon is down, it appends to `spool/browser/` and the extension keeps a 1,000-event ring buffer too. Registration goes in per-user registry keys: `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.personalos.host` (Chrome; **Brave reads this key too, to be verified in phase 2**) and `HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.personalos.host`. No admin rights needed. `allowed_origins` pins our extension ID.
+**Native messaging host:** `personal_os/browser/native_host.py`, run by a `.bat` launcher with the venv's Python in isolated mode (`-I`). stdio is binary, messages are length-prefixed JSON (capped at 1 MB). Each visit or signal is appended to `spool/browser/` and the daemon ingests it like the terminal spool (ADR-029); no port is opened. The host answers every message with the pause state so the extension stops sending while paused. Registration uses per-user registry keys for Chrome, Brave (its own key) and Edge, pointing at a manifest whose `allowed_origins` is the pinned extension ID (ADR-030). Built and tested in phase 2.
 
 **Post-processing (phase 4, not on the capture path):** "why this mattered" summaries, keywords, and research-thread clustering run as background LLM jobs over visits with `active_dwell ≥ 30 s` or intent signals.
 

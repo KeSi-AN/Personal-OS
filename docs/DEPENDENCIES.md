@@ -15,9 +15,9 @@ Transitive packages pulled in by the ones below (for example `rich`, `click` and
 | `watchdog` | 1 | Mature cross-platform filesystem events (ReadDirectoryChangesW, inotify, FSEvents). |
 | `psutil` | 1 | Process exe, cwd, and parent lookup; daemon CPU/RSS for `doctor` and the budget script; battery/AC state. |
 | `pathspec` | 1 | Exact `.gitignore` semantics. Hand-rolled gitignore matching is a known source of bugs. |
-| `fastapi` | 2 | Local ingest, control, and query API, plus the phase 6 dashboard. Validation through pydantic. |
-| `uvicorn` | 2 | ASGI server for FastAPI, run inside the daemon's own event loop. |
-| `httpx` | 2 | Async HTTP client for the native host → daemon relay and Ollama calls (no need for the `ollama` SDK). |
+| `fastapi` | 4+ | Local ingest, control, and query API, plus the phase 6 dashboard. Validation through pydantic. |
+| `uvicorn` | 4+ | ASGI server for FastAPI, run inside the daemon's own event loop. |
+| `httpx` | 4 | Async HTTP client for Ollama calls (no need for the `ollama` SDK). The native host no longer needs it (ADR-029). |
 | `sqlite-vec` | 4 | Vector search inside the same SQLite file. No separate vector database. |
 | `keyring` | 4+ | DPAPI / OS keychain storage for an optional encryption key (only if encryption is enabled). |
 | `pystray` + `Pillow` | 6 | System tray icon (Pillow is required by pystray for the icon image). |
@@ -40,7 +40,8 @@ Transitive packages pulled in by the ones below (for example `rich`, `click` and
 |---|---|---|
 | `@mozilla/readability` | browser extension | Battle-tested main-content extraction (Firefox Reader View), runs on the page so no HTML leaves the tab. |
 | `esbuild` (dev) | both extensions | Single-binary bundler for TypeScript. No webpack config. |
-| `@types/vscode`, `@types/chrome` (dev) | extensions | Type definitions only. |
+| `typescript` (dev) | both extensions | Type-checking only (`tsc --noEmit`); esbuild does the compiling. |
+| `@types/chrome`, `@types/node`, `@types/vscode` (dev) | extensions | Type definitions only. |
 
 ## Vendored
 
