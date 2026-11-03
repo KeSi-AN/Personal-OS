@@ -177,18 +177,28 @@ def events(
         bool, typer.Option("--json", help="Print full events as JSON lines.")
     ] = False,
 ) -> None:
-    """List recent stored events. Page visits show active time ("+" = still open)."""
+    """List recent stored events with their project. Page visits show active time ("+" = still
+    open)."""
     cfg = _config()
     conn, _ = _open(cfg, db)
     rows = list(repo.iter_events(conn, source=source, limit=last, newest_first=True))
+    ids = [str(e.id) for e in rows]
+    projects: dict[str, str | None] = dict(
+        conn.execute(
+            f"SELECT id, project_id FROM events WHERE id IN ({','.join('?' * len(ids))})", ids
+        ).fetchall()
+        if ids
+        else []
+    )
     for e in reversed(rows):
         if as_json:
             typer.echo(e.model_dump_json())
             continue
         start = e.ts_start.astimezone().strftime("%m-%d %H:%M:%S")
         dur = _duration(e)
+        project = (projects.get(str(e.id)) or "-")[:16]
         flag = " [S]" if e.privacy_class == "sensitive" else ""
-        typer.echo(f"{start} {dur:>7}  {e.kind:<20}{flag} {_summary(e)}")
+        typer.echo(f"{start} {dur:>7}  {project:<16} {e.kind:<20}{flag} {_summary(e)}")
 
 
 @app.command()
@@ -368,8 +378,11 @@ def main() -> None:
     app()
 
 
-# Registers daemon/doctor/hooks/autostart/config-set commands on `app` (needs `app` defined).
-from personal_os.interfaces import cli_ops  # noqa: E402,F401
+# Registers the daemon/doctor/hooks/autostart/config-set and project commands on `app`
+# (they need `app` to exist, so this import comes last).
+from personal_os.interfaces import cli_ops, cli_projects  # noqa: E402
+
+_ = (cli_ops, cli_projects)
 
 if __name__ == "__main__":
     main()

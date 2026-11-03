@@ -36,12 +36,17 @@ from personal_os.observers.terminal import TerminalObserver
 from personal_os.observers.window import WindowObserver
 from personal_os.platform.base import SessionWatcher, WindowProbe
 from personal_os.privacy.rules import PrivacyRules
+from personal_os.projects.registry import ensure_repo_projects
+from personal_os.projects.resolver import Resolver
+from personal_os.projects.sessions import rebuild_sessions
 from personal_os.storage import maintenance, repo
 from personal_os.storage.db import connect, open_db
 
 VERSION = "1.0.0"
 EXIT_ALREADY_RUNNING = 3
 HEALTH_EVERY_S = 10.0
+RESOLVE_EVERY_S = 30.0
+SESSIONS_EVERY_S = 300.0
 RETENTION_EVERY_S = 6 * 3600.0
 _log = get_logger("daemon")
 
@@ -109,6 +114,7 @@ class Daemon:
         runtime.clear_stop(cfg.runtime_dir)
         self.writer_conn = open_db(cfg.db_path)
         self.control_conn = connect(cfg.db_path)
+        self.jobs_conn = connect(cfg.db_path)  # projects/sessions jobs run in a worker thread
         recovered = maintenance.close_open_intervals(self.control_conn)
         self.pipeline = build_pipeline(
             cfg, self.writer_conn, self.clock, bus=self.bus, pause_gate=self._pause_gate
@@ -138,6 +144,7 @@ class Daemon:
             self._write_health(stopping=True)
             self.writer_conn.close()
             self.control_conn.close()
+            self.jobs_conn.close()
             self._lock.release()
             _log.info("daemon stopped")
 
@@ -213,7 +220,7 @@ class Daemon:
     # --- control loop ----------------------------------------------------------------------
 
     async def _control_loop(self) -> None:
-        last_health = last_retention = last_stale = -1e18
+        last_health = last_retention = last_stale = last_resolve = last_sessions = -1e18
         while not self.stop_event.is_set():
             if runtime.stop_requested(self.config.runtime_dir):
                 runtime.clear_stop(self.config.runtime_dir)
@@ -224,6 +231,12 @@ class Daemon:
             if mono - last_health >= self.health_every_s:
                 last_health = mono
                 self._write_health()
+            if mono - last_resolve >= RESOLVE_EVERY_S and not self.paused.is_set():
+                last_resolve = mono
+                rebuild = mono - last_sessions >= SESSIONS_EVERY_S
+                if rebuild:
+                    last_sessions = mono
+                await asyncio.to_thread(self._project_jobs, rebuild)
             if mono - last_stale >= 60:
                 last_stale = mono
                 maintenance.close_stale(
@@ -302,6 +315,18 @@ class Daemon:
             await self._drain()
             maintenance.forget(self.control_conn, start, end, self.clock, marker=False)
             _log.info("forget applied", extra={"fields": {"queued_purged": purged}})
+
+    def _project_jobs(self, rebuild_sessions_too: bool) -> None:
+        """Assign projects to new events; every few minutes rebuild the last day's sessions.
+        A failure here is logged and retried next time; it never stops capture."""
+        try:
+            ensure_repo_projects(self.jobs_conn, self.clock)
+            Resolver(self.jobs_conn, self.clock).resolve_pending()
+            if rebuild_sessions_too:
+                now = self.clock.now()
+                rebuild_sessions(self.jobs_conn, self.clock, now - timedelta(days=1), now)
+        except Exception as exc:
+            _log.warning("project jobs failed", extra={"fields": {"exc_type": type(exc).__name__}})
 
     def _retention(self) -> None:
         conn = connect(self.config.db_path)
