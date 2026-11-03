@@ -255,6 +255,7 @@ class GitState(Payload):
     files: list[GitFileStat] = []
     op: Literal["none", "merge", "rebase", "cherry_pick", "revert", "bisect"] = "none"
     stash_count: int = 0
+    remote: str | None = None  # "github.com/owner/repo" from remote.origin.url, no credentials
 
     TEXT_FIELDS = ("branch", "upstream")
     PATH_FIELDS = ("repo_root",)
