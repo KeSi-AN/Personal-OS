@@ -20,6 +20,8 @@ import psutil
 
 from personal_os.config.loader import ensure_dirs, load_config
 from personal_os.config.schema import Config
+from personal_os.context.gate import JobGate
+from personal_os.context.jobs import JobReport, run_llm_jobs
 from personal_os.core import pause as pause_mod
 from personal_os.core import runtime
 from personal_os.core.bus import EventBus
@@ -28,6 +30,7 @@ from personal_os.core.events import Event, SystemEvent
 from personal_os.core.logging import get_logger, setup_logging
 from personal_os.core.observer import BaseObserver, ObserverContext, Supervisor
 from personal_os.core.wiring import build_pipeline
+from personal_os.llm import LLMProvider, LLMUnavailable, make_provider
 from personal_os.observers.browser import BrowserObserver
 from personal_os.observers.fs import FsObserver
 from personal_os.observers.git import GitObserver
@@ -48,6 +51,8 @@ HEALTH_EVERY_S = 10.0
 RESOLVE_EVERY_S = 30.0
 SESSIONS_EVERY_S = 300.0
 RETENTION_EVERY_S = 6 * 3600.0
+LLM_EVERY_S = 60.0
+LLM_BACKOFF_S = 600.0  # Ollama not running: look again in 10 minutes
 _log = get_logger("daemon")
 
 
@@ -84,6 +89,8 @@ class Daemon:
         use_platform: bool = True,
         control_every_s: float = 1.0,
         health_every_s: float = HEALTH_EVERY_S,
+        llm_provider: LLMProvider | None = None,
+        llm_every_s: float = LLM_EVERY_S,
     ) -> None:
         self.config = config
         self.clock = clock or SystemClock()
@@ -104,6 +111,16 @@ class Daemon:
         self._proc = psutil.Process()
         self._proc.cpu_percent(None)
         self._lock = runtime.InstanceLock(config.runtime_dir / runtime.DAEMON_LOCK)
+        self.llm_every_s = llm_every_s
+        self.llm = llm_provider or (make_provider(config.llm) if config.llm.enabled else None)
+        probe_ = self.window_probe
+        self.gate = JobGate(
+            config.llm,
+            idle_seconds=probe_.idle_seconds if probe_ else None,
+            fullscreen=getattr(probe_, "fullscreen", None),
+            paused=self.paused.is_set,
+        )
+        self.llm_status: dict[str, Any] = {"gate": "not checked yet"}
 
     # --- lifecycle -------------------------------------------------------------------------
 
@@ -115,6 +132,7 @@ class Daemon:
         self.writer_conn = open_db(cfg.db_path)
         self.control_conn = connect(cfg.db_path)
         self.jobs_conn = connect(cfg.db_path)  # projects/sessions jobs run in a worker thread
+        self.llm_conn = connect(cfg.db_path)  # LLM jobs: their own task and thread
         recovered = maintenance.close_open_intervals(self.control_conn)
         self.pipeline = build_pipeline(
             cfg, self.writer_conn, self.clock, bus=self.bus, pause_gate=self._pause_gate
@@ -134,9 +152,13 @@ class Daemon:
         _log.info(
             "daemon started", extra={"fields": {"pid": os.getpid(), "recovered_open": recovered}}
         )
+        llm_task = asyncio.create_task(self._llm_loop(), name="llm-jobs")
         try:
             await self._control_loop()
         finally:
+            self.stop_event.set()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(llm_task, 60)
             await self.supervisor.stop()
             self._publish_system("system.daemon_stop")
             pipeline_stop.set()
@@ -145,6 +167,7 @@ class Daemon:
             self.writer_conn.close()
             self.control_conn.close()
             self.jobs_conn.close()
+            self.llm_conn.close()
             self._lock.release()
             _log.info("daemon stopped")
 
@@ -328,6 +351,56 @@ class Daemon:
         except Exception as exc:
             _log.warning("project jobs failed", extra={"fields": {"exc_type": type(exc).__name__}})
 
+    async def _llm_loop(self) -> None:
+        """Every minute: if the gate is open, summarise and embed in a worker thread. Runs beside
+        the control loop, so a long job never delays pause, forget or health."""
+        if self.llm is None:
+            self.llm_status = {"gate": "llm disabled in config"}
+            return
+        wait = 5.0
+        while not self.stop_event.is_set():
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self.stop_event.wait(), wait)
+            if self.stop_event.is_set():
+                break
+            wait = self.llm_every_s
+            gate = self.gate.check()
+            self.llm_status["gate"] = gate.reason
+            if not gate.ok:
+                continue
+            try:
+                report = await asyncio.to_thread(self._llm_jobs)
+            except LLMUnavailable:
+                self.llm_status["error"] = "ollama not reachable"
+                wait = LLM_BACKOFF_S
+                continue
+            except Exception as exc:  # never let a model problem stop capture
+                _log.warning("llm jobs failed", extra={"fields": {"exc_type": type(exc).__name__}})
+                self.llm_status["error"] = type(exc).__name__
+                continue
+            self.llm_status.pop("error", None)
+            if report.summarized or report.failed or report.embedded:
+                self.llm_status["last_run"] = self.clock.now().isoformat()
+                _log.info(
+                    "llm jobs",
+                    extra={
+                        "fields": {
+                            "summarized": report.summarized,
+                            "failed": report.failed,
+                            "embedded": report.embedded,
+                            "stopped_early": report.stopped_early,
+                        }
+                    },
+                )
+
+    def _llm_jobs(self) -> JobReport:
+        assert self.llm is not None
+
+        def should_stop() -> bool:
+            return self.stop_event.is_set() or not self.gate.check().ok
+
+        return run_llm_jobs(self.llm_conn, self.llm, self.clock, self.config.llm, should_stop)
+
     def _retention(self) -> None:
         conn = connect(self.config.db_path)
         try:
@@ -373,6 +446,7 @@ class Daemon:
                 "stored": self.pipeline.stats.stored,
                 "forget_dropped": self.pipeline.forget_dropped,
             },
+            "llm": dict(self.llm_status),
             "filter": {
                 "blocked": dict(c.blocked),
                 "errors": {str(k): v for k, v in c.errors.items()},

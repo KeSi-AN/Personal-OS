@@ -380,9 +380,9 @@ def main() -> None:
 
 # Registers the daemon/doctor/hooks/autostart/config-set and project commands on `app`
 # (they need `app` to exist, so this import comes last).
-from personal_os.interfaces import cli_ops, cli_projects  # noqa: E402
+from personal_os.interfaces import cli_context, cli_ops, cli_projects  # noqa: E402
 
-_ = (cli_ops, cli_projects)
+_ = (cli_context, cli_ops, cli_projects)
 
 if __name__ == "__main__":
     main()

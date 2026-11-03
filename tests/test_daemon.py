@@ -59,6 +59,7 @@ def cfg(home: Path):
     set_value("observers.window.min_focus_s", 0.0, home)
     set_value("observers.window.title_stable_s", 0.0, home)
     set_value("observers.git.enabled", False, home)
+    set_value("llm.enabled", False, home)  # never reach a real Ollama from tests
     return set_value("watched_roots", [], home)
 
 

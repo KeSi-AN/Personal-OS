@@ -242,12 +242,20 @@ def sessions_cmd(
     if not sessions:
         typer.echo("No sessions for that day.")
         return
+    from personal_os.context.summarizer import load_summaries
+
+    summaries = {x.session_id: x for x in load_summaries(conn, start, end)}
     for s in sessions:
         a, b = s.start.astimezone().strftime("%H:%M"), s.end.astimezone().strftime("%H:%M")
         typer.echo(
             f"{a}-{b}  {s.project_id or 'unassigned':<26} active {_fmt_s(s.active_ms / 1000):>6}"
             f"  confidence {s.confidence:.0%}"
         )
+        summary = summaries.get(s.id)
+        if summary is not None:
+            typer.echo(f"   goal:     {summary.body.goal}")
+            if summary.body.next_step:
+                typer.echo(f"   next:     {summary.body.next_step.text}")
         st = s.stats
         if st.get("apps"):
             typer.echo(
