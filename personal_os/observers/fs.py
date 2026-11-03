@@ -177,7 +177,7 @@ def classify_path(path: str, extra_ignored: frozenset[str] = frozenset()) -> str
             return "ignore"
         return "git" if rest.startswith(_GIT_TRIGGERS) else "ignore"
     names = IGNORED_DIR_NAMES | extra_ignored
-    if any(part in names for part in parts[:-1]):
+    if any(part in names for part in parts):
         return "ignore"
     name = parts[-1]
     if name.startswith(_IGNORED_PREFIXES) or name.lower().endswith(_IGNORED_SUFFIXES):

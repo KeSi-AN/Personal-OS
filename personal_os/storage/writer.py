@@ -7,6 +7,7 @@ import sqlite3
 from collections.abc import Sequence
 from datetime import timedelta
 from typing import Any
+from uuid import UUID
 
 from personal_os.config.schema import RetentionConfig
 from personal_os.core.clock import Clock, to_ms
@@ -93,12 +94,22 @@ class EventWriter:
         self.retention = RetentionPolicy(retention)
         self.clock = clock
 
-    def write(self, events: Sequence[Event]) -> int:
-        """Upsert a batch in one transaction. Blocked events must never reach this point."""
-        if not events:
+    def write(self, events: Sequence[Event], retract: Sequence[UUID] = ()) -> int:
+        """Upsert a batch in one transaction. Blocked events must never reach this point.
+
+        `retract`: ids whose newest version the privacy filter dropped (e.g. a page that turned
+        out to have a password field, or a visit that ended as a bounce after an open
+        checkpoint was stored). Any stored row with such an id is deleted.
+        """
+        if not events and not retract:
             return 0
         now = to_ms(self.clock.now())
         with transaction(self.conn) as conn:
+            if retract:
+                conn.executemany(
+                    "DELETE FROM events WHERE id = ? AND source != 'meta'",
+                    [(str(i),) for i in retract],
+                )
             for event in events:
                 if event.privacy_class == PrivacyClass.BLOCKED:
                     raise ValueError("blocked event reached the writer")  # filter bug: fail loudly

@@ -23,7 +23,7 @@ from personal_os.config.schema import Config
 from personal_os.core import pause as pause_mod
 from personal_os.core import runtime
 from personal_os.core.clock import SystemClock, from_ms
-from personal_os.core.events import Event
+from personal_os.core.events import BrowserSignal, Event, PageVisit
 from personal_os.core.logging import setup_logging
 from personal_os.core.wiring import build_pipeline
 from personal_os.sim.generator import generate
@@ -80,10 +80,31 @@ def _fmt_ts(ms: int | None, offset_min: int = 0) -> str:
 
 def _summary(e: Event) -> str:
     p = e.payload
+    if isinstance(p, PageVisit):
+        # Hidden (sensitive) visits keep only the site, so show that instead of "[redacted]".
+        site = p.domain or p.url
+        text = site if p.title in ("", "[redacted]") else f"{p.title}  ({site})"
+        return text.replace("\n", " ")[:110]
+    if isinstance(p, BrowserSignal):
+        site = f"  ({p.domain})" if p.domain else ""
+        return f"{p.text!r}{site}".replace("\n", " ")[:110]
     for attr in ("title", "command", "message", "path", "url", "text", "repo_root", "app"):
         value = getattr(p, attr, None)
         if isinstance(value, str) and value:
             return value.replace("\n", " ")[:90]
+    return ""
+
+
+def _duration(e: Event) -> str:
+    """Page visits show the time the page was actually in front of you (active time), not how
+    long the tab stayed open; other intervals show their length."""
+    if isinstance(e.payload, PageVisit):
+        secs = e.payload.active_dwell_ms / 1000
+        return f"{secs:>5.0f}s" + ("+" if e.ts_end is None else " ")
+    if e.ts_end is None:
+        return "  open"
+    if e.ts_end != e.ts_start:
+        return f"{(e.ts_end - e.ts_start).total_seconds():>6.0f}s"
     return ""
 
 
@@ -156,7 +177,7 @@ def events(
         bool, typer.Option("--json", help="Print full events as JSON lines.")
     ] = False,
 ) -> None:
-    """List recent stored events."""
+    """List recent stored events. Page visits show active time ("+" = still open)."""
     cfg = _config()
     conn, _ = _open(cfg, db)
     rows = list(repo.iter_events(conn, source=source, limit=last, newest_first=True))
@@ -165,11 +186,7 @@ def events(
             typer.echo(e.model_dump_json())
             continue
         start = e.ts_start.astimezone().strftime("%m-%d %H:%M:%S")
-        dur = ""
-        if e.ts_end is not None and e.ts_end != e.ts_start:
-            dur = f"{(e.ts_end - e.ts_start).total_seconds():>6.0f}s"
-        elif e.ts_end is None:
-            dur = "  open"
+        dur = _duration(e)
         flag = " [S]" if e.privacy_class == "sensitive" else ""
         typer.echo(f"{start} {dur:>7}  {e.kind:<20}{flag} {_summary(e)}")
 

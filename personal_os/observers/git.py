@@ -30,6 +30,7 @@ from personal_os.observers.gitutil import (
 
 VERSION = "1.0.0"
 HEADS_KEY = "git.heads"
+STATE_KEY = "git.state_hashes"
 MAX_NEW_COMMITS = 20
 
 
@@ -215,9 +216,16 @@ class GitObserver(BaseObserver):
         shape = state.model_dump(mode="json")
         shape["files"] = [(f["path"], f["status"]) for f in shape["files"]]
         digest = hashlib.sha1(repr(sorted(shape.items())).encode()).hexdigest()
-        if digest != repo.state_hash:
+        hashes: dict[str, str] = self._ctx.state.get(STATE_KEY, {}) or {}
+        unchanged_since_last_run = (
+            baseline and repo.state_hash is None and hashes.get(repo.root) == digest
+        )
+        if digest != repo.state_hash and not unchanged_since_last_run:
             events.append(self._point(state, now))
-            repo.state_hash = digest
+        repo.state_hash = digest
+        if hashes.get(repo.root) != digest:
+            hashes[repo.root] = digest
+            self._ctx.state.set(STATE_KEY, hashes)
         repo.head, repo.branch, repo.op = status.head, status.branch, op
         if status.head and heads.get(repo.root) != status.head:
             heads[repo.root] = status.head
