@@ -124,6 +124,8 @@ async function start(
     return; // tab already gone
   }
   if (tab.incognito || !isTrackable(url)) return;
+  // A page opened in the tab that's already in front never fires onActivated: learn it here.
+  if (tab.active) st.activeTab = tabId;
   const opener = tab.openerTabId !== undefined ? (st.visits[tab.openerTabId] ?? null) : null;
   st.visits[tabId] = newVisit({
     id: crypto.randomUUID(),
@@ -227,10 +229,26 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   });
 });
 
+async function initFocus(): Promise<void> {
+  // The worker may start long after the browser: read the real focus state, don't assume it.
+  const [win, idle] = await Promise.all([
+    chrome.windows.getLastFocused().catch(() => undefined),
+    chrome.idle.queryState(60),
+  ]);
+  const [tab] = win?.id !== undefined ? await chrome.tabs.query({ active: true, windowId: win.id }) : [];
+  await withState((st) => {
+    st.windowFocused = !!win?.focused;
+    st.activeTab = tab?.id ?? st.activeTab;
+    st.idle = idle;
+    syncActive(Object.values(st.visits), st, Date.now());
+  });
+}
+
 function boot(): void {
   chrome.idle.setDetectionInterval(60);
   void chrome.alarms.create(CHECKPOINT_ALARM, { periodInMinutes: 1 });
   connect();
+  void initFocus();
 }
 
 chrome.runtime.onStartup.addListener(boot);

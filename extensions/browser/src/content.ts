@@ -4,6 +4,8 @@
 
 import { Readability } from "@mozilla/readability";
 
+import { pickMainText } from "./visit";
+
 const MAX_TEXT = 3000;
 const SENSITIVE_FIELDS =
   'input[type="password"], input[autocomplete="cc-number"], input[autocomplete="cc-csc"], ' +
@@ -45,16 +47,18 @@ function hints(): Record<string, string | boolean> {
   return h;
 }
 
+const squash = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
+
 function extract() {
   const clone = document.cloneNode(true) as Document;
-  let text = "";
+  let readable = "";
   try {
-    text = new Readability(clone, { charThreshold: 300 }).parse()?.textContent ?? "";
+    readable = squash(new Readability(clone, { charThreshold: 300 }).parse()?.textContent);
   } catch {
-    text = "";
+    readable = "";
   }
-  if (!text) text = document.body?.innerText ?? "";
-  text = text.replace(/\s+/g, " ").trim();
+  const mainEl = document.querySelector("main, article, [role='main']") as HTMLElement | null;
+  const text = pickMainText(readable, squash(mainEl?.innerText), squash(document.body?.innerText));
   const headings = Array.from(document.querySelectorAll("h1, h2, h3"))
     .map((h) => (h.textContent ?? "").replace(/\s+/g, " ").trim())
     .filter((h) => h.length > 0)
@@ -79,9 +83,12 @@ function videoNow(): number {
   return total;
 }
 
+let extractedUrl = "";
+
 function fullReport(): void {
   if (checkSensitive()) return;
   report({ extract: extract(), referrer: document.referrer || null, hints: hints(), scrollMax, videoS: videoNow() });
+  extractedUrl = location.href;
   dirty = false;
 }
 
@@ -89,7 +96,7 @@ function scheduleExtract(delayMs: number): void {
   const run = () => fullReport();
   setTimeout(() => {
     const ric = (window as Window & { requestIdleCallback?: (cb: () => void, o?: object) => void }).requestIdleCallback;
-    if (ric) ric(run, { timeout: 3000 });
+    if (ric) ric(run, { timeout: 1000 });
     else run();
   }, delayMs);
 }
@@ -159,7 +166,7 @@ document.addEventListener("copy", () => sendSelection("copy"));
 // --- lifecycle -----------------------------------------------------------------------------
 
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden" && dirty) fullReport();
+  if (document.visibilityState === "hidden" && (dirty || extractedUrl !== location.href)) fullReport();
 });
 addEventListener("pagehide", () => {
   if (dirty) fullReport();
@@ -172,9 +179,9 @@ setInterval(() => {
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg?.kind === "reextract") {
     scrollMax = 0;
-    scheduleExtract(1500); // single-page app: give the new view time to render
+    scheduleExtract(700); // single-page app: give the new view a moment to render
   }
 });
 
 checkSensitive();
-scheduleExtract(800);
+scheduleExtract(500);

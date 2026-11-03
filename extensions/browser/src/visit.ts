@@ -142,3 +142,16 @@ export function pushBounded<T>(queue: T[], item: T, max: number): T[] {
   queue.push(item);
   return queue.length > max ? queue.slice(queue.length - max) : queue;
 }
+
+const words = (s: string) => (s ? s.split(" ").length : 0);
+
+/** Main text: Readability when it finds a real article; otherwise the page's <main>/<article>;
+ *  otherwise the body. Readability sometimes settles on a footer or sidebar (a few dozen
+ *  words) on sites with unusual markup, so a short result loses to a much longer main area. */
+export function pickMainText(readable: string, main: string, body: string): string {
+  if (words(readable) >= 150) return readable;
+  const best = words(main) >= words(readable) * 2 && words(main) >= 50 ? main : readable;
+  if (words(best) >= 50) return best;
+  return words(body) > words(best) ? body : best;
+}
+

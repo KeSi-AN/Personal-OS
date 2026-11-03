@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { type FocusState, activeMsAt, isTrackable, newVisit, pushBounded, syncActive, toRecord } from "../src/visit";
+import { type FocusState, activeMsAt, isTrackable, newVisit, pickMainText, pushBounded, syncActive, toRecord } from "../src/visit";
 
 function visit(tabId = 1, id = "v1") {
   return newVisit({ id, tabId, windowId: 1, url: "https://a.dev/x", title: "A", now: 0,
@@ -59,4 +59,12 @@ test("only http(s) pages are tracked; outbox is bounded", () => {
   let q: number[] = [];
   for (let i = 0; i < 5; i++) q = pushBounded(q, i, 3);
   assert.deepEqual(q, [2, 3, 4]);
+});
+
+test("main text: a footer-sized Readability result loses to the page's main area", () => {
+  const w = (n: number, word = "w") => Array(n).fill(word).join(" ");
+  assert.equal(pickMainText(w(300, "r"), w(400, "m"), w(900, "b")), w(300, "r")); // real article
+  assert.equal(pickMainText(w(31, "f"), w(600, "m"), w(900, "b")), w(600, "m")); // footer vs <main>
+  assert.equal(pickMainText(w(10, "f"), "", w(200, "b")), w(200, "b")); // nothing better than body
+  assert.equal(pickMainText("", "", ""), "");
 });
