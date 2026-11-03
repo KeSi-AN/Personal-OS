@@ -8,11 +8,9 @@ append simply creates a new file), then read in full and deleted.
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import re
 import sys
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -21,6 +19,7 @@ from personal_os.core.events import Event, TerminalCommand
 from personal_os.core.logging import get_logger
 from personal_os.core.observer import BaseObserver, ObserverContext
 from personal_os.observers.gitutil import find_repo_root, read_head_branch
+from personal_os.observers.spool import Skip, SpoolStats, drain
 
 VERSION = "1.0.0"
 MAX_COMMAND_CHARS = 4096
@@ -52,13 +51,6 @@ def is_tool_bootstrap(command: str) -> bool:
 
 def _epoch(value: Any) -> float:
     return float(str(value).replace(",", "."))
-
-
-@dataclass
-class SpoolStats:
-    ingested: int = 0
-    malformed: int = 0
-    private_skipped: int = 0
 
 
 def parse_record(rec: dict[str, Any]) -> Event | None:
@@ -107,52 +99,15 @@ def parse_record(rec: dict[str, Any]) -> Event | None:
     )
 
 
+def _parse_spooled(rec: dict[str, Any]) -> Event | None:
+    if isinstance(rec.get("command"), str) and rec["command"].startswith(" "):
+        raise Skip  # private command (the hooks never write these; defence in depth)
+    return parse_record(rec)
+
+
 def ingest_spool_dir(spool: Path, stats: SpoolStats) -> list[Event]:
     """Claim, read and delete every finished spool file. Safe to call while shells append."""
-    events: list[Event] = []
-    if not spool.is_dir():
-        return events
-    for entry in sorted(spool.glob("*.jsonl")):
-        claimed = entry.with_name(f"{entry.name}.{os.getpid()}.ingesting")
-        try:
-            entry.replace(claimed)
-        except OSError:
-            continue  # the shell is writing right now; next round
-        events.extend(_read_claimed(claimed, stats))
-    for leftover in spool.glob("*.ingesting"):  # from a daemon that crashed mid-read
-        events.extend(_read_claimed(leftover, stats))
-    return events
-
-
-def _read_claimed(path: Path, stats: SpoolStats) -> list[Event]:
-    events: list[Event] = []
-    try:
-        with path.open("r", encoding="utf-8-sig", errors="replace") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    stats.malformed += 1
-                    continue
-                if not isinstance(rec, dict):
-                    stats.malformed += 1
-                    continue
-                if isinstance(rec.get("command"), str) and rec["command"].startswith(" "):
-                    stats.private_skipped += 1
-                    continue
-                event = parse_record(rec)
-                if event is None:
-                    stats.malformed += 1
-                    continue
-                events.append(event)
-        path.unlink(missing_ok=True)
-    except OSError:
-        _log.warning("could not read spool file", extra={"fields": {"file": path.name}})
-    stats.ingested += len(events)
-    return events
+    return drain(spool, _parse_spooled, stats)
 
 
 class TerminalObserver(BaseObserver):
