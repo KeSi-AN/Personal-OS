@@ -334,9 +334,9 @@ def browser_recompute_dwell() -> None:
 
     cfg = _config()
     conn = connect(cfg.db_path)
-    updated, checked = recompute_dwell(conn)
+    updated, checked = recompute_dwell(conn, int(cfg.privacy.min_dwell_s * 1000))
     conn.close()
-    typer.echo(f"Updated {updated} of {checked} visits from the window record.")
+    typer.echo(f"Updated the active time of {updated} of {checked} visits.")
 
 
 # --- autostart -----------------------------------------------------------------------------
