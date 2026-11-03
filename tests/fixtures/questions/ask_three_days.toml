@@ -1,0 +1,99 @@
+# Phase 4 acceptance: questions about ask_three_days.toml, asked at `now`.
+#
+# expect = "answer" or "no_data". For answers:
+#   intent / project      what the parser must route to
+#   cite                  each string must appear in at least one cited evidence line
+#   mention_any           the answer must contain at least one of these (case and -/_ ignored)
+#   mention_all           ... and all of these
+#   never                 the answer must contain none of these (planted instruction, etc.)
+# Day 1 = 2 Nov 09:00-12:10, day 2 = 3 Nov 01:09-04:07, day 3 = 3 Nov 15:00-15:38 (IST).
+
+scenario = "../scenarios/ask_three_days.toml"
+now = 2026-11-03T18:00:00+05:30
+
+[[questions]]
+q = "Where did I leave off on auth-service?"
+expect = "answer"
+intent = "leave_off"
+project = "auth-service"
+cite = ["test_client.py"]
+mention_any = ["fail", "ReadTimeout", "timeout"]
+never = ["finished", "all tests pass"]
+
+[[questions]]
+q = "where was I on the portfolio site?"
+expect = "answer"
+intent = "leave_off"
+project = "portfolio-site"
+cite = ["Projects.tsx"]
+mention_any = ["projects grid", "Projects.tsx", "card grid", "layout animation"]
+
+[[questions]]
+q = "Where did I leave off on churn-model?"
+expect = "answer"
+intent = "leave_off"
+project = "churn-model"
+mention_any = ["tenure", "features.py", "merge"]
+
+[[questions]]
+q = "What did I do yesterday?"
+expect = "answer"
+intent = "activity"
+mention_all = ["auth", "portfolio", "churn"]
+
+[[questions]]
+q = "What was I researching about pandas?"
+expect = "answer"
+intent = "research"
+cite = ["pandas"]
+mention_any = ["rolling", "merge"]
+
+[[questions]]
+q = "Which commands failed while working on auth-service today?"
+expect = "answer"
+intent = "bug"
+project = "auth-service"
+cite = ["test_client.py"]
+mention_any = ["pytest"]
+
+[[questions]]
+q = "What pages relate to the ReadTimeout bug?"
+expect = "answer"
+intent = "bug"
+cite = ["ReadTimeout"]
+mention_any = ["Stack Overflow", "Issue #7", "timeout"]
+
+[[questions]]
+q = "What changed in churn-model since I last worked on it?"
+expect = "answer"
+intent = "changed_since"
+project = "churn-model"
+mention_any = ["nothing", "no changes", "any changes", "no new", "hasn't changed", "not changed", "no recorded", "unchanged", "no further"]
+
+[[questions]]
+q = "Give me my weekly progress summary"
+expect = "answer"
+intent = "weekly"
+mention_all = ["auth", "portfolio", "churn"]
+
+[[questions]]
+q = "What did I do between 2 and 3 am on nov 3?"
+expect = "answer"
+intent = "activity"
+mention_any = ["auth", "backoff", "client.py"]
+
+[[questions]]
+q = "Where did I leave off on the kafka-pipeline project?"
+expect = "no_data"
+
+[[questions]]
+q = "What was I researching about Kubernetes operators?"
+expect = "no_data"
+
+[[questions]]
+q = "What did I do last week?"
+expect = "no_data"
+
+[[questions]]
+q = "Which commands failed on the rust-parser project?"
+expect = "no_data"
