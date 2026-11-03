@@ -38,6 +38,10 @@ class WindowProbe(Protocol):
         """Seconds since the last keyboard/mouse input anywhere in the session."""
         ...
 
+    def fullscreen(self) -> bool:
+        """A full-screen app, game or presentation is in the foreground."""
+        ...
+
 
 class SessionWatcher(Protocol):
     """Delivers lock/unlock, sleep/wake, logon/logoff and hotkey signals from a worker thread."""

@@ -30,6 +30,7 @@ user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 wtsapi32 = ctypes.WinDLL("wtsapi32", use_last_error=True)
 version_dll = ctypes.WinDLL("version", use_last_error=True)
+shell32 = ctypes.WinDLL("shell32", use_last_error=True)
 
 LRESULT = ctypes.c_ssize_t
 WNDPROC = ctypes.WINFUNCTYPE(
@@ -266,6 +267,15 @@ class WindowsWindowProbe:
         # dwTime is a 32-bit tick count: compare modulo 2^32 so the 49.7-day wrap is harmless.
         now32 = kernel32.GetTickCount64() & 0xFFFFFFFF
         return float((now32 - lii.dwTime) & 0xFFFFFFFF) / 1000.0
+
+    def fullscreen(self) -> bool:
+        """A full-screen app, game (Direct3D exclusive) or presentation is in front, as Windows'
+        own Focus Assist sees it (SHQueryUserNotificationState)."""
+        state = ctypes.c_int(0)
+        if shell32.SHQueryUserNotificationState(ctypes.byref(state)) != 0:
+            return False
+        # QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN, QUNS_PRESENTATION_MODE
+        return state.value in (2, 3, 4)
 
     def _proc(self, pid: int | None) -> _ProcInfo | None:
         if not pid:
