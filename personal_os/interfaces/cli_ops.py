@@ -9,11 +9,13 @@ import sys
 import time
 import urllib.request
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any
 
 import psutil
 import typer
 
+from personal_os.browser import install as browser_install
 from personal_os.config.loader import set_value
 from personal_os.core import pause as pause_mod
 from personal_os.core import runtime
@@ -27,6 +29,8 @@ daemon_app = typer.Typer(no_args_is_help=True, help="Start, stop and inspect the
 autostart_app = typer.Typer(no_args_is_help=True, help="Start the daemon when you log in.")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(autostart_app, name="autostart")
+browser_app = typer.Typer(no_args_is_help=True, help="Connect the browser extension.")
+app.add_typer(browser_app, name="browser")
 
 ShellOpt = Annotated[str, typer.Option("--shell", help="powershell, bash or all.")]
 
@@ -224,6 +228,10 @@ def doctor() -> None:
         else 0
     )
     typer.echo(f"spool      {pending} file(s) waiting")
+    for b in browser_install.BROWSERS:
+        host = browser_install.status(b)
+        reg = "registered" if host.registered else "not registered"
+        typer.echo(f"browser    {b:<7} native host {reg}")
     typer.echo(f"autostart  {'enabled' if autostart.is_enabled() else 'disabled'}")
     typer.echo(f"ollama     {_ollama()}")
 
@@ -267,6 +275,66 @@ def uninstall_hooks(shell: ShellOpt = "all") -> None:
         st = installer.uninstall(sh, hooks_dir=cfg.data_dir / "hooks")
         typer.echo(f"{sh}: removed from {st.profile} (if it was there).")
         typer.echo("Terminals that are already open keep the hook until you close them.")
+
+
+# --- browser -------------------------------------------------------------------------------
+
+BrowserOpt = Annotated[str, typer.Option("--browser", help="chrome, brave, edge or all.")]
+
+
+def _browsers(value: str) -> list[browser_install.Browser]:
+    if value == "all":
+        return list(browser_install.BROWSERS)
+    if value not in browser_install.BROWSERS:
+        raise typer.BadParameter("use chrome, brave, edge or all")
+    return [value]
+
+
+def extension_dir() -> Path:
+    return Path(__file__).resolve().parents[2] / "extensions" / "browser" / "dist"
+
+
+@browser_app.command("install")
+def browser_install_cmd(browser: BrowserOpt = "all") -> None:
+    """Register the native host for your browser(s) and turn browser capture on."""
+    cfg = _config()
+    for b in _browsers(browser):
+        manifest = browser_install.register(cfg.data_dir, b, home=_state.home)
+        typer.echo(f"{b}: native host registered ({manifest})")
+    set_value("observers.browser.enabled", True, _state.home)
+    typer.echo("Browser capture is on. Restart the daemon: `personal-os daemon stop` then `start`.")
+    typer.echo("")
+    typer.echo("Now load the extension: open chrome://extensions (or brave://extensions), turn on")
+    typer.echo("Developer mode, click 'Load unpacked' and pick:")
+    typer.echo(f"  {extension_dir()}")
+    typer.echo(f"Its ID must be {browser_install.EXTENSION_ID}.")
+
+
+@browser_app.command("uninstall")
+def browser_uninstall_cmd(browser: BrowserOpt = "all") -> None:
+    """Unregister the native host and turn browser capture off."""
+    cfg = _config()
+    for b in _browsers(browser):
+        browser_install.unregister(cfg.data_dir, b)
+        typer.echo(f"{b}: native host removed")
+    set_value("observers.browser.enabled", False, _state.home)
+    typer.echo("Browser capture is off. Remove the extension from the browser's extensions page.")
+
+
+@browser_app.command("status")
+def browser_status_cmd() -> None:
+    """Native host registration per browser, and when the extension last sent something."""
+    cfg = _config()
+    for b in browser_install.BROWSERS:
+        st = browser_install.status(b)
+        typer.echo(f"{b:<7} {'registered' if st.registered else 'not registered'}")
+    typer.echo(f"extension id   {browser_install.EXTENSION_ID}")
+    typer.echo(f"extension dir  {extension_dir()}")
+    h = runtime.daemon_info(cfg.runtime_dir).health or {}
+    o = (h.get("observers") or {}).get("browser") or {}
+    typer.echo(
+        f"observer       {o.get('state', 'unknown')}, last event {_ago(o.get('last_event_at'))}"
+    )
 
 
 # --- autostart -----------------------------------------------------------------------------

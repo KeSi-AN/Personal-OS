@@ -28,6 +28,7 @@ from personal_os.core.events import Event, SystemEvent
 from personal_os.core.logging import get_logger, setup_logging
 from personal_os.core.observer import BaseObserver, ObserverContext, Supervisor
 from personal_os.core.wiring import build_pipeline
+from personal_os.observers.browser import BrowserObserver
 from personal_os.observers.fs import FsObserver
 from personal_os.observers.git import GitObserver
 from personal_os.observers.session import SessionObserver, SessionState
@@ -194,6 +195,13 @@ class Daemon:
             TerminalObserver(cfg.spool_dir / "terminal"),
             enabled=oc.terminal.enabled,
             reason=None if oc.terminal.enabled else "disabled in config",
+        )
+        sup.add(
+            BrowserObserver(cfg.spool_dir / "browser"),
+            enabled=oc.browser.enabled,
+            reason=None
+            if oc.browser.enabled
+            else "off until the extension is set up: `personal-os browser install`",
         )
         return sup
 
