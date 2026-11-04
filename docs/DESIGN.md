@@ -1,6 +1,6 @@
 # Personal OS — Design
 
-**Status:** v0.7. Phases 0, 1 and 2 accepted (2026-11-03). Phases 3 (project resolver, sessions), 4 (local model: summaries, hybrid search, `ask`) built, awaiting review; phase 5 (action layer) accepted 2026-11-04. Phase 6 (tray, overlay, dashboard, privacy centre) next.
+**Status:** v0.8. Phases 0, 1 and 2 accepted (2026-11-03). Phases 3 (project resolver, sessions), 4 (local model: summaries, hybrid search, `ask`) built, awaiting review; phase 5 (action layer) accepted 2026-11-04; phase 6 (dashboard, tray, overlay, phone, privacy centre) built, awaiting review. Phase 7 (voice, briefings, MCP, Google) next.
 **Date:** 2026-11-02
 **Scope of this draft:** overall architecture, and the observation layer in detail (brief §4). Storage, the context engine, the action layer, and interfaces are covered only far enough to show the observation layer fits them. Each gets its own design section before its phase starts.
 
@@ -547,18 +547,66 @@ Not in phase 5:
 
 Injection tests (planted instructions in page text, commit messages, file names and command output) run in the simulator against a worst-case fake model that obeys them. They also run against `qwen3:4b`.
 
-### 6.4 Interfaces
+### 6.4 Interfaces (phase 6)
 
-CLI first (`typer`): `status`, `doctor`, `pause`, `resume`, `forget`, `inspect`, `export`, `wipe`, `install-hooks`/`uninstall-hooks`, `install-native-host`, `record`/`replay`, then `ask`. Tray (phase 6) via `pystray`.
+**Goal (brief §10):** everything can be controlled and inspected without the terminal. The CLI stays, and every new screen calls the same functions it does.
 
-**Dashboard reachable from your phone** (your answer). The core API never leaves `127.0.0.1`. In phase 6 the dashboard gets a **second listener** on your LAN address with these rules:
+**Local API and dashboard.** A FastAPI app runs inside the daemon (uvicorn on the daemon's event loop) on `127.0.0.1:47821`. Every request is checked three ways:
 
-- **Off until you enable it.** HTTPS with a self-signed certificate generated locally.
-- **Device pairing.** You scan a QR code shown on the laptop, and each phone gets its own revocable token.
-- **Limited routes.** Only dashboard and query routes, never `/ingest`. Control actions limited to pause and forget.
-- **No action confirmations from the phone at first.** Tier 2+ can't be confirmed from it.
-- **Firewall.** Windows Firewall needs an inbound rule, which takes admin rights. The app prints the exact command for you to run; it doesn't change firewall settings itself.
-- **Away from home.** Reaching it from outside your network (for example over Tailscale) is out of scope until you ask.
+- the `Host` header must be `127.0.0.1` or `localhost`, which blocks DNS rebinding;
+- requests that change something must carry the page's own `Origin`, which blocks other websites;
+- a session cookie (HttpOnly, SameSite=Strict) is required. It comes from a one-time link that `personal-os dashboard`, or the tray's "Open dashboard", opens.
+
+Pages are rendered on the server, with a few lines of plain JavaScript. There's no build step and nothing loaded from the internet. Database work runs in worker threads with their own connections, so capture never waits on a page.
+
+| Page | What's on it |
+|---|---|
+| Today | Capture state with pause/resume, kill-switch state, today's sessions with their summaries, inbox count, an ask box |
+| Timeline | Any day's sessions: goal, next step, apps, files, pages, commands, commits; each summary's evidence on demand |
+| Projects | Time per project. Each project page: its **current-state note**, recent sessions, commits, open threads, and "delete this project's data" |
+| Ask | Question, then answer with numbered evidence you can expand. Follow-ups reuse the last question's project and time range |
+| Inbox | Groups with a project picker (the same assign/learn as the CLI) |
+| Actions | The audit log, kill switch and resume, tier 3 unlocks, and a `do` box. Steps that need confirming appear as cards with their preview and Approve / Decline, on the laptop only |
+| Memory | Facts you've told it to remember: add, edit, delete |
+| Privacy centre | Each source on/off with a plain explanation (this is also the **first-run wizard**). Pause and forget-last-N-minutes. Retention, blocked sites and apps. What's stored per source (`inspect`). **Export** as JSON or Markdown. Paired phones |
+
+**Tray** (`pystray`, in the daemon). The icon shows the state: capturing, paused, or actions killed. The menu has:
+
+- pause/resume, open dashboard, ask…;
+- kill switch / resume actions;
+- stop capture.
+
+Reminders and other notices appear as Windows notifications through the tray icon.
+
+**Overlay** (`tkinter`, in its own process). **Ctrl+Alt+Shift+Space** opens a small always-on-top window:
+
+- **Typing:** a question goes to `ask`, and "do …" goes to `do`.
+- **Confirmations** are buttons in the window.
+- **Model warm-up:** opening the overlay loads the chat model in the background, so the first answer skips the cold load.
+
+**Notifications and new tier 1 tools.**
+
+- **`set_reminder(text, minutes or time)`:** stored, then fired by the daemon through the tray.
+- **`set_brightness(percent)`:** through WMI; laptops only.
+
+Do-not-disturb has no public Windows API, so it stays out.
+
+**Phone access** (your answer to Q4). It's off until you enable it in the privacy centre. Then:
+
+- **A second listener** runs on your LAN address (port 47822) with HTTPS and a self-signed certificate generated on the laptop (`cryptography`).
+- **Pairing:** the laptop shows the address and a 6-digit code valid for 5 minutes. The phone enters the code and gets its own long-lived, revocable token (stored hashed).
+- **What the phone can do:**
+  - **Can:** the read-only pages, ask, pause/resume, and forget.
+  - **Can't:** actions, settings, export, or deleting data. Tier 2+ confirmations stay at the laptop.
+- **Firewall:** Windows needs an admin-made inbound rule; the page prints the exact command for you to run. QR codes are left out to avoid a dependency; you type the address and code.
+
+**Gaps closed in this phase** (ROADMAP.md):
+
+- `personal-os export` (JSON or Markdown), and `personal-os projects delete ID` (events, extracts, vectors, sessions, summaries, rules).
+- **Memory:** "remember that …" stores a fact after you confirm it, and `ask` and `do` see remembered facts. These are things you said, so they're trusted, but they're still not instructions to run tools.
+- **Rollups:** daily summaries and a per-project current-state note (goal, done, in progress, blockers, next steps, key files and links), written by the gated background LLM job from session summaries and git state. Each cites the summaries and events it rests on.
+
+**Budget.** The daemon must still stay under about 300 MB and 2% idle CPU with the API and tray loaded. This is re-measured in acceptance.
 
 ### 6.5 Google integrations (phase 7)
 

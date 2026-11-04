@@ -15,18 +15,20 @@ Transitive packages pulled in by the ones below (for example `rich`, `click` and
 | `watchdog` | 1 | Mature cross-platform filesystem events (ReadDirectoryChangesW, inotify, FSEvents). |
 | `psutil` | 1 | Process exe, cwd, and parent lookup; daemon CPU/RSS for `doctor` and the budget script; battery/AC state. |
 | `pathspec` | 1 | Exact `.gitignore` semantics. Hand-rolled gitignore matching is a known source of bugs. |
-| `fastapi` | 4+ | Local ingest, control, and query API, plus the phase 6 dashboard. Validation through pydantic. |
-| `uvicorn` | 4+ | ASGI server for FastAPI, run inside the daemon's own event loop. |
+| `fastapi` | 6 | The dashboard and its JSON API (ADR-055). Validation through pydantic, which is already a dependency. |
+| `uvicorn` | 6 | ASGI server for FastAPI, run inside the daemon's own event loop. |
 | ~~`httpx`~~ | - | Not needed after all: Ollama is called with the standard library's `urllib` (ADR-043), and the native host doesn't need it either (ADR-029). |
 | ~~`sqlite-vec`~~ | - | Not used: vectors are plain rows searched by brute force, so `forget` can guarantee they're overwritten (ADR-044). |
 | `keyring` | 4+ | DPAPI / OS keychain storage for an optional encryption key (only if encryption is enabled). |
 | `pystray` + `Pillow` | 6 | System tray icon (Pillow is required by pystray for the icon image). |
+| `cryptography` | 6 | Generating the self-signed certificate for phone access (HTTPS on the LAN, ADR-056). The standard library can't create certificates. |
 
 ## Development and test only
 
 | Package | Why |
 |---|---|
 | `pytest` | Test runner. |
+| `httpx` | Required by FastAPI's test client (the dashboard tests). Not used at runtime. |
 | `pytest-asyncio` | Testing asyncio observers, the bus, and the pipeline. |
 | `hypothesis` | Property tests for redaction (no planted secret survives) and debounce logic. |
 | `ruff` | Lint + format in one fast tool. |

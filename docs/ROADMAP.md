@@ -12,19 +12,19 @@
 | 3 | Projects, inbox, sessions | Built, awaiting review |
 | 4 | Local model: summaries, hybrid search, `ask` | Built, awaiting review |
 | 5 | Action layer: tool registry, tiers, confirmation, audit log, kill switch, injection tests | Accepted 2026-11-04 |
-| 6 | Tray, hotkey overlay, web dashboard (reachable from your phone), privacy centre | In progress |
+| 6 | Tray, hotkey overlay, web dashboard (reachable from your phone), privacy centre | Built, awaiting review |
 | 7 | Voice, briefings, MCP/plugin API, Google Calendar and Gmail | Planned |
 
 ## Gaps: brief requirements still open (close before the MVP is done)
 
 | Requirement (brief section) | Where it lands |
 |---|---|
-| Export of everything stored, as JSON and Markdown (§5) | Phase 6, privacy centre (CLI command first) |
-| Per-project delete (§5) | Phase 6, privacy centre (CLI command first) |
-| Conversation memory: short-term chat context, plus long-term facts you confirm ("remember that…"), stored separately and editable (§8) | Phase 6, with the overlay chat |
-| Per-project timeline: daily and weekly summaries, plus a living "current state" note (§5). Deferred in phase 4; weekly questions are answered from session summaries at question time | Phase 6, project pages |
-| First-run wizard that explains each source before enabling it (§9) | Phase 6 |
-| Tier 1 tools that need notifications: brightness, do-not-disturb, timers and reminders (§7) | Phase 6, with the tray |
+| Export of everything stored, as JSON and Markdown (§5) | **Done** in phase 6 (`export`, Privacy page) |
+| Per-project delete (§5) | **Done** in phase 6 (`projects delete`, project page) |
+| Conversation memory: short-term chat context, plus long-term facts you confirm ("remember that…"), stored separately and editable (§8) | **Done** in phase 6 (follow-ups, Memory page, `memory`) |
+| Per-project timeline: daily and weekly summaries, plus a living "current state" note (§5) | **Done** in phase 6 (day rollups, current-state notes); weekly is still answered at question time |
+| First-run wizard that explains each source before enabling it (§9) | **Done** in phase 6 (welcome card, Privacy → Sources, `setup`) |
+| Tier 1 tools that need notifications: brightness, do-not-disturb, timers and reminders (§7) | **Done** in phase 6 except do-not-disturb (no Windows API) |
 | Optional encryption at rest (§5; deferred by your answer to Q8) | Phase 7 or right after the MVP |
 | Embeddings in the project resolver (§6; deferred in phases 3–4) | After the MVP, once retrieval shows the vectors are reliable |
 
@@ -51,7 +51,7 @@
 - per-project pages showing the current-state note;
 - a polished phone layout.
 
-**3. `personal-os llm warm` and `llm unload`.** Load the chat model into VRAM ahead of time when you know you'll be asking (`warm --for 30m`). This removes the cold-load wait (about 10 s now, more for bigger models later), and `unload` frees the 3.8 GB immediately. Background summaries don't use it; they load the model only while you're away. Planned hooks:
+**3. `personal-os llm warm` and `llm unload`.** *(Built early in phase 6, together with warming when the overlay opens; still open: unload when a game starts, and a "model warm" mark in the tray.)* Load the chat model into VRAM ahead of time when you know you'll be asking (`warm --for 30m`). This removes the cold-load wait (about 10 s now, more for bigger models later), and `unload` frees the 3.8 GB immediately. Background summaries don't use it; they load the model only while you're away. Planned hooks:
 
 - warm automatically when the overlay hotkey opens (phase 6) or before a scheduled briefing (phase 7);
 - unload automatically when a full-screen app or game starts;
