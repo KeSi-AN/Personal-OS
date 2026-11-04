@@ -132,7 +132,7 @@ class Executor:
         def log(stage: str, detail: str = "", undo: dict[str, Any] | None = None) -> None:
             self.audit.record(aid, stage, detail=detail, undo=undo, **meta)
 
-        log("proposed")
+        log("proposed", "plugin tool" if getattr(tool, "plugin", False) else "")
         try:
             args = tool.args_model.model_validate(raw_args)
         except ValidationError as exc:
