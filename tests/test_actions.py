@@ -552,6 +552,7 @@ def test_planner_with_the_local_model_picks_the_right_tools(home: Path, config: 
         ("what's the weather in Delhi?", [], {}),
         ("skip to the next song and turn the volume up", ["media", "media"], {}),
         ("run my hello command", ["run_command"], {"name": "hello"}),
+        ("dim the screen to 30%", ["set_brightness"], {"percent": 30}),
     ]
     misses = []
     for request, tools, args in cases:
@@ -601,3 +602,11 @@ def test_a_mangled_windows_path_is_sent_back_to_the_model(env: Env):
                                                                     "content": "line 1\nline 2"})))  # fmt: skip
     report = run_request("make a.md", env.ex, fake2)
     assert [o.status for o in report.outcomes] == ["declined"]  # content may have newlines
+
+
+def test_tools_with_cues_need_them_in_the_request(env: Env):
+    fake = FakeProvider(lambda s, u, schema: plan(("set_brightness", {"percent": 100})))
+    report = run_request("turn the volume up", env.ex, fake)
+    assert report.error and "only for requests about" in report.error and report.outcomes == []
+    report = run_request("make the screen brighter, 100%", env.ex, fake)
+    assert [o.status for o in report.outcomes] == ["succeeded"] and env.desktop.brightness == 100
