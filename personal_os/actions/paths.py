@@ -1,8 +1,9 @@
 """Which paths actions may touch (DESIGN.md §6.3).
 
-Allowed: inside the watched folders, the notes and screenshots folders, or actions.allowed_paths,
-after resolving links. Never: secret paths (the privacy filter's globs and folder names), the
-data folder itself (database, logs, spool), or anything that doesn't resolve inside a root.
+Allowed: inside the watched folders (unless actions.act_in_watched_roots is off), the notes and
+screenshots folders, or actions.allowed_paths, after resolving links. Never: secret paths (the
+privacy filter's globs and folder names), the data folder itself (database, logs, spool), or
+anything that doesn't resolve inside a root.
 """
 
 from __future__ import annotations
@@ -22,7 +23,8 @@ class PathPolicy:
         self.notes_dir = data / "notes"
         self.screenshots_dir = data / "screenshots"
         self.data_dir = data
-        roots = [*config.watched_roots, *config.actions.allowed_paths]
+        watched = config.watched_roots if config.actions.act_in_watched_roots else []
+        roots = [*watched, *config.actions.allowed_paths]
         self.roots = [_resolve(Path(os.path.expandvars(str(r))).expanduser()) for r in roots]
         self.roots += [self.notes_dir, self.screenshots_dir]
 

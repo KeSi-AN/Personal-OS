@@ -26,6 +26,14 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def no_real_app_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests never ask Windows which apps are installed; a test sets its own list."""
+    from personal_os.actions import apps
+
+    monkeypatch.setattr(apps, "installed", lambda *_a, **_k: [])
+
+
 @pytest.fixture
 def config(home: Path) -> Config:
     from personal_os.config.loader import load_config

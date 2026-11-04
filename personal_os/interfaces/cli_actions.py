@@ -89,7 +89,7 @@ def do_cmd(
     if report.error:
         typer.echo(f"Stopped: {report.error}")
         raise typer.Exit(1)
-    if not report.outcomes:
+    if not report.outcomes and not report.reply:
         typer.echo("Nothing to do.")
 
 

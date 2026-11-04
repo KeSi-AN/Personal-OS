@@ -156,6 +156,8 @@ class CommandSpec(_Section):
 class ActionsConfig(_Section):
     auto_allow_tiers: list[int] = [0, 1]
     allowed_paths: list[Path] = []
+    # When false, actions touch only allowed_paths: watched folders are captured, not acted on.
+    act_in_watched_roots: bool = True
     confirm_tools: list[str] = []
     rate_per_minute: int = Field(30, ge=1)
     tier2_rate_per_minute: int = Field(10, ge=1)

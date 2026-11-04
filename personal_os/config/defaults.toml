@@ -128,6 +128,7 @@ port = 47822
 auto_allow_tiers = [0, 1]  # only for requests you make directly; see DESIGN.md section 6.3
 # Folders actions may touch besides watched_roots and the notes/screenshots folders.
 allowed_paths = []
+act_in_watched_roots = true  # false: actions only in allowed_paths (watched folders are still captured)
 # Tools that always ask, even when their tier would run without asking.
 confirm_tools = []
 rate_per_minute = 30

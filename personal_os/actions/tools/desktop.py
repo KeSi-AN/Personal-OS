@@ -6,11 +6,13 @@ import os
 import re
 import shutil
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from pydantic import Field
 
+from personal_os.actions import apps as apps_mod
+from personal_os.actions.apps import AmbiguousApp, InstalledApp, find_installed
 from personal_os.actions.base import ActionError, Args, Result, Tier, Tool, ToolContext
 from personal_os.actions.desktop import MEDIA_KEYS, WINDOW_ACTIONS
 from personal_os.actions.tools.common import sha256
@@ -103,6 +105,24 @@ def resolve_app(name: str, apps: dict[str, list[str]]) -> str | None:
     return by_norm.get(_norm(alias)) if alias else None
 
 
+def installed_app(name: str, config: Any, *, fuzzy: bool = True) -> InstalledApp | None:
+    """An app installed on this PC (Start menu) that `name` means; ActionError if unclear."""
+    try:
+        return find_installed(name, apps_mod.installed(config.runtime_dir), fuzzy=fuzzy)
+    except AmbiguousApp as exc:
+        raise ActionError(str(exc)) from None
+
+
+def known_app(name: str, config: Any, *, fuzzy: bool = True) -> str | None:
+    """What to pass as open_app's `app` for `name`: a key of your list, or the name of an
+    installed app. None if it's neither. ActionError if it could be several apps."""
+    key = resolve_app(name, config.actions.apps)
+    if key is not None:
+        return key
+    found = installed_app(name, config, fuzzy=fuzzy)
+    return found.name if found is not None else None
+
+
 def _program_exists(program: str) -> bool:
     """A full path must exist; a bare name ("wt.exe") must be on PATH."""
     if os.path.dirname(program):
@@ -117,31 +137,38 @@ class AppArgs(Args):
 
 class OpenApp(Tool):
     name = "open_app"
-    summary = "start an app from your list, optionally with a file or folder"
+    summary = "start any app installed on this PC by name, optionally with a file or folder"
     tier = Tier.LOW
     reversible = True
     args_model = AppArgs
 
     def _argv(self, args: AppArgs, ctx: ToolContext) -> list[str]:
         apps = ctx.config.actions.apps
-        key = resolve_app(args.app, apps)
-        if key is None:
-            raise ActionError(
-                f"'{args.app}' isn't in your app list ({', '.join(apps)}). Add it with: "
-                f"personal-os config set actions.apps.{_norm(args.app) or 'name'} "
-                "'[\"C:/path/to/app.exe\"]'"
-            )
-        spec = apps[key]
-        program = os.path.expandvars(spec[0])
-        if not _program_exists(program):
-            raise ActionError(
-                f"{key} isn't installed at {program}. Set where it is with: personal-os "
-                f"config set actions.apps.{key} '[\"C:/path/to/app.exe\"]'"
-            )
-        argv = [program, *spec[1:]]
+        target = None
         if args.target:
-            argv.append(str(ctx.paths.check(ctx.paths.locate(args.target), must_exist=True)))
-        return argv
+            target = str(ctx.paths.check(ctx.paths.locate(args.target), must_exist=True))
+        key = resolve_app(args.app, apps)
+        if key is not None:
+            program = os.path.expandvars(apps[key][0])
+            if _program_exists(program):
+                return [program, *apps[key][1:], *([target] if target else [])]
+        # Not in your list (or not where the list says): any app the Start menu has.
+        found = installed_app(args.app, ctx.config)
+        if found is None:
+            if key is not None:
+                raise ActionError(
+                    f"{key} isn't installed at {program}. Set where it is with: personal-os "
+                    f"config set actions.apps.{key} '[\"C:/path/to/app.exe\"]'"
+                )
+            raise ActionError(
+                f"'{args.app}' isn't an app installed on this PC (it's not in the Start menu). "
+                f"If it is installed, add it with: personal-os config set "
+                f"actions.apps.{_norm(args.app) or 'name'} '[\"C:/path/to/app.exe\"]'"
+            )
+        try:
+            return found.argv(target)
+        except LookupError as exc:
+            raise ActionError(str(exc)) from None
 
     def preview(self, args: AppArgs, ctx: ToolContext) -> str:
         return "start " + " ".join(f'"{a}"' if " " in a else a for a in self._argv(args, ctx))

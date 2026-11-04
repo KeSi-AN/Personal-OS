@@ -19,11 +19,14 @@ from pydantic import BaseModel, Field, ValidationError, create_model
 from personal_os.actions import killswitch
 from personal_os.actions.base import ActionError, Origin, Registry, Tier
 from personal_os.actions.executor import Executor, Outcome
+from personal_os.actions.quick import plan_open
 from personal_os.actions.tools.desktop import resolve_app
 from personal_os.context.evidence import clean
+from personal_os.core.logging import get_logger
 from personal_os.llm.provider import LLMError, LLMProvider
 from personal_os.projects.registry import NONE_PROJECT, load_projects
 
+_log = get_logger("actions.planner")
 MAX_CALLS = 4
 PATH_ARGS = ("path", "source", "destination", "target", "repo", "cwd")
 _CONTROL = re.compile(r"[\x00-\x1f]")  # tabs, newlines... in an argument
@@ -50,7 +53,7 @@ Tools (name(arguments): what it does [tier]):
 {tools}
 
 Projects (id: folder): {projects}
-Apps for open_app: {apps}
+Apps for open_app: {apps}, or any other app installed on this PC, by its name
 Named commands for run_command: {commands}
 Notes are saved in: {notes}"""
 
@@ -139,9 +142,47 @@ def run_request(
     dry_run: bool = False,
     max_rounds: int = 2,
 ) -> PlanReport:
+    report = PlanReport(reply="")
+    if killswitch.engaged(executor.runtime_dir):
+        report.error = "kill switch is on"
+        return report
+    quick = plan_open(request, executor.paths, executor.conn)
+    if quick is not None and not quick.fallback:  # "open X [in Y]": by rules, not the model
+        report.reply = quick.message
+        for tool, args in quick.calls:
+            report.outcomes.append(
+                executor.request(
+                    tool,
+                    args,
+                    origin=Origin.PLANNED,
+                    tainted=False,
+                    request_text=request,
+                    dry_run=dry_run,
+                )
+            )
+        return report
+    report = _with_model(request, executor, provider, dry_run=dry_run, max_rounds=max_rounds)
+    killed = bool(report.error and "kill switch" in report.error)
+    failed = report.error or all(
+        o.status in ("failed", "blocked", "invalid") for o in report.outcomes
+    )
+    if quick is not None and not killed and failed:
+        # Nothing by that name, and the model couldn't do it either: say what was looked for.
+        return PlanReport(reply=quick.message)
+    return report
+
+
+def _with_model(
+    request: str,
+    executor: Executor,
+    provider: LLMProvider,
+    *,
+    dry_run: bool,
+    max_rounds: int,
+) -> PlanReport:
+    report = PlanReport(reply="")
     schema = plan_schema(executor.registry)
     system = system_prompt(executor)
-    report = PlanReport(reply="")
     read_texts: list[str] = []
     user = f"Request: {request}"
 
@@ -183,10 +224,20 @@ def run_request(
             break
         try:
             plan: Any = provider.chat_json(
-                system, user, schema, validate=check, temperature=0, max_tokens=400
+                system, user, schema, validate=check, temperature=0, max_tokens=800
             )
         except LLMError as exc:
-            report.error = f"the planner failed: {exc}"
+            # The raw validation text helps no one at the prompt: it goes to the log.
+            raw = str(exc)
+            _log.warning("planner output unusable", extra={"fields": {"error": raw[:300]}})
+            reason = raw.rsplit("after a retry: ", 1)[-1]
+            noise = ("Invalid JSON", "EOF while", "Input should", "Field required", "validation")
+            why = "" if any(n in reason for n in noise) else f" ({reason[:160]})"
+            report.error = (
+                f"the planner failed: the local model's plan wasn't usable{why}. Try it more "
+                "simply, e.g. 'open <name>', 'open <file> in <app>' or 'remind me in 10 minutes "
+                "to ...'"
+            )
             break
         report.rounds = round_no
         report.reply = report.reply or clean(plan.reply, 300)

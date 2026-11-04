@@ -632,7 +632,7 @@ def test_a_mangled_windows_path_is_sent_back_to_the_model(env: Env):
         plan(("open_path", {"path": str(env.work)})),
     ])  # fmt: skip
     fake = FakeProvider(lambda s, u, schema: next(answers))
-    report = run_request("open my work folder", env.ex, fake)
+    report = run_request("bring up my work folder", env.ex, fake)  # not "open ...": the model plans
     assert (
         report.error and "forward slashes" in report.error
     )  # the fake can't retry; a real one does
