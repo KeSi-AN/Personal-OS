@@ -137,13 +137,21 @@ undo_keep_days = 7         # originals kept so edit_file can be undone
 plugins_enabled = false    # load your own tools from plugins/ in the data folder (runs their code)
 
 # Apps `open_app` can start (name -> program and fixed arguments). %VARS% are expanded.
+# Only these can be started, so a plan can never run an arbitrary program. Add your own with
+# personal-os config set actions.apps.NAME '["C:/path/to/app.exe"]'. Names are matched
+# loosely ("File Explorer" = explorer, "calc" = calculator, "code" = vscode).
 [actions.apps]
 vscode = ['%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe']
 terminal = ["wt.exe"]
 explorer = ["explorer.exe"]
 notepad = ["notepad.exe"]
+calculator = ["calc.exe"]
+paint = ["mspaint.exe"]
+snipping_tool = ["SnippingTool.exe"]
+control_panel = ["control.exe"]
 brave = ['%PROGRAMFILES%\BraveSoftware\Brave-Browser\Application\brave.exe']
 chrome = ['%PROGRAMFILES%\Google\Chrome\Application\chrome.exe']
+edge = ['%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe']
 
 # Named commands `run_command` can run (no shell). Example:
 # [actions.commands.tests]

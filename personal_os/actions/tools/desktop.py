@@ -68,6 +68,41 @@ class OpenUrl(Tool):
         return Result(f"opened {args.url}")
 
 
+# Other ways people name the apps in the default list (compared without spaces, - or _).
+APP_ALIASES = {
+    "fileexplorer": "explorer",
+    "windowsexplorer": "explorer",
+    "files": "explorer",
+    "calc": "calculator",
+    "code": "vscode",
+    "visualstudiocode": "vscode",
+    "windowsterminal": "terminal",
+    "mspaint": "paint",
+    "snip": "snipping_tool",
+    "snippingtool": "snipping_tool",
+    "controlpanel": "control_panel",
+    "control": "control_panel",
+    "googlechrome": "chrome",
+    "bravebrowser": "brave",
+    "microsoftedge": "edge",
+    "msedge": "edge",
+}
+
+
+def _norm(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", name.lower().removesuffix(".exe"))
+
+
+def resolve_app(name: str, apps: dict[str, list[str]]) -> str | None:
+    """The key in `apps` that `name` means ("File Explorer" -> "explorer"), or None."""
+    by_norm = {_norm(k): k for k in apps}
+    wanted = _norm(name)
+    if wanted in by_norm:
+        return by_norm[wanted]
+    alias = APP_ALIASES.get(wanted)
+    return by_norm.get(_norm(alias)) if alias else None
+
+
 def _program_exists(program: str) -> bool:
     """A full path must exist; a bare name ("wt.exe") must be on PATH."""
     if os.path.dirname(program):
@@ -88,15 +123,20 @@ class OpenApp(Tool):
     args_model = AppArgs
 
     def _argv(self, args: AppArgs, ctx: ToolContext) -> list[str]:
-        apps = {k.lower(): v for k, v in ctx.config.actions.apps.items()}
-        spec = apps.get(args.app.lower())
-        if not spec:
-            raise ActionError(f"'{args.app}' isn't in your app list ({', '.join(apps)})")
+        apps = ctx.config.actions.apps
+        key = resolve_app(args.app, apps)
+        if key is None:
+            raise ActionError(
+                f"'{args.app}' isn't in your app list ({', '.join(apps)}). Add it with: "
+                f"personal-os config set actions.apps.{_norm(args.app) or 'name'} "
+                "'[\"C:/path/to/app.exe\"]'"
+            )
+        spec = apps[key]
         program = os.path.expandvars(spec[0])
         if not _program_exists(program):
             raise ActionError(
-                f"{args.app} isn't installed at {program}. Set where it is with: personal-os "
-                f"config set actions.apps.{args.app.lower()} '[\"C:/path/to/app.exe\"]'"
+                f"{key} isn't installed at {program}. Set where it is with: personal-os "
+                f"config set actions.apps.{key} '[\"C:/path/to/app.exe\"]'"
             )
         argv = [program, *spec[1:]]
         if args.target:

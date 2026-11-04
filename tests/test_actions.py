@@ -22,6 +22,7 @@ from personal_os.actions.paths import PathPolicy
 from personal_os.actions.planner import plan_schema, run_request, system_prompt
 from personal_os.actions.policy import decide
 from personal_os.actions.tools import build_registry
+from personal_os.actions.tools.desktop import resolve_app
 from personal_os.config.schema import CommandSpec, Config
 from personal_os.core.clock import SimClock
 from personal_os.core.events import Event, PageExtract, PageVisit
@@ -662,3 +663,29 @@ def test_open_in_an_app_is_one_step_even_when_the_model_splits_it(env: Env):
     alone = plan(("open_path", {"path": str(folder)}))
     report = run_request("open rag portfolio", env.ex, FakeProvider(lambda s, u, schema: alone))
     assert env.desktop.calls[-1] == ("open_path", str(folder))  # no app named: default app
+
+
+def test_apps_are_matched_by_the_names_people_use():
+    apps = {"explorer": ["explorer.exe"], "calculator": ["calc.exe"], "vscode": ["code.exe"],
+            "snipping_tool": ["SnippingTool.exe"]}  # fmt: skip
+    for said, key in [("File Explorer", "explorer"), ("fileexplorer", "explorer"),
+                      ("Calc", "calculator"), ("calculator.exe", "calculator"),
+                      ("Visual Studio Code", "vscode"), ("snipping tool", "snipping_tool")]:  # fmt: skip
+        assert resolve_app(said, apps) == key, said
+    assert resolve_app("photoshop", apps) is None
+
+
+def test_an_app_name_planned_as_a_path_starts_the_app(env: Env, tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    apps = {"notepad": ["notepad.exe"], "explorer": ["explorer.exe"]}
+    env.ex.config = env.config.model_copy(
+        update={"actions": env.config.actions.model_copy(update={"apps": apps})}
+    )
+    as_path = plan(("open_path", {"path": "file explorer"}))
+    report = run_request("open fileexplorer", env.ex, FakeProvider(lambda s, u, schema: as_path))
+    assert [(o.tool, o.status) for o in report.outcomes] == [("open_app", "succeeded")]
+    assert env.desktop.calls == [("launch", ["explorer.exe"])]
+    (env.work / "notepad").mkdir()  # a real folder with that name wins
+    folder = plan(("open_path", {"path": "notepad"}))
+    run_request("open notepad folder", env.ex, FakeProvider(lambda s, u, schema: folder))
+    assert env.desktop.calls[-1] == ("open_path", str((env.work / "notepad").resolve()))
