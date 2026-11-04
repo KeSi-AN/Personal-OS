@@ -161,6 +161,18 @@ class OllamaProvider:
 
     # --- health --------------------------------------------------------------------------------
 
+    def warm(self, keep_alive: str = "15m") -> None:
+        body = {
+            "model": self.chat_model,
+            "keep_alive": keep_alive,
+            "options": self._options(gpu=True, num_ctx=self.cfg.num_ctx, temperature=0),
+        }
+        self._with_gpu_fallback("/api/generate", body)  # no prompt: just loads the model
+
+    def unload(self) -> None:
+        for model in (self.chat_model, self.embed_model):
+            self._request("/api/generate", {"model": model, "keep_alive": 0}, 30)
+
     def health(self) -> Health:
         try:
             tags = self._request("/api/tags", None, 5)

@@ -20,6 +20,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from personal_os.context import memory
 from personal_os.context.evidence import (
     EvidenceLine,
     EvidencePack,
@@ -482,6 +483,17 @@ def _facts_answer(q: ParsedQuestion, g: Gathered, reason: str) -> Answer:
     return Answer(q, "facts", sentences, "medium", g, [reason, *g.notes])
 
 
+def follow_up(q: ParsedQuestion, previous: ParsedQuestion) -> ParsedQuestion:
+    """ "and yesterday?" / "what about portfolio-site?": keep what the new question doesn't say."""
+    if q.project is None and q.project_mention is None:
+        q.project = previous.project
+    if q.start is None and previous.start is not None:
+        q.start, q.end, q.range_label = previous.start, previous.end, previous.range_label
+    if q.intent == "search" and not q.terms and previous.intent != "search":
+        q.intent = previous.intent
+    return q
+
+
 def ask(
     conn: sqlite3.Connection,
     provider: LLMProvider | None,
@@ -490,9 +502,13 @@ def ask(
     *,
     think: bool = False,
     use_model: bool = True,
+    previous: ParsedQuestion | None = None,
 ) -> Answer:
     q = parse_question(question, load_projects(conn), now)
+    if previous is not None:
+        q = follow_up(q, previous)
     g = gather(conn, provider, q, now)
+    g.facts += memory.prompt_lines(conn)
     if not g.pack:
         return Answer(
             q, "no_data", [(f"{NO_DATA} I looked for {g.scope}.", [])], "high", g, g.notes

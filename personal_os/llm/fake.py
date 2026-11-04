@@ -67,6 +67,12 @@ class FakeProvider:
             out.append(normalize(vec))
         return out
 
+    def warm(self, keep_alive: str = "15m") -> None:
+        self.calls.append(("warm", keep_alive))
+
+    def unload(self) -> None:
+        self.calls.append(("unload", ""))
+
     def health(self) -> Health:
         if not self.available:
             return Health(reachable=False, error="fake provider unavailable")

@@ -58,6 +58,14 @@ class LLMProvider(Protocol):
 
     def health(self) -> Health: ...
 
+    def warm(self, keep_alive: str = "15m") -> None:
+        """Load the chat model now and keep it loaded for `keep_alive` (skips the cold start)."""
+        ...
+
+    def unload(self) -> None:
+        """Free the chat model's memory now."""
+        ...
+
 
 def normalize(vec: Sequence[float], dims: int | None = None) -> list[float]:
     v = list(vec[:dims] if dims else vec)
