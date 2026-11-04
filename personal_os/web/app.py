@@ -345,7 +345,7 @@ def create_app(state: WebState, *, lan: bool = False) -> FastAPI:
             state.config,
             conn,
             state.clock,
-            build_registry(),
+            build_registry(state.config),
             state.desktop(),
             confirm,
             provider=state.provider(),
@@ -484,6 +484,11 @@ def create_app(state: WebState, *, lan: bool = False) -> FastAPI:
         "llm.enabled",
         "llm.only_on_ac_power",
         "api.lan.enabled",
+        "voice.enabled",
+        "voice.wake_word_enabled",
+        "voice.tts",
+        "briefings.enabled",
+        "briefings.speak",
     }
 
     @app.post("/api/settings")
@@ -495,6 +500,19 @@ def create_app(state: WebState, *, lan: bool = False) -> FastAPI:
         except (KeyError, ValueError) as exc:
             raise HTTPException(400, str(exc)) from None
         return {"message": "Saved. Capture settings apply after a restart of capture."}
+
+    @app.post("/api/briefing")
+    def api_briefing() -> dict[str, Any]:
+        from personal_os.context import briefing
+        from personal_os.voice.main import google_client
+
+        with state.db() as conn:
+            local = state.clock.now().astimezone()
+            kind: Any = (
+                "evening" if f"{local:%H:%M}" >= state.config.briefings.evening_after else "morning"
+            )
+            b = briefing.build(conn, state.clock, kind, google=google_client(state.config))
+        return {"title": b.title, "lines": b.lines, "notes": b.notes}
 
     @app.post("/api/setup/reviewed")
     def api_setup_reviewed() -> dict[str, str]:

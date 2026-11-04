@@ -148,9 +148,27 @@ def today(state: WebState, conn: sqlite3.Connection, *, phone: bool = False) -> 
             "off anything you don't want: <a href='/privacy'>Privacy → Sources</a>. "
             "<button onclick=\"act('/api/setup/reviewed')\">I've reviewed my sources</button>"
         )
+    last = repo.get_setting(conn, "briefings.last") or {}
+    brief_body = (
+        f"<b>{e(last.get('title', ''))}</b> <span class='muted small'>{e(last.get('at', '')[:16].replace('T', ' '))}</span>"
+        + "".join(f"<div>{e(line)}</div>" for line in last.get("lines", []))
+        if last and not phone
+        else "<span class='muted small'>No briefing yet today.</span>"
+    )
+    briefing_card = (
+        ""
+        if phone
+        else card(
+            f"<div id='brief'>{brief_body}</div><div class='row'><span class='grow'></span>"
+            "<button onclick=\"api('/api/briefing').then(r=>{document.getElementById('brief').innerHTML="
+            "'<b>'+esc(r.title)+'</b>'+r.lines.map(l=>'<div>'+esc(l)+'</div>').join('')+r.notes.map(n=>'<div class='muted small'>'+esc(n)+'</div>').join('')})\">"
+            "Brief me now</button></div>"
+        )
+    )
     body = (
         welcome
         + controls
+        + briefing_card
         + ask_box
         + f"<h2>Today</h2><p class='muted small'>{len(sessions)} sessions, {dur(total)} active{extra}</p>"
     )
@@ -615,6 +633,8 @@ def privacy_page(state: WebState, conn: sqlite3.Connection) -> str:
         + lists
         + "<h2>What's stored</h2>"
         + stored
+        + "<h2>Voice, briefings and Google</h2>"
+        + _assistant_section(state)
         + "<h2>Phone</h2>"
         + phone
     )
@@ -622,3 +642,78 @@ def privacy_page(state: WebState, conn: sqlite3.Connection) -> str:
     if not info_daemon.running:
         body = card("<span class='warn'>Capture isn't running.</span>") + body
     return page("Privacy", body, path="/privacy", status=_status(state, conn))
+
+
+def _assistant_section(state: WebState) -> str:
+    """Voice, wake word, voice output, daily briefings and Google: what each does, on/off."""
+    import json as _json
+
+    from personal_os.integrations import google
+    from personal_os.voice.wake import wake_models
+
+    cfg = state.config
+    v, br = cfg.voice, cfg.briefings
+
+    def toggle(key: str, on: bool, label: str, text: str, extra: str = "") -> str:
+        return (
+            f"<div class='row card'><div class='grow'><b>{label}</b> "
+            f"<span class='{'ok' if on else 'muted'} small'>{'on' if on else 'off'}</span>"
+            f"<div class='small muted'>{text}</div>{extra}</div>"
+            f"<button onclick=\"act('/api/settings',{{key:'{key}',value:{'false' if on else 'true'}}})\">"
+            f"{'Turn off' if on else 'Turn on'}</button></div>"
+        )
+
+    status_file = cfg.runtime_dir / "voice.json"
+    running = _json.loads(status_file.read_text("utf-8")) if status_file.exists() else None
+    voice_extra = (
+        f"<div class='small'>voice process: {e(running['state'])}</div>" if running else ""
+    )
+    has_model = bool(wake_models(cfg.data_dir))
+    wake_text = (
+        "Listens for “hey Donna”, locally; nothing is recorded or transcribed until it hears it."
+        + (
+            ""
+            if has_model
+            else " <b>No wake-word model yet</b>: train one (docs/VOICE.md) and put the .onnx in voice/wakewords/."
+        )
+    )
+    voices = "".join(
+        f"<button {'class=primary' if v.tts == name else ''} onclick=\"act('/api/settings',{{key:'voice.tts',value:'{name}'}})\">{label}</button> "
+        for name, label in (
+            ("windows", "Windows voice (offline)"),
+            ("piper", "Piper (local)"),
+            ("speechify", "Speechify (cloud)"),
+        )
+    )
+    connected = google.connected(cfg.data_dir)
+    return (
+        toggle(
+            "voice.enabled",
+            v.enabled,
+            "Voice",
+            "Press Ctrl+Alt+Shift+V and speak. Speech is recognised on this laptop (faster-whisper); only the command text is kept, in the action log.",
+            voice_extra,
+        )
+        + toggle("voice.wake_word_enabled", v.wake_word_enabled, "Wake word", wake_text)
+        + card(
+            "<b>Voice for replies</b><div class='small muted'>Speechify sends the sentence being spoken to Speechify (needs your key: <code>personal-os voice speechify-key</code>); the others stay on this laptop.</div><div class='row'>"
+            + voices
+            + "</div>"
+        )
+        + toggle(
+            "briefings.enabled",
+            br.enabled,
+            "Daily briefings",
+            f"A morning briefing the first time you're active after {e(br.morning_after)}, and an end-of-day summary after {e(br.evening_after)}. Built from your summaries, commits, reminders and (if connected) Google.",
+        )
+        + card(
+            f"<b>Google Calendar and Gmail</b> <span class='{'ok' if connected else 'muted'} small'>{'connected' if connected else 'not connected'}</span>"
+            "<div class='small muted'>Read-only: calendar events, and the sender and subject of unread mail (never bodies). Fetched when needed, not stored. "
+            + (
+                "Disconnect with <code>personal-os google disconnect</code>."
+                if connected
+                else "Set up with docs/GOOGLE.md, then <code>personal-os google connect CLIENT_SECRET.json</code>."
+            )
+            + "</div>"
+        )
+    )

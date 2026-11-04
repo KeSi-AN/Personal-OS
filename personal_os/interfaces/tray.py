@@ -42,6 +42,9 @@ class TrayActions:
     toggle_kill: Callable[[], None]
     restart: Callable[[], None]
     stop: Callable[[], None]
+    voice_state: Callable[[], tuple[bool, bool]] = lambda: (False, False)  # voice on, wake on
+    toggle_voice: Callable[[], None] = lambda: None
+    toggle_wake: Callable[[], None] = lambda: None
 
 
 class Tray:
@@ -69,6 +72,23 @@ class Tray:
                         "Resume actions" if self._is("killed") else "Kill switch (actions off)"
                     ),
                     self._wrap(actions.toggle_kill),
+                ),
+                pystray.Menu.SEPARATOR,
+                item(
+                    lambda _i: (
+                        "Turn voice off"
+                        if actions.voice_state()[0]
+                        else "Turn voice on (Ctrl+Alt+Shift+V)"
+                    ),
+                    self._wrap(actions.toggle_voice),
+                ),
+                item(
+                    lambda _i: (
+                        "Wake word “hey Donna”: on"
+                        if actions.voice_state()[1]
+                        else "Wake word “hey Donna”: off"
+                    ),
+                    self._wrap(actions.toggle_wake),
                 ),
                 pystray.Menu.SEPARATOR,
                 item("Restart capture", self._wrap(actions.restart)),
@@ -127,6 +147,21 @@ def open_url(url: str) -> None:
     import os
 
     os.startfile(url)  # type: ignore[attr-defined,unused-ignore]
+
+
+def spawn_module(module: str) -> subprocess.Popen[bytes]:
+    """Start one of our modules windowless (overlay, voice)."""
+    from personal_os.core import spawn
+
+    return subprocess.Popen(
+        spawn.module_command(module),
+        env=spawn.child_env(),
+        creationflags=spawn.creation_flags(detached=True),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+    )
 
 
 def spawn_overlay() -> None:

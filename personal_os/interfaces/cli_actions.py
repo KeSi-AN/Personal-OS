@@ -45,7 +45,7 @@ def _executor(cfg: Config, db: Path | None, *, with_model: bool = False) -> Exec
 
         provider = make_provider(cfg.llm)
     return Executor(
-        cfg, conn, SystemClock(), build_registry(), default_desktop(), keyboard_confirm,
+        cfg, conn, SystemClock(), build_registry(cfg), default_desktop(), keyboard_confirm,
         provider=provider,
     )  # fmt: skip
 
@@ -100,7 +100,7 @@ def actions_list() -> None:
     unlocked = killswitch.unlocks(cfg.runtime_dir, SystemClock().now())
     tiers = {0: "read-only, runs", 1: "low-risk, runs when you ask", 2: "asks every time",
              3: "blocked"}  # fmt: skip
-    for tool in build_registry().all():
+    for tool in build_registry(cfg).all():
         if getattr(tool, "internal", False):
             continue
         state = tiers[int(tool.tier)]

@@ -31,7 +31,7 @@ from personal_os.core.events import Event, SystemEvent
 from personal_os.core.logging import get_logger, setup_logging
 from personal_os.core.observer import BaseObserver, ObserverContext, Supervisor
 from personal_os.core.wiring import build_pipeline
-from personal_os.interfaces.tray import Tray, TrayActions, open_url, spawn_overlay
+from personal_os.interfaces.tray import Tray, TrayActions, open_url, spawn_module, spawn_overlay
 from personal_os.llm import LLMProvider, LLMUnavailable, make_provider
 from personal_os.observers.browser import BrowserObserver
 from personal_os.observers.fs import FsObserver
@@ -127,6 +127,8 @@ class Daemon:
         self.restart_requested = False
         self.interfaces = use_platform  # web dashboard, tray (never in tests without a desktop)
         self.tray: Tray | None = None
+        self._voice_proc: Any = None
+        self._voice_retry_at = 0.0
         self._loop: asyncio.AbstractEventLoop | None = None
 
     # --- lifecycle -------------------------------------------------------------------------
@@ -173,6 +175,8 @@ class Daemon:
                     await asyncio.wait_for(task, 10)
             if self.tray is not None:
                 self.tray.stop()
+            if self._voice_proc is not None and self._voice_proc.poll() is None:
+                self._voice_proc.terminate()
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(llm_task, 60)
             await self.supervisor.stop()
@@ -291,6 +295,9 @@ class Daemon:
             if mono - last_reminders >= 30:
                 last_reminders = mono
                 self._fire_reminders()
+                if self.interfaces:
+                    self._sync_voice()
+                    await asyncio.to_thread(self._briefings)
             if mono - last_stale >= 60:
                 last_stale = mono
                 maintenance.close_stale(
@@ -396,6 +403,9 @@ class Daemon:
                     toggle_kill=self._toggle_kill,
                     restart=self._threadsafe(self.request_restart),
                     stop=self._threadsafe(self._stop_from_tray),
+                    voice_state=self._voice_state,
+                    toggle_voice=lambda: self._toggle_setting("voice.enabled"),
+                    toggle_wake=lambda: self._toggle_setting("voice.wake_word_enabled"),
                 ))  # fmt: skip
                 self.tray.start()
             except Exception as exc:
@@ -439,6 +449,78 @@ class Daemon:
             spawn_overlay()
         except OSError:
             _log.warning("overlay didn't start")
+
+    # --- voice and briefings (phase 7) --------------------------------------------------------
+
+    def _fresh_config(self) -> Config:
+        try:
+            return load_config()
+        except Exception:
+            return self.config
+
+    def _voice_state(self) -> tuple[bool, bool]:
+        cfg = self._fresh_config()
+        return cfg.voice.enabled, cfg.voice.wake_word_enabled
+
+    def _toggle_setting(self, key: str) -> None:
+        from personal_os.config.loader import set_value
+
+        section, name = key.split(".")
+        current = getattr(getattr(self._fresh_config(), section), name)
+        set_value(key, not current)
+
+    def _sync_voice(self) -> None:
+        """Keep the voice process running while voice is on (it exits by itself when off)."""
+        if sys.platform != "win32" or not self._fresh_config().voice.enabled:
+            return
+        proc = self._voice_proc
+        if proc is not None and proc.poll() is None:
+            return
+        if self.clock.monotonic() < self._voice_retry_at:
+            return
+        try:
+            self._voice_proc = spawn_module("personal_os.voice.main")
+            self._voice_retry_at = self.clock.monotonic() + 60  # at most one restart a minute
+        except OSError:
+            _log.warning("voice didn't start")
+
+    def _briefings(self) -> None:
+        """Once a day each: a morning briefing and an end-of-day summary, while you're here."""
+        from personal_os.context import briefing
+
+        cfg = self._fresh_config()
+        if not cfg.briefings.enabled or self.window_probe is None:
+            return
+        if self.window_probe.idle_seconds() > 120:
+            return  # you're away: wait until you're back
+        conn = connect(self.config.db_path)
+        try:
+            kind = briefing.due_kind(
+                conn, self.clock, cfg.briefings.morning_after, cfg.briefings.evening_after
+            )
+            if kind is None:
+                return
+            from personal_os.voice.main import google_client
+
+            b = briefing.build(conn, self.clock, kind, google=google_client(cfg))
+            briefing.mark_delivered(conn, self.clock, kind)
+            last = {
+                "kind": kind,
+                "title": b.title,
+                "lines": b.lines,
+                "at": self.clock.now().isoformat(),
+            }
+            repo.set_setting(conn, "briefings.last", last, self.clock)
+        finally:
+            conn.close()
+        _log.info("briefing delivered", extra={"fields": {"kind": kind}})
+        if self.tray is not None:
+            self.tray.notify(" ".join(b.lines)[:240], b.title)
+        if cfg.voice.enabled and cfg.briefings.speak:
+            from personal_os.voice.tts import Speaker, TTSError
+
+            with contextlib.suppress(TTSError):
+                Speaker(cfg.voice, cfg.data_dir).say(f"{b.title}. " + " ".join(b.lines))
 
     def _fire_reminders(self) -> None:
         from personal_os.actions import reminders

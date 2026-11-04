@@ -160,7 +160,7 @@ class Overlay:
                 self.cfg,
                 conn,
                 self.clock,
-                build_registry(),
+                build_registry(self.cfg),
                 default_desktop(),
                 self._confirm,
                 provider=provider,
