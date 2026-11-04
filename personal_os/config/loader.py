@@ -81,13 +81,18 @@ def set_value(dotted_key: str, value: Any, home: Path | None = None) -> Config:
         load_config(home)
     doc = tomlkit.parse(path.read_text("utf-8"))
     *parents, leaf = dotted_key.split(".")
+    # The key must exist in the defaults; your file may predate it (settings added in a newer
+    # version), in which case its section and key are added here.
+    known: Any = tomllib.loads(defaults_text())
+    for part in [*parents, leaf]:
+        if not isinstance(known, dict) or part not in known:
+            raise KeyError(f"unknown config key: {dotted_key}")
+        known = known[part]
     table: Any = doc
     for part in parents:
         if part not in table:
-            raise KeyError(f"unknown config section: {part}")
+            table[part] = tomlkit.table()
         table = table[part]
-    if leaf not in table:
-        raise KeyError(f"unknown config key: {dotted_key}")
     table[leaf] = value
     text = tomlkit.dumps(doc)
     config = _build(tomllib.loads(text), home or default_home())

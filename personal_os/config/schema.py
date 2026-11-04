@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -106,6 +107,24 @@ class LLMConfig(_Section):
         return v.rstrip("/")
 
 
+class VoiceConfig(_Section):
+    enabled: bool = False
+    stt_model: str = "small.en"
+    wake_word_enabled: bool = False  # needs a trained model in voice/wakewords/ (docs/VOICE.md)
+    wake_threshold: float = Field(0.5, gt=0, lt=1)
+    tts: Literal["windows", "piper", "speechify"] = "windows"
+    speechify_voice: str = "geffen_32"
+    speechify_model: str = "simba-3.5"
+    max_spoken_chars: int = Field(600, ge=100, le=2000)
+
+
+class BriefingsConfig(_Section):
+    enabled: bool = False
+    morning_after: str = Field("09:00", pattern=r"^\d{2}:\d{2}$")
+    evening_after: str = Field("18:30", pattern=r"^\d{2}:\d{2}$")
+    speak: bool = True
+
+
 class LanConfig(_Section):
     enabled: bool = False
     port: int = Field(47822, ge=1024, le=65535)
@@ -139,6 +158,7 @@ class ActionsConfig(_Section):
     tier2_rate_per_minute: int = Field(10, ge=1)
     command_timeout_s: float = Field(120, gt=0)
     undo_keep_days: int = Field(7, ge=1)
+    plugins_enabled: bool = False  # load tools from plugins/ in the data folder
     apps: dict[str, list[str]] = {}
     commands: dict[str, CommandSpec] = {}
 
@@ -159,6 +179,8 @@ class Config(_Section):
     llm: LLMConfig = LLMConfig()
     api: ApiConfig = ApiConfig()
     actions: ActionsConfig = ActionsConfig()
+    voice: VoiceConfig = VoiceConfig()
+    briefings: BriefingsConfig = BriefingsConfig()
 
     @property
     def db_path(self) -> Path:

@@ -3,7 +3,7 @@ name = "personal-os"
 version = "0.0.1"
 description = "Local-first personal context and assistant layer"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "pydantic>=2.8",
     "typer>=0.12",
@@ -17,6 +17,12 @@ dependencies = [
     "pystray>=0.19",
     "pillow>=10",
     "cryptography>=43",
+    "faster-whisper>=1.1",
+    "sounddevice>=0.5",
+    "keyring>=25",
+    "mcp>=1.2",
+    "numpy>=1.26",
+    "openwakeword>=0.6",
 ]
 
 [project.scripts]
@@ -67,6 +73,8 @@ known-first-party = ["personal_os", "tests"]
 # HTML templates read better unwrapped
 "personal_os/web/pages.py" = ["E501"]
 "personal_os/web/html.py" = ["E501"]
+# user-facing CLI messages read better on one line
+"personal_os/interfaces/cli_phase7.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -79,5 +87,9 @@ module = ["tests.*"]
 disallow_untyped_defs = false
 
 [[tool.mypy.overrides]]
-module = ["pystray", "pystray.*"]
+module = ["scipy", "scipy.*", "pystray", "pystray.*", "faster_whisper", "faster_whisper.*", "sounddevice", "openwakeword", "openwakeword.*", "piper", "piper.*"]
 ignore_missing_imports = true
+
+[tool.uv]
+# Windows is the only platform with observers today; openWakeWord has no Linux wheels for 3.12.
+environments = ["sys_platform == 'win32'"]
