@@ -53,7 +53,7 @@ def _executor(cfg: Config, db: Path | None, *, with_model: bool = False) -> Exec
 def _show(out: Outcome, *, show_preview: bool = False) -> None:
     mark = {"succeeded": "done", "dry_run": "would run", "declined": "declined",
             "blocked": "BLOCKED", "failed": "FAILED", "cancelled": "CANCELLED",
-            "invalid": "invalid"}[out.status]  # fmt: skip
+            "invalid": "invalid", "pending": "waiting for approval"}[out.status]  # fmt: skip
     typer.echo(f"[{mark}] {out.tool}: {out.message}  (action {out.action_id[-8:]})")
     if show_preview and out.preview:
         typer.echo("\n".join(f"    {line}" for line in out.preview.splitlines()))

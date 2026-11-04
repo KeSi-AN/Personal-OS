@@ -337,16 +337,20 @@ class WindowsSessionWatcher:
 
     HOTKEY_ID = 0x5053  # "PS"
     KILL_HOTKEY_ID = 0x504B  # "PK"
+    OVERLAY_HOTKEY_ID = 0x504F  # "PO"
 
     def __init__(
         self,
         *,
         hotkey: tuple[int, int] | None = (MOD_CONTROL | MOD_ALT | MOD_SHIFT, 0x50),  # P: pause
         kill_hotkey: tuple[int, int] | None = (MOD_CONTROL | MOD_ALT | MOD_SHIFT, 0x4B),  # K
+        overlay_hotkey: tuple[int, int] | None = (MOD_CONTROL | MOD_ALT | MOD_SHIFT, 0x20),  # Space
     ):
         self._hotkey = hotkey
         self._kill_hotkey = kill_hotkey
         self.kill_hotkey_registered = False
+        self._overlay_hotkey = overlay_hotkey
+        self.overlay_hotkey_registered = False
         self._thread: threading.Thread | None = None
         self._thread_id: int | None = None
         self._ready = threading.Event()
@@ -399,6 +403,9 @@ class WindowsSessionWatcher:
         if msg == WM_HOTKEY and wparam == self.KILL_HOTKEY_ID:
             self._emit("kill_hotkey")
             return 0
+        if msg == WM_HOTKEY and wparam == self.OVERLAY_HOTKEY_ID:
+            self._emit("overlay_hotkey")
+            return 0
         return int(user32.DefWindowProcW(hwnd, msg, wparam, lparam))
 
     def _run(self) -> None:
@@ -435,6 +442,11 @@ class WindowsSessionWatcher:
             self.kill_hotkey_registered = bool(
                 user32.RegisterHotKey(hwnd, self.KILL_HOTKEY_ID, mods | MOD_NOREPEAT, vk)
             )
+        if self._overlay_hotkey:
+            mods, vk = self._overlay_hotkey
+            self.overlay_hotkey_registered = bool(
+                user32.RegisterHotKey(hwnd, self.OVERLAY_HOTKEY_ID, mods | MOD_NOREPEAT, vk)
+            )
         self._ready.set()
         msg = wintypes.MSG()
         try:
@@ -446,6 +458,8 @@ class WindowsSessionWatcher:
                 user32.UnregisterHotKey(hwnd, self.HOTKEY_ID)
             if self.kill_hotkey_registered:
                 user32.UnregisterHotKey(hwnd, self.KILL_HOTKEY_ID)
+            if self.overlay_hotkey_registered:
+                user32.UnregisterHotKey(hwnd, self.OVERLAY_HOTKEY_ID)
             wtsapi32.WTSUnRegisterSessionNotification(hwnd)
             user32.DestroyWindow(hwnd)
             user32.UnregisterClassW(class_name, hinst)

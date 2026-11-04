@@ -7,7 +7,15 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 
 SessionSignal = Literal[
-    "lock", "unlock", "logon", "logoff", "sleep", "wake", "hotkey", "kill_hotkey"
+    "lock",
+    "unlock",
+    "logon",
+    "logoff",
+    "sleep",
+    "wake",
+    "hotkey",
+    "kill_hotkey",
+    "overlay_hotkey",
 ]
 
 

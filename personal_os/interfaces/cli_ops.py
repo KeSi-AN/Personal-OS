@@ -231,6 +231,17 @@ def doctor() -> None:
         reg = "registered" if host.registered else "not registered"
         typer.echo(f"browser    {b:<7} native host {reg}")
     typer.echo(f"autostart  {'enabled' if autostart.is_enabled() else 'disabled'}")
+    keys = h.get("hotkeys") or {}
+    if keys:
+        taken = [k for k, ok in keys.items() if ok is False]
+        typer.echo(
+            "hotkeys    "
+            + ", ".join(f"{k} {'ok' if ok else 'TAKEN by another app'}" for k, ok in keys.items())
+        )
+        if taken:
+            problems.append("hotkey taken by another app: " + ", ".join(taken))
+    if "tray" in h:
+        typer.echo(f"tray       {'shown' if h['tray'] else 'not shown'}")
     line, problem = _ollama(cfg)
     typer.echo(f"ollama     {line}")
     if problem:

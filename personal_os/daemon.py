@@ -31,6 +31,7 @@ from personal_os.core.events import Event, SystemEvent
 from personal_os.core.logging import get_logger, setup_logging
 from personal_os.core.observer import BaseObserver, ObserverContext, Supervisor
 from personal_os.core.wiring import build_pipeline
+from personal_os.interfaces.tray import Tray, TrayActions, open_url, spawn_overlay
 from personal_os.llm import LLMProvider, LLMUnavailable, make_provider
 from personal_os.observers.browser import BrowserObserver
 from personal_os.observers.fs import FsObserver
@@ -48,6 +49,7 @@ from personal_os.storage.db import connect, open_db
 
 VERSION = "1.0.0"
 EXIT_ALREADY_RUNNING = 3
+EXIT_RESTART = 75  # the launcher starts the daemon again at once
 HEALTH_EVERY_S = 10.0
 RESOLVE_EVERY_S = 30.0
 SESSIONS_EVERY_S = 300.0
@@ -122,6 +124,10 @@ class Daemon:
             paused=self.paused.is_set,
         )
         self.llm_status: dict[str, Any] = {"gate": "not checked yet"}
+        self.restart_requested = False
+        self.interfaces = use_platform  # web dashboard, tray (never in tests without a desktop)
+        self.tray: Tray | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     # --- lifecycle -------------------------------------------------------------------------
 
@@ -154,10 +160,19 @@ class Daemon:
             "daemon started", extra={"fields": {"pid": os.getpid(), "recovered_open": recovered}}
         )
         llm_task = asyncio.create_task(self._llm_loop(), name="llm-jobs")
+        self._loop = asyncio.get_running_loop()
+        servers = self._start_interfaces() if self.interfaces else []
         try:
             await self._control_loop()
         finally:
             self.stop_event.set()
+            for server, _task in servers:
+                server.should_exit = True
+            for _server, task in servers:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(task, 10)
+            if self.tray is not None:
+                self.tray.stop()
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(llm_task, 60)
             await self.supervisor.stop()
@@ -173,6 +188,11 @@ class Daemon:
             _log.info("daemon stopped")
 
     def request_stop(self) -> None:
+        self.stop_event.set()
+
+    def request_restart(self) -> None:
+        """Stop now and have the launcher start again (settings that apply at start changed)."""
+        self.restart_requested = True
         self.stop_event.set()
 
     # --- wiring ----------------------------------------------------------------------------
@@ -201,6 +221,7 @@ class Daemon:
                     self.session,
                     on_hotkey=self.toggle_pause,
                     on_kill=self.engage_kill_switch,
+                    on_overlay=self.open_overlay,
                 ),
                 enabled=oc.window.enabled,
             )
@@ -250,6 +271,7 @@ class Daemon:
 
     async def _control_loop(self) -> None:
         last_health = last_retention = last_stale = last_resolve = last_sessions = -1e18
+        last_reminders = -1e18
         while not self.stop_event.is_set():
             if runtime.stop_requested(self.config.runtime_dir):
                 runtime.clear_stop(self.config.runtime_dir)
@@ -266,6 +288,9 @@ class Daemon:
                 if rebuild:
                     last_sessions = mono
                 await asyncio.to_thread(self._project_jobs, rebuild)
+            if mono - last_reminders >= 30:
+                last_reminders = mono
+                self._fire_reminders()
             if mono - last_stale >= 60:
                 last_stale = mono
                 maintenance.close_stale(
@@ -326,6 +351,106 @@ class Daemon:
 
             now_paused = marker.type == "pause"
             winsound.MessageBeep(winsound.MB_OK if now_paused else winsound.MB_ICONASTERISK)
+
+    # --- interfaces (phase 6): dashboard, tray, overlay, reminders -----------------------------
+
+    def _threadsafe(self, fn: Callable[[], None]) -> Callable[[], None]:
+        def call() -> None:
+            if self._loop is not None:
+                self._loop.call_soon_threadsafe(fn)
+
+        return call
+
+    def _start_interfaces(self) -> list[tuple[Any, asyncio.Task[None]]]:
+        from personal_os.web.app import WebState
+        from personal_os.web.server import lan_addresses, lan_server, local_server
+
+        desktop = None
+        if sys.platform == "win32":
+            from personal_os.actions.desktop import WindowsDesktop
+
+            desktop = WindowsDesktop
+        self.web_state = WebState(
+            self.config, self.clock, provider=lambda: self.llm, desktop=desktop,
+            restart=self._threadsafe(self.request_restart), lan_addresses=lan_addresses,
+        )  # fmt: skip
+        servers: list[tuple[Any, asyncio.Task[None]]] = []
+        for make in (local_server, lan_server):
+            try:
+                server = make(self.web_state)
+            except Exception as exc:
+                _log.warning(
+                    "web listener not started", extra={"fields": {"exc_type": type(exc).__name__}}
+                )
+                continue
+            if server is not None:
+                task = asyncio.create_task(self._serve(server), name=f"web-{make.__name__}")
+                servers.append((server, task))
+        if sys.platform == "win32":
+            try:
+                self.tray = Tray(TrayActions(
+                    state=self._tray_state,
+                    toggle_pause=self._threadsafe(self.toggle_pause),
+                    open_dashboard=self.open_dashboard,
+                    open_overlay=self.open_overlay,
+                    toggle_kill=self._toggle_kill,
+                    restart=self._threadsafe(self.request_restart),
+                    stop=self._threadsafe(self._stop_from_tray),
+                ))  # fmt: skip
+                self.tray.start()
+            except Exception as exc:
+                _log.warning("tray not started", extra={"fields": {"exc_type": type(exc).__name__}})
+                self.tray = None
+        return servers
+
+    async def _serve(self, server: Any) -> None:
+        try:
+            await server.serve()
+        except (OSError, SystemExit) as exc:  # e.g. the port is taken
+            _log.warning("web listener stopped", extra={"fields": {"exc_type": type(exc).__name__}})
+
+    def _tray_state(self) -> str:
+        if killswitch.engaged(self.config.runtime_dir):
+            return "killed"
+        return "paused" if self.paused.is_set() else "capturing"
+
+    def _toggle_kill(self) -> None:
+        if killswitch.engaged(self.config.runtime_dir):
+            killswitch.release(self.config.runtime_dir)
+        else:
+            killswitch.engage(self.config.runtime_dir, self.clock.now(), "tray")
+
+    def _stop_from_tray(self) -> None:
+        runtime.request_stop(self.config.runtime_dir)  # the launcher won't restart it
+        self.stop_event.set()
+
+    def open_dashboard(self) -> None:
+        from personal_os.web import auth
+
+        conn = connect(self.config.db_path)
+        try:
+            code = auth.new_login_code(conn, self.clock)
+        finally:
+            conn.close()
+        open_url(f"http://127.0.0.1:{self.config.api.port}/login?code={code}")
+
+    def open_overlay(self) -> None:
+        try:
+            spawn_overlay()
+        except OSError:
+            _log.warning("overlay didn't start")
+
+    def _fire_reminders(self) -> None:
+        from personal_os.actions import reminders
+
+        for r in reminders.take_due(self.control_conn, self.clock):
+            _log.info("reminder fired")
+            if self.tray is not None:
+                self.tray.notify(r.text, "Reminder")
+            elif sys.platform == "win32":
+                import winsound
+
+                winsound.MessageBeep(winsound.MB_ICONASTERISK)
 
     def engage_kill_switch(self) -> None:
         """Global hotkey (Ctrl+Alt+Shift+K): actions go observe-only and running ones stop."""
@@ -467,6 +592,15 @@ class Daemon:
                 "forget_dropped": self.pipeline.forget_dropped,
             },
             "llm": dict(self.llm_status),
+            "hotkeys": {
+                name: getattr(self.session_watcher, attr, None)
+                for name, attr in (
+                    ("pause Ctrl+Alt+Shift+P", "hotkey_registered"),
+                    ("kill Ctrl+Alt+Shift+K", "kill_hotkey_registered"),
+                    ("overlay Ctrl+Alt+Shift+Space", "overlay_hotkey_registered"),
+                )
+            },
+            "tray": self.tray is not None,
             "filter": {
                 "blocked": dict(c.blocked),
                 "errors": {str(k): v for k, v in c.errors.items()},
@@ -515,6 +649,8 @@ def main() -> int:
     daemon = Daemon(config)
     try:
         asyncio.run(daemon.run())
+        if daemon.restart_requested:
+            return EXIT_RESTART
     except runtime.AlreadyRunningError:
         print("Personal OS daemon is already running.", file=sys.stderr)
         return EXIT_ALREADY_RUNNING

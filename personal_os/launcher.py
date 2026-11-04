@@ -15,6 +15,7 @@ from personal_os.core import runtime, spawn
 from personal_os.core.logging import get_logger, setup_logging
 
 EXIT_ALREADY_RUNNING = 3
+EXIT_RESTART = 75  # the daemon asks to be started again (see daemon.request_restart)
 _log = get_logger("launcher")
 
 
@@ -38,6 +39,10 @@ def main() -> int:
                 check=False,
             )
             code = child.returncode
+            if code == EXIT_RESTART:  # asked for (settings changed): start again right away
+                _log.info("daemon restarting on request")
+                backoff = 1.0
+                continue
             if code in (0, EXIT_ALREADY_RUNNING) or runtime.stop_requested(config.runtime_dir):
                 runtime.clear_stop(config.runtime_dir)
                 return 0
