@@ -13,7 +13,7 @@
 | 4 | Local model: summaries, hybrid search, `ask` | Built, awaiting review |
 | 5 | Action layer: tool registry, tiers, confirmation, audit log, kill switch, injection tests | Accepted 2026-11-04 |
 | 6 | Tray, hotkey overlay, web dashboard (reachable from your phone), privacy centre | Built, awaiting review |
-| 7 | Voice, briefings, MCP/plugin API, Google Calendar and Gmail | Planned |
+| 7 | Voice, briefings, MCP/plugin API, Google Calendar and Gmail | Built, awaiting review (Google sign-in and "hey Donna" model wait on you) |
 
 ## Gaps: brief requirements still open (close before the MVP is done)
 
@@ -68,6 +68,13 @@ The safety held (nothing wrong ran), but the experience is poor. Planned:
 - **Plain-language failures.** When a plan can't be made valid, say what's possible ("I can set the volume to a level from 0 to 100, or press volume up/down"), never the validation text. The raw error goes to the log.
 - **Ask when it's ambiguous.** "increase volume to 6": 6%, or 6 steps? A one-line question beats a guess for anything with a number.
 - **Clamp and say so.** If a value is out of range (volume 150), use the limit (100) and tell you.
+
+**3c. Voice polish (from phase 7).**
+
+- Faster speech recognition: `base.en`, or the GPU when the chat model isn't loaded. It's about 3.6 s per phrase on the CPU today.
+- An MCP *client*, to plug in more tools.
+- Obsidian and other notes integrations (your Q6: later).
+- Email and calendar *write* tools as tier 2 (send, create event).
 
 ### Suggested by me
 

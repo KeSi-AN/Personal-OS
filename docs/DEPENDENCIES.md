@@ -19,9 +19,13 @@ Transitive packages pulled in by the ones below (for example `rich`, `click` and
 | `uvicorn` | 6 | ASGI server for FastAPI, run inside the daemon's own event loop. |
 | ~~`httpx`~~ | - | Not needed after all: Ollama is called with the standard library's `urllib` (ADR-043), and the native host doesn't need it either (ADR-029). |
 | ~~`sqlite-vec`~~ | - | Not used: vectors are plain rows searched by brute force, so `forget` can guarantee they're overwritten (ADR-044). |
-| `keyring` | 4+ | DPAPI / OS keychain storage for an optional encryption key (only if encryption is enabled). |
 | `pystray` + `Pillow` | 6 | System tray icon (Pillow is required by pystray for the icon image). |
 | `cryptography` | 6 | Generating the self-signed certificate for phone access (HTTPS on the LAN, ADR-056). The standard library can't create certificates. |
+| `faster-whisper` | 7 | Local speech recognition (CTranslate2, int8 on the CPU). Brings `numpy` and `tokenizers`. |
+| `sounddevice` | 7 | Microphone input through PortAudio (wheel includes the DLL). Playback uses the stdlib `winsound`. |
+| `openwakeword` | 7 | The optional "hey Donna" wake word (ONNX on Windows). Brings `onnxruntime` and `scipy`. |
+| `keyring` | 7 | Windows Credential Manager for the Google refresh token and the Speechify key. |
+| `mcp` | 7 | The official MCP SDK for the read-only `personal-os mcp` server. |
 
 ## Development and test only
 

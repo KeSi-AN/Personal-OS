@@ -1,6 +1,6 @@
 # Personal OS — Design
 
-**Status:** v0.8. Phases 0, 1 and 2 accepted (2026-11-03). Phases 3 (project resolver, sessions), 4 (local model: summaries, hybrid search, `ask`) built, awaiting review; phase 5 (action layer) accepted 2026-11-04; phase 6 (dashboard, tray, overlay, phone, privacy centre) built, awaiting review. Phase 7 (voice, briefings, MCP, Google) next.
+**Status:** v0.9. Phases 0, 1 and 2 accepted (2026-11-03). Phases 3 (project resolver, sessions), 4 (local model: summaries, hybrid search, `ask`) built, awaiting review; phase 5 (action layer) accepted 2026-11-04; phases 6 (dashboard, tray, overlay, phone, privacy centre) and 7 (voice, briefings, Google, MCP, plugins) built, awaiting review. The MVP (phases 0-7) is complete once reviewed; see ROADMAP.md.
 **Date:** 2026-11-02
 **Scope of this draft:** overall architecture, and the observation layer in detail (brief §4). Storage, the context engine, the action layer, and interfaces are covered only far enough to show the observation layer fits them. Each gets its own design section before its phase starts.
 
@@ -608,14 +608,51 @@ Do-not-disturb has no public Windows API, so it stays out.
 
 **Budget.** The daemon must still stay under about 300 MB and 2% idle CPU with the API and tray loaded. This is re-measured in acceptance.
 
-### 6.5 Google integrations (phase 7)
+### 6.5 Voice, briefings, Google, MCP and plugins (phase 7)
 
-Calendar and Gmail come first (your answer); Obsidian and other notes come later. These are the system's **first cloud calls**, so they're opt-in per feature:
+**Goal (brief §10):** a hands-free demo of a briefing and a safe task.
 
-- **Sign-in.** OAuth through the installed-app loopback flow, so the sign-in happens in your browser. Refresh tokens are stored with `keyring`, which uses Windows Credential Manager.
-- **Read-only scopes first.** Write scopes (create events, send mail) are added only together with their Tier 2 tools.
-- **Email bodies stay out of storage and LLM prompts by default.** Headers, sender, and subject are used for triage.
-- **Not in `wipe`.** A wipe deletes the local tokens, but revoking access in your Google account is a separate step that you do in Google's settings.
+**Voice** runs in its own process (`personal_os.voice`), started by the daemon when `voice.enabled` is on. Speech models stay out of the daemon's 300 MB budget, and a crash in audio code can't touch capture.
+
+- **Listening.**
+  - **Push-to-talk:** press **Ctrl+Alt+Shift+V**; a beep, then it records until you stop speaking (at most 15 s).
+  - **Wake word (optional, toggled from the tray, the dashboard or config):** "hey Donna" through openWakeWord. openWakeWord has no ready-made model for that phrase, so you train one once (docs/VOICE.md has the steps; about 1.5 hours on Colab) and drop the `.onnx` file into `voice/wakewords/`. Without a model the toggle explains why it's unavailable.
+  - The microphone stream stays in memory. Nothing you say is stored except the recognised command text, which goes to the action log when it triggers an action.
+- **Speech to text:** faster-whisper `small.en` on the CPU (int8), so the GPU stays free for `qwen3:4b`. It's loaded on first use and freed after 10 idle minutes.
+- **Speech to voice**, in order of what's set up:
+  1. **Speechify** (opt-in; your API key in Windows Credential Manager). Only the sentences being spoken are sent to Speechify, never evidence, page text or anything else. This is the only part of voice that leaves the machine, and the setting says so.
+  2. **Piper** (local neural voice), if its voice file is present.
+  3. **The Windows voice** (built in, offline), which always works.
+- **What you can say.** The same routing as typing:
+  - "brief me" / "good morning" / "end of day" gives a briefing;
+  - "remember that …";
+  - action phrases ("open …", "remind me …", "take a screenshot") go to the planner;
+  - anything else goes to `ask`;
+  - "stop" or "cancel" stops speaking.
+
+  Spoken answers drop the citation numbers. The full answer with evidence goes to the tray notification and the dashboard.
+- **Spoken confirmation** (brief §7: a spoken "confirm"). A step that needs confirming is read out in one sentence ("Create the file notes.md in auth-service? Say yes or no"), and only a clear yes, confirm or go ahead approves it. Anything else, or silence, is a no. Tier 3 is never offered by voice.
+
+**Briefings** (proactive, opt-in, rate-limited). Built from facts, not free-form model text:
+
+- yesterday's day rollup, or session summaries;
+- open threads (failing commands not fixed since, open threads in summaries);
+- today's calendar and unread important mail, if Google is connected;
+- reminders due today;
+- the most recent project's next step.
+
+A **morning briefing** is offered once a day, the first time you're active after `briefings.morning_after` (default 09:00). An **end-of-day summary** comes after `briefings.evening_after`. Each arrives as a notification, as speech if voice is on, and as a card on Today. `personal-os briefing` produces one on demand.
+
+**Google** (your answer to Q6: Calendar and Gmail first). These are the system's first cloud calls, so they're opt-in:
+
+- **Sign-in:** the installed-app loopback flow with PKCE, from an OAuth client you create (docs/GOOGLE.md has the steps). The refresh token goes in Windows Credential Manager (`keyring`).
+- **Least-privilege scopes:** `calendar.readonly` and `gmail.metadata`. The metadata scope gives headers, sender and subject; Google never lets this client read message bodies.
+- **Tools:** `calendar_today` and `mail_unread` (tier 0). Their results are captured content, so they taint the request. They're not stored in the database; they're fetched when needed.
+- **Disconnecting:** `personal-os google disconnect` revokes the token at Google and deletes it locally.
+
+**MCP server** (`personal-os mcp`, stdio). Lets another assistant (for example Claude Desktop) use your context, read-only: `ask`, `search_context`, `sessions`, `project_state`, `list_projects`. No actions over MCP: an outside agent is never "you asking directly".
+
+**Plugins.** Python files in `plugins/` in the data folder define extra tools with the same contract (args model, tier, preview, run). They're off until `actions.plugins_enabled`. A plugin's tier is honoured, but anything claiming tier 3 is blocked like built-in tier 3. Plugin tools are marked in the log. Loading plugins means running that code, so only add files you wrote or read.
 
 ---
 
