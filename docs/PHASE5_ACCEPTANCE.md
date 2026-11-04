@@ -4,7 +4,9 @@
 
 **Run:** 2026-11-04, on the test suite (with a fake desktop), with `qwen3:4b`, and live on this laptop. No captured content is reproduced here, because this repo is public.
 
-## Result: target met, awaiting your review
+## Result: accepted 2026-11-04
+
+You accepted it after trying `do` yourself; the volume example you found is in the roadmap as a refinement (item 3b).
 
 | Check | Result |
 |---|---|

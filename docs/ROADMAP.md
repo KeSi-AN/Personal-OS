@@ -11,8 +11,8 @@
 | 0–2 | Foundation, desktop capture, browser | Accepted 2026-11-03 |
 | 3 | Projects, inbox, sessions | Built, awaiting review |
 | 4 | Local model: summaries, hybrid search, `ask` | Built, awaiting review |
-| 5 | Action layer: tool registry, tiers, confirmation, audit log, kill switch, injection tests | Built, awaiting review |
-| 6 | Tray, hotkey overlay, web dashboard (reachable from your phone), privacy centre | Planned |
+| 5 | Action layer: tool registry, tiers, confirmation, audit log, kill switch, injection tests | Accepted 2026-11-04 |
+| 6 | Tray, hotkey overlay, web dashboard (reachable from your phone), privacy centre | In progress |
 | 7 | Voice, briefings, MCP/plugin API, Google Calendar and Gmail | Planned |
 
 ## Gaps: brief requirements still open (close before the MVP is done)
@@ -56,6 +56,18 @@
 - warm automatically when the overlay hotkey opens (phase 6) or before a scheduled briefing (phase 7);
 - unload automatically when a full-screen app or game starts;
 - show "model warm" in the tray.
+
+**3b. Friendlier `do` (2026-11-04).** Seen on your machine:
+
+- "increase volume to 60" → *"Stopped: the planner failed: invalid structured output after a retry: media(…): times: Input should be less than or equal to 10"*
+- "increase volume to 6" pressed volume-up once.
+
+The safety held (nothing wrong ran), but the experience is poor. Planned:
+
+- **Tools that match how people talk.** A `set_volume(percent)` tool that sets an absolute level through Windows' audio API, so "volume to 60", "volume 60%" and "turn it down a bit" all work. The same idea applies elsewhere: `set_brightness(percent)`, and absolute window positions instead of repeated key presses.
+- **Plain-language failures.** When a plan can't be made valid, say what's possible ("I can set the volume to a level from 0 to 100, or press volume up/down"), never the validation text. The raw error goes to the log.
+- **Ask when it's ambiguous.** "increase volume to 6": 6%, or 6 steps? A one-line question beats a guess for anything with a number.
+- **Clamp and say so.** If a value is out of range (volume 150), use the limit (100) and tell you.
 
 ### Suggested by me
 

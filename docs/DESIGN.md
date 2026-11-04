@@ -1,6 +1,6 @@
 # Personal OS — Design
 
-**Status:** v0.7. Phases 0, 1 and 2 accepted (2026-11-03). Phases 3 (project resolver, sessions), 4 (local model: summaries, hybrid search, `ask`) and 5 (action layer) built, awaiting review. Phase 6 (tray, overlay, dashboard, privacy centre) next.
+**Status:** v0.7. Phases 0, 1 and 2 accepted (2026-11-03). Phases 3 (project resolver, sessions), 4 (local model: summaries, hybrid search, `ask`) built, awaiting review; phase 5 (action layer) accepted 2026-11-04. Phase 6 (tray, overlay, dashboard, privacy centre) next.
 **Date:** 2026-11-02
 **Scope of this draft:** overall architecture, and the observation layer in detail (brief §4). Storage, the context engine, the action layer, and interfaces are covered only far enough to show the observation layer fits them. Each gets its own design section before its phase starts.
 
