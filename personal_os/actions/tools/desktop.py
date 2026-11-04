@@ -38,7 +38,7 @@ class OpenPath(Tool):
     def run(self, args: PathArgs, ctx: ToolContext) -> Result:
         path = ctx.paths.check(args.path, must_exist=True)
         ctx.desktop.open_path(path)
-        return Result(f"opened {path}")
+        return Result(f"Opened {path.name or path}")
 
 
 class UrlArgs(Args):
@@ -94,7 +94,10 @@ class OpenApp(Tool):
 
     def run(self, args: AppArgs, ctx: ToolContext) -> Result:
         pid = ctx.desktop.launch(self._argv(args, ctx))
-        return Result(f"started {args.app} (pid {pid})")
+        if args.target:
+            name = Path(args.target.rstrip("/\\")).name or args.target
+            return Result(f"Opened {name} in {args.app}", data=f"pid {pid}")
+        return Result(f"Started {args.app}", data=f"pid {pid}")
 
 
 class NoteArgs(Args):

@@ -547,6 +547,7 @@ def test_planner_with_the_local_model_picks_the_right_tools(home: Path, config: 
     provider = make_provider(config.llm)
     cases: list[tuple[str, list[str], dict[str, Any]]] = [
         (f"open the folder {env.work}", ["open_path"], {"path": str(env.work)}),
+        (f"open {env.work} in notepad", ["open_app"], {"app": "notepad", "target": str(env.work)}),
         ("pause the music", ["media"], {"action": "play_pause"}),
         ("note down: try httpx timeouts tomorrow", ["create_note"], {}),
         ("what's the weather in Delhi?", [], {}),
@@ -619,3 +620,18 @@ def test_tools_with_cues_need_them_in_the_request(env: Env):
     assert report.error and "only for requests about" in report.error and report.outcomes == []
     report = run_request("make the screen brighter, 100%", env.ex, fake)
     assert [o.status for o in report.outcomes] == ["succeeded"] and env.desktop.brightness == 100
+
+
+def test_open_in_an_app_is_one_step_even_when_the_model_splits_it(env: Env):
+    folder = env.work / "Rag Portfolio"
+    folder.mkdir()
+    split = plan(("open_app", {"app": "notepad"}), ("open_path", {"path": str(folder)}))
+    report = run_request(
+        "open rag portfolio in notepad", env.ex, FakeProvider(lambda s, u, schema: split)
+    )
+    assert [o.tool for o in report.outcomes] == ["open_app"]
+    assert env.desktop.calls == [("launch", ["notepad.exe", str(folder)])]  # not Explorer
+    assert report.outcomes[0].message == "Opened Rag Portfolio in notepad"
+    alone = plan(("open_path", {"path": str(folder)}))
+    report = run_request("open rag portfolio", env.ex, FakeProvider(lambda s, u, schema: alone))
+    assert env.desktop.calls[-1] == ("open_path", str(folder))  # no app named: default app
