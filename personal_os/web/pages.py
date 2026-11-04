@@ -169,6 +169,7 @@ def today(state: WebState, conn: sqlite3.Connection, *, phone: bool = False) -> 
         welcome
         + controls
         + briefing_card
+        + _voice_card(state)
         + ask_box
         + f"<h2>Today</h2><p class='muted small'>{len(sessions)} sessions, {dur(total)} active{extra}</p>"
     )
@@ -646,7 +647,6 @@ def privacy_page(state: WebState, conn: sqlite3.Connection) -> str:
 
 def _assistant_section(state: WebState) -> str:
     """Voice, wake word, voice output, daily briefings and Google: what each does, on/off."""
-    import json as _json
 
     from personal_os.integrations import google
     from personal_os.voice.wake import wake_models
@@ -663,8 +663,9 @@ def _assistant_section(state: WebState) -> str:
             f"{'Turn off' if on else 'Turn on'}</button></div>"
         )
 
-    status_file = cfg.runtime_dir / "voice.json"
-    running = _json.loads(status_file.read_text("utf-8")) if status_file.exists() else None
+    from personal_os.voice.main import status as voice_status
+
+    running = voice_status(cfg.runtime_dir) if v.enabled else None
     voice_extra = (
         f"<div class='small'>voice process: {e(running['state'])}</div>" if running else ""
     )
@@ -716,4 +717,33 @@ def _assistant_section(state: WebState) -> str:
             )
             + "</div>"
         )
+    )
+
+
+def _voice_card(state: WebState) -> str:
+    """Voice at a glance: is it running, and the last few things it heard and did."""
+    from personal_os.voice.main import history
+    from personal_os.voice.main import status as voice_status
+
+    if not state.config.voice.enabled:
+        return ""
+    vs = voice_status(state.config.runtime_dir)
+    cls = "ok" if vs.get("running") else "bad"
+    rows = "".join(
+        f"<div class='small'><b>{e(x.get('at', '')[11:16])}</b> {e(x.get('heard') or '(nothing heard)')} "
+        f"<span class='pill'>{e(x.get('route', '?'))}</span> <span class='muted'>{e(x.get('total_s', '?'))} s</span>"
+        + (f"<div class='muted'>{e((x.get('reply') or '')[:160])}</div>" if x.get("reply") else "")
+        + (f"<div class='bad'>{e(x['error'])}</div>" if x.get("error") else "")
+        + "</div>"
+        for x in reversed(history(state.config.runtime_dir, 5))
+    )
+    hint = (
+        ""
+        if vs.get("running")
+        else " The voice process isn't running; restart capture (tray → Restart capture)."
+    )
+    return card(
+        f"<b>Voice</b> <span class='{cls} small'>{e(vs['state'])}</span>"
+        f"<span class='muted small'> · Ctrl+Alt+Shift+V, then speak.{e(hint)}</span>"
+        + (rows or "<div class='muted small'>Nothing heard yet.</div>")
     )

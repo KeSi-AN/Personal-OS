@@ -242,6 +242,13 @@ def doctor() -> None:
             problems.append("hotkey taken by another app: " + ", ".join(taken))
     if "tray" in h:
         typer.echo(f"tray       {'shown' if h['tray'] else 'not shown'}")
+    if cfg.voice.enabled:
+        from personal_os.voice.main import status as voice_status
+
+        vs = voice_status(cfg.runtime_dir)
+        typer.echo(f"voice      {vs['state']}" + (f" ({vs['error']})" if vs.get("error") else ""))
+        if not vs.get("running"):
+            problems.append("voice is on but its process isn't running")
     line, problem = _ollama(cfg)
     typer.echo(f"ollama     {line}")
     if problem:

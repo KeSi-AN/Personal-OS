@@ -113,6 +113,7 @@ class VoiceConfig(_Section):
     wake_word_enabled: bool = False  # needs a trained model in voice/wakewords/ (docs/VOICE.md)
     wake_threshold: float = Field(0.5, gt=0, lt=1)
     tts: Literal["windows", "piper", "speechify"] = "windows"
+    windows_voice: str = "Microsoft Zira Desktop"  # female, US English; or Hazel (UK)
     speechify_voice: str = "geffen_32"
     speechify_model: str = "simba-3.5"
     max_spoken_chars: int = Field(600, ge=100, le=2000)

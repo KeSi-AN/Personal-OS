@@ -320,3 +320,41 @@ def test_set_value_adds_a_section_the_file_doesnt_have_yet(home: Path):
     with pytest.raises(KeyError):
         set_value("voice.nonsense", True, home)
     _ = (Origin, Tier)
+
+
+# --- tracking the voice process ------------------------------------------------------------------
+
+
+def test_stale_voice_status_reads_as_not_running(tmp_path: Path):
+    from personal_os.voice.main import status
+
+    assert status(tmp_path)["state"] == "not running"
+    (tmp_path / "voice.json").write_text(json.dumps({"state": "ready", "pid": 999_999_9}))
+    s = status(tmp_path)
+    assert s["state"] == "not running" and s["running"] is False
+
+
+def test_voice_history_keeps_the_last_30(tmp_path: Path):
+    from personal_os.voice.main import HISTORY_KEEP, history, record_history
+
+    for i in range(HISTORY_KEEP + 5):
+        record_history(tmp_path, {"heard": f"phrase {i}"})
+    kept = history(tmp_path, 100)
+    assert len(kept) == HISTORY_KEEP and kept[-1]["heard"] == f"phrase {HISTORY_KEEP + 4}"
+
+
+def test_a_voice_request_is_recorded(home: Path, config: Config, monkeypatch: pytest.MonkeyPatch):
+    import winsound
+
+    from personal_os.voice.main import history
+
+    monkeypatch.setattr(winsound, "Beep", lambda *_a: None)
+    env = Env(home, config)
+    v, _h = voice_for(env, "good morning")
+    v.respond("hotkey")
+    (entry,) = history(env.config.runtime_dir)
+    assert entry["heard"] == "good morning" and entry["route"] == "briefing"
+    assert entry["reply"].startswith("Good") and "total_s" in entry
+    v, _h = voice_for(env, "")
+    v.respond("hotkey")
+    assert history(env.config.runtime_dir)[-1]["route"] == "nothing heard"

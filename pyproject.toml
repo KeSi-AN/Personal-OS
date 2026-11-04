@@ -75,6 +75,8 @@ known-first-party = ["personal_os", "tests"]
 "personal_os/web/html.py" = ["E501"]
 # user-facing CLI messages read better on one line
 "personal_os/interfaces/cli_phase7.py" = ["E501"]
+# an embedded PowerShell script
+"personal_os/interfaces/notify.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"

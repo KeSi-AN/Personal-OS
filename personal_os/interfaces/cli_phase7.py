@@ -86,8 +86,9 @@ def voice_status() -> None:
 
     cfg = _config()
     v = cfg.voice
-    status_file = cfg.runtime_dir / "voice.json"
-    running = json.loads(status_file.read_text("utf-8")) if status_file.exists() else None
+    from personal_os.voice.main import status as voice_proc_status
+
+    running = voice_proc_status(cfg.runtime_dir)
     typer.echo(
         f"voice        {'on' if v.enabled else 'off'}"
         + (f", process {running['state']}" if running else "")
@@ -104,8 +105,46 @@ def voice_status() -> None:
         f"speech out   {v.tts}"
         + (f" (Speechify: {key}; spoken text is sent to Speechify)" if v.tts == "speechify" else "")
     )
-    if running and running.get("error"):
+    if running.get("error"):
         typer.echo(f"problem      {running['error']}")
+    if v.enabled and not running.get("running"):
+        typer.echo(
+            "problem      the voice process isn't running: is the daemon running? (personal-os status)"
+        )
+    typer.echo(f"windows voice {v.windows_voice}")
+
+
+@voice_app.command("log")
+def voice_log(last: Annotated[int, typer.Option(help="How many exchanges.")] = 10) -> None:
+    """What voice heard, what it did, and how long each step took (kept on this laptop)."""
+    from personal_os.voice.main import history
+
+    cfg = _config()
+    entries = history(cfg.runtime_dir, last)
+    if not entries:
+        typer.echo("Nothing yet. Press Ctrl+Alt+Shift+V, wait for the beep, and speak.")
+    for x in entries:
+        when = x.get("at", "")[11:19]
+        times = ", ".join(
+            f"{k[:-2]} {x[k]} s" for k in ("listen_s", "handle_s", "speak_s", "total_s") if k in x
+        )
+        typer.echo(f"{when}  [{x.get('trigger', '?')}] heard: {x.get('heard') or '(nothing)'}")
+        typer.echo(f"          as: {x.get('route', '?')}   ({times})")
+        if x.get("reply"):
+            typer.echo(f"          reply: {x['reply'][:200]}")
+        if x.get("error"):
+            typer.echo(f"          ERROR: {x['error']}")
+
+
+@voice_app.command("voices")
+def voice_voices() -> None:
+    """The Windows voices you can choose (personal-os config set voice.windows_voice NAME)."""
+    from personal_os.voice.tts import windows_voices
+
+    cfg = _config()
+    for name, info in windows_voices():
+        mark = "  <- in use" if name == cfg.voice.windows_voice else ""
+        typer.echo(f"{name:<28} {info}{mark}")
 
 
 @voice_app.command("test")

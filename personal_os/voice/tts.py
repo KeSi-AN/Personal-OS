@@ -54,10 +54,15 @@ class WindowsVoice:
 
     name = "windows"
 
+    def __init__(self, voice: str = "Microsoft Zira Desktop") -> None:
+        self.voice = voice
+
     def synthesize(self, text: str, out: Path) -> None:
         script = (
             "Add-Type -AssemblyName System.Speech;"
             "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+            "try{$s.SelectVoice($env:POS_VOICE)}catch{"
+            "$s.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::Female)};"
             "$s.Rate=1;$s.SetOutputToWaveFile($env:POS_WAV);"
             "$s.Speak([IO.File]::ReadAllText($env:POS_TXT));$s.Dispose()"
         )
@@ -65,7 +70,7 @@ class WindowsVoice:
             f.write(text)
             txt = f.name
         try:
-            env = dict(os.environ, POS_WAV=str(out), POS_TXT=txt)  # text never on a command line
+            env = dict(os.environ, POS_WAV=str(out), POS_TXT=txt, POS_VOICE=self.voice)
             r = subprocess.run(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
                 env=env,
@@ -159,7 +164,7 @@ def voices(cfg: VoiceConfig, data_dir: Path) -> list[Voice]:
         chain.append(SpeechifyVoice(cfg))
     if cfg.tts in ("speechify", "piper"):
         chain.append(PiperVoice(data_dir / "voice" / "piper"))
-    chain.append(WindowsVoice())
+    chain.append(WindowsVoice(cfg.windows_voice))
     return chain
 
 
@@ -203,3 +208,26 @@ def stop() -> None:
     import winsound
 
     winsound.PlaySound(None, winsound.SND_PURGE)
+
+
+def windows_voices() -> list[tuple[str, str]]:
+    """(name, gender) of the voices the Windows engine can use here."""
+    script = (
+        "Add-Type -AssemblyName System.Speech;"
+        "(New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | "
+        "ForEach-Object { $_.VoiceInfo.Name + '|' + $_.VoiceInfo.Gender + '|' + "
+        "$_.VoiceInfo.Culture }"
+    )
+    r = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    out = []
+    for line in r.stdout.splitlines():
+        parts = line.strip().split("|")
+        if len(parts) == 3:
+            out.append((parts[0], f"{parts[1]}, {parts[2]}"))
+    return out

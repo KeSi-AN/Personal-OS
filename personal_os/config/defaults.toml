@@ -157,6 +157,7 @@ stt_model = "small.en"     # faster-whisper, on the CPU
 wake_word_enabled = false  # "hey Donna": needs a trained model in voice/wakewords/ (docs/VOICE.md)
 wake_threshold = 0.5
 tts = "windows"            # windows (built in) | piper (local) | speechify (cloud: spoken text is sent)
+windows_voice = "Microsoft Zira Desktop"   # `personal-os voice voices` lists them; Hazel is UK English
 speechify_voice = "geffen_32"
 speechify_model = "simba-3.5"
 max_spoken_chars = 600

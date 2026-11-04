@@ -10,6 +10,7 @@ is kept.
 from __future__ import annotations
 
 import ctypes
+import json
 import queue
 import re
 import sys
@@ -277,22 +278,98 @@ class Voice:
     def respond(self, trigger: str) -> None:
         import winsound
 
+        from personal_os.context.route import route
+
+        entry: dict[str, Any] = {"at": self.clock.now().isoformat(), "trigger": trigger}
+        t0 = time.monotonic()
         self.write_status("listening", trigger=trigger)
         winsound.Beep(880, 120)
         try:
             text = self.listen()
+            entry["heard"] = text
+            entry["listen_s"] = round(time.monotonic() - t0, 1)
             if not text:
-                self.write_status("ready")
+                entry["route"] = "nothing heard"
                 return
-            self.write_status("thinking")
+            entry["route"] = route(text)
+            self.write_status("thinking", heard=text)
+            t1 = time.monotonic()
             reply = self.handle(text)
+            entry["reply"] = reply
+            entry["handle_s"] = round(time.monotonic() - t1, 1)
             if reply:
                 self.write_status("speaking")
+                t2 = time.monotonic()
                 self.say(reply)
+                entry["speak_s"] = round(time.monotonic() - t2, 1)
         except Exception as exc:  # never let one request kill the voice process
+            entry["error"] = f"{type(exc).__name__}: {exc}"[:300]
             _log.warning("voice request failed", extra={"fields": {"exc_type": type(exc).__name__}})
             self.say("Sorry, something went wrong.")
-        self.write_status("ready")
+        finally:
+            entry["total_s"] = round(time.monotonic() - t0, 1)
+            record_history(self.cfg.runtime_dir, entry)
+            _log.info(
+                "voice request",
+                extra={
+                    "fields": {
+                        "route": entry.get("route"),
+                        "total_s": entry["total_s"],
+                        "failed": "error" in entry,
+                    }
+                },
+            )
+            self.write_status("ready")
+
+
+HISTORY = "voice_history.jsonl"
+HISTORY_KEEP = 30
+
+
+def record_history(runtime_dir: Path, entry: dict[str, Any]) -> None:
+    """The last few exchanges, on this laptop only (runtime folder), for `voice log` and the
+    dashboard. Older lines are dropped."""
+    path = runtime_dir / HISTORY
+    lines = path.read_text("utf-8").splitlines() if path.exists() else []
+    lines = [*lines, json.dumps(entry, ensure_ascii=False)][-HISTORY_KEEP:]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def history(runtime_dir: Path, last: int = 10) -> list[dict[str, Any]]:
+    path = runtime_dir / HISTORY
+    if not path.exists():
+        return []
+    out = []
+    for line in path.read_text("utf-8").splitlines()[-last:]:
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
+
+
+def status(runtime_dir: Path) -> dict[str, Any]:
+    """The voice process's status, checked against the real process (a killed process leaves
+    its last status behind)."""
+    import psutil
+
+    path = runtime_dir / STATUS
+    try:
+        data: dict[str, Any] = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return {"state": "not running", "running": False}
+    pid = int(data.get("pid") or 0)
+    alive = False
+    if pid and psutil.pid_exists(pid):
+        try:
+            cmd = " ".join(psutil.Process(pid).cmdline())
+            alive = "personal_os.voice" in cmd
+        except psutil.Error:
+            alive = False
+    if not alive:
+        data["state"] = "not running"
+    data["running"] = alive
+    return data
 
 
 def google_client(cfg: Config) -> Any:
