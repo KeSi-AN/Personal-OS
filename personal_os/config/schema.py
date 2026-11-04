@@ -124,8 +124,22 @@ class ApiConfig(_Section):
         return v
 
 
+class CommandSpec(_Section):
+    argv: list[str] = Field(min_length=1)
+    cwd: str | None = None
+    timeout_s: float | None = Field(None, gt=0)
+
+
 class ActionsConfig(_Section):
     auto_allow_tiers: list[int] = [0, 1]
+    allowed_paths: list[Path] = []
+    confirm_tools: list[str] = []
+    rate_per_minute: int = Field(30, ge=1)
+    tier2_rate_per_minute: int = Field(10, ge=1)
+    command_timeout_s: float = Field(120, gt=0)
+    undo_keep_days: int = Field(7, ge=1)
+    apps: dict[str, list[str]] = {}
+    commands: dict[str, CommandSpec] = {}
 
     @field_validator("auto_allow_tiers")
     @classmethod

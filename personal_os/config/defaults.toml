@@ -125,3 +125,26 @@ enabled = false            # phone access (phase 6): HTTPS + per-device pairing
 
 [actions]
 auto_allow_tiers = [0, 1]  # only for requests you make directly; see DESIGN.md section 6.3
+# Folders actions may touch besides watched_roots and the notes/screenshots folders.
+allowed_paths = []
+# Tools that always ask, even when their tier would run without asking.
+confirm_tools = []
+rate_per_minute = 30
+tier2_rate_per_minute = 10
+command_timeout_s = 120
+undo_keep_days = 7         # originals kept so edit_file can be undone
+
+# Apps `open_app` can start (name -> program and fixed arguments). %VARS% are expanded.
+[actions.apps]
+vscode = ['%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe']
+terminal = ["wt.exe"]
+explorer = ["explorer.exe"]
+notepad = ["notepad.exe"]
+brave = ['%PROGRAMFILES%\BraveSoftware\Brave-Browser\Application\brave.exe']
+chrome = ['%PROGRAMFILES%\Google\Chrome\Application\chrome.exe']
+
+# Named commands `run_command` can run (no shell). Example:
+# [actions.commands.tests]
+# argv = ["uv", "run", "pytest", "-q"]
+# cwd = "~/Documents/Personal-OS"
+[actions.commands]
