@@ -125,12 +125,28 @@ _BROWSER_EXES = {
 }
 
 
+MIN_TRUSTED_WINDOW_MS = 5000  # the default bounce threshold (privacy.min_dwell_s)
+
+
+def window_figure_usable(measured: int | None, reported: int, min_ms: int) -> bool:
+    """Whether the window record's active time should replace the extension's.
+
+    0/None: no matching window title (the page's title changed and we never saw the old one).
+    A figure under the bounce threshold while the extension saw more is almost always a partial
+    title match (an inbox counter ticked, a doc was renamed): trusting it would drop a real
+    visit as a bounce and delete its stored row. Keeping a short visit is the safer mistake."""
+    if not measured:
+        return False
+    return not (measured < min_ms <= reported)
+
+
 def _active_ms(
     rec: dict[str, Any],
     titles: set[str],
     start: datetime,
     end: datetime,
     foreground: ForegroundFn | None,
+    min_trusted_ms: int = MIN_TRUSTED_WINDOW_MS,
 ) -> tuple[int, str]:
     """Active time and where it came from. The window record (browser window in front showing
     this page, user not idle) is preferred: the extension can't see other apps reliably."""
@@ -138,13 +154,32 @@ def _active_ms(
     if foreground is not None:
         exes = _BROWSER_EXES.get(str(rec.get("browser")), {"chrome.exe", "brave.exe", "msedge.exe"})
         measured = foreground(exes, titles, start, end)
-        if measured:  # 0 usually means the title changed mid-visit: keep the extension's figure
-            return measured, "window"
+        if window_figure_usable(measured, reported, min_trusted_ms):
+            return measured or 0, "window"
     return reported, "extension"
 
 
+class VisitTitles:
+    """Every title a visit has had, across its re-sends. The extension sends only the current
+    title, but the window record holds the earlier ones too ("Inbox (12)" then "Inbox (13)")."""
+
+    def __init__(self) -> None:
+        self.by_visit: dict[str, set[str]] = {}
+
+    def add(self, visit_id: str, titles: set[str]) -> set[str]:
+        if visit_id not in self.by_visit and len(self.by_visit) > 20_000:
+            self.by_visit.clear()
+        seen = self.by_visit.setdefault(visit_id, set())
+        seen.update(t for t in titles if t)
+        return set(seen)
+
+
 def parse_visit(
-    rec: dict[str, Any], returns: Returns | None = None, foreground: ForegroundFn | None = None
+    rec: dict[str, Any],
+    returns: Returns | None = None,
+    foreground: ForegroundFn | None = None,
+    seen_titles: VisitTitles | None = None,
+    min_trusted_ms: int = MIN_TRUSTED_WINDOW_MS,
 ) -> list[Event]:
     url = clean_search_url(str(rec["url"]))
     visit_id = _uuid(rec.get("id"))
@@ -164,7 +199,11 @@ def parse_visit(
     raw_title = clean_title(str(rec.get("title") or ""))
     title = _best_title(rec, extract)
     titles = {t for t in (raw_title, title, extract.title if extract else "") if t}
-    active_ms, dwell_source = _active_ms(rec, titles, start, end or last_seen, foreground)
+    if seen_titles is not None:
+        titles = seen_titles.add(str(visit_id), titles)
+    active_ms, dwell_source = _active_ms(
+        rec, titles, start, end or last_seen, foreground, min_trusted_ms
+    )
     returned = 0
     if returns is not None:
         returned = returns.count_and_record(url, str(visit_id), int(start.timestamp() // 86400))
@@ -238,11 +277,15 @@ def parse_signal(rec: dict[str, Any]) -> list[Event]:
 
 
 def parse_record(
-    rec: dict[str, Any], returns: Returns | None = None, foreground: ForegroundFn | None = None
+    rec: dict[str, Any],
+    returns: Returns | None = None,
+    foreground: ForegroundFn | None = None,
+    seen_titles: VisitTitles | None = None,
+    min_trusted_ms: int = MIN_TRUSTED_WINDOW_MS,
 ) -> list[Event] | None:
     kind = rec.get("type")
     if kind == "visit":
-        events = parse_visit(rec, returns, foreground)
+        events = parse_visit(rec, returns, foreground, seen_titles, min_trusted_ms)
     elif kind == "signal":
         events = parse_signal(rec)
     else:
@@ -255,8 +298,14 @@ def ingest(
     stats: SpoolStats,
     returns: Returns | None = None,
     foreground: ForegroundFn | None = None,
+    seen_titles: VisitTitles | None = None,
+    min_trusted_ms: int = MIN_TRUSTED_WINDOW_MS,
 ) -> list[Event]:
-    batches = drain(spool, lambda r: parse_record(r, returns, foreground), stats)
+    batches = drain(
+        spool,
+        lambda r: parse_record(r, returns, foreground, seen_titles, min_trusted_ms),
+        stats,
+    )
     return [e for batch in batches for e in batch]
 
 
@@ -265,11 +314,18 @@ class BrowserObserver(BaseObserver):
     version = VERSION
 
     def __init__(
-        self, spool_dir: Path, *, poll_s: float = 1.0, foreground: ForegroundFn | None = None
+        self,
+        spool_dir: Path,
+        *,
+        poll_s: float = 1.0,
+        foreground: ForegroundFn | None = None,
+        min_dwell_ms: int = MIN_TRUSTED_WINDOW_MS,
     ) -> None:
         super().__init__()
         self.spool_dir = spool_dir
         self.foreground = foreground
+        self.min_dwell_ms = min_dwell_ms
+        self.seen_titles = VisitTitles()
         self.poll_s = poll_s
         self.stats = SpoolStats()
         self.returns: Returns | None = None
@@ -282,7 +338,14 @@ class BrowserObserver(BaseObserver):
             if not ctx.paused.is_set():
                 # Not in a worker thread: the foreground lookup reads the window observer's
                 # in-memory history, which only the event loop touches. Spool files are small.
-                events = ingest(self.spool_dir, self.stats, self.returns, self.foreground)
+                events = ingest(
+                    self.spool_dir,
+                    self.stats,
+                    self.returns,
+                    self.foreground,
+                    self.seen_titles,
+                    self.min_dwell_ms,
+                )
                 if events:
                     self.last_record_at = time.time()
                     self.returns.save()

@@ -238,6 +238,7 @@ class Daemon:
             BrowserObserver(
                 cfg.spool_dir / "browser",
                 foreground=window.foreground_ms if window and oc.window.enabled else None,
+                min_dwell_ms=int(cfg.privacy.min_dwell_s * 1000),
             ),
             enabled=oc.browser.enabled,
             reason=None

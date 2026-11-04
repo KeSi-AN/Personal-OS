@@ -10,12 +10,18 @@ import json
 import sqlite3
 
 from personal_os.core.clock import from_ms
-from personal_os.observers.browser import _BROWSER_EXES
+from personal_os.observers.browser import (
+    _BROWSER_EXES,
+    MIN_TRUSTED_WINDOW_MS,
+    window_figure_usable,
+)
 from personal_os.observers.window import Interval, overlap_ms
 from personal_os.storage.db import transaction
 
 
-def recompute_dwell(conn: sqlite3.Connection) -> tuple[int, int]:
+def recompute_dwell(
+    conn: sqlite3.Connection, min_trusted_ms: int = MIN_TRUSTED_WINDOW_MS
+) -> tuple[int, int]:
     """Returns (visits updated, visits checked)."""
     windows: list[Interval] = []
     for start, end, payload in conn.execute(
@@ -37,13 +43,25 @@ def recompute_dwell(conn: sqlite3.Connection) -> tuple[int, int]:
             p = json.loads(payload)
             enrichment = p.get("enrichment") or {}
             if enrichment.get("dwell_source") == "window":
+                # An earlier run may have stored a partial title match as a near-zero figure.
+                reported = int(enrichment.get("extension_active_ms") or 0)
+                if window_figure_usable(p.get("active_dwell_ms", 0), reported, min_trusted_ms):
+                    continue
+                enrichment["dwell_source"] = "extension"
+                p["active_dwell_ms"] = reported
+                p["enrichment"] = enrichment
+                conn.execute(
+                    "UPDATE events SET payload = ? WHERE id = ?",
+                    (json.dumps(p, separators=(",", ":")), event_id),
+                )
+                updated += 1
                 continue
             exes = _BROWSER_EXES.get(
                 str(enrichment.get("browser")), {"chrome.exe", "brave.exe", "msedge.exe"}
             )
             titles = {t for t in (p.get("title"), extract_title) if t}
             measured = overlap_ms(windows, exes, titles, from_ms(start), from_ms(end))
-            if not measured:
+            if not window_figure_usable(measured, p.get("active_dwell_ms", 0), min_trusted_ms):
                 continue
             enrichment["extension_active_ms"] = p.get("active_dwell_ms", 0)
             enrichment["dwell_source"] = "window"

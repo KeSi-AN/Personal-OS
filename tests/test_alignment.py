@@ -238,3 +238,93 @@ def test_events_show_active_time_and_readable_summaries(pipe, home: Path):
 def test_redacted_titles_are_never_matched():
     t = _tracker_with(("chrome.exe", "[redacted]", 0, 60))
     assert foreground_overlap(t, CHROME, {"[redacted]"}, T0, T0 + timedelta(seconds=60)) == 0
+
+
+# --- partial title matches must not turn real visits into bounces ---------------------------
+
+
+def test_partial_title_match_does_not_drop_a_real_visit(pipe):
+    """An inbox counter ticks near the end of a 90 s visit: the window record matches only the
+    last 2 s. Trusting that would drop the visit as a bounce and delete its stored row."""
+    t = _tracker_with(
+        ("chrome.exe", "Inbox (12) - Mail - Google Chrome", 0, 88),
+        ("chrome.exe", "Inbox (13) - Mail - Google Chrome", 88, 90),
+    )
+
+    def fg(exes, titles, s, e):
+        return foreground_overlap(t, exes, titles, s, e)
+
+    common = {"url": "https://example.com/inbox", "start": T0.isoformat()}
+    pipe.process(
+        parse_record(visit(end=None, title="Inbox (12) - Mail", activeMs=60_000, **common))
+    )
+    closed = visit(
+        title="Inbox (13) - Mail",
+        activeMs=85_000,
+        end=(T0 + timedelta(seconds=90)).isoformat(),
+        **common,
+    )
+    # Without the earlier title, only 2 s match: the extension's figure is kept instead.
+    alone = parse_record(closed, foreground=fg)[0].payload
+    assert (alone.active_dwell_ms, alone.enrichment["dwell_source"]) == (85_000, "extension")
+    pipe.process(parse_record(closed, foreground=fg))
+    assert len(list(repo.iter_events(pipe.conn, source="browser"))) == 1
+
+
+def test_titles_from_earlier_resends_are_matched():
+    from personal_os.observers.browser import VisitTitles
+
+    t = _tracker_with(
+        ("chrome.exe", "Untitled document - Google Docs - Google Chrome", 0, 50),
+        ("chrome.exe", "Notes - Google Docs - Google Chrome", 50, 60),
+    )
+
+    def fg(exes, titles, s, e):
+        return foreground_overlap(t, exes, titles, s, e)
+
+    seen = VisitTitles()
+    common = {"url": "https://example.com/doc", "start": T0.isoformat()}
+    parse_record(visit(end=None, title="Untitled document - Google Docs", **common), None, fg, seen)
+    final = visit(
+        title="Notes - Google Docs",
+        activeMs=30_000,
+        end=(T0 + timedelta(seconds=60)).isoformat(),
+        **common,
+    )
+    p = parse_record(final, None, fg, seen)[0].payload
+    assert (p.active_dwell_ms, p.enrichment["dwell_source"]) == (60_000, "window")
+
+
+def test_window_figure_usable():
+    from personal_os.observers.browser import window_figure_usable
+
+    assert not window_figure_usable(None, 10_000, 5000)
+    assert not window_figure_usable(0, 10_000, 5000)
+    assert not window_figure_usable(2000, 10_000, 5000)  # partial match: keep the extension's
+    assert window_figure_usable(2000, 3000, 5000)  # both say bounce
+    assert window_figure_usable(59_000, 100_000, 5000)  # the normal case (ADR-033)
+
+
+def test_recompute_dwell_restores_partial_matches(pipe):
+    """A visit an earlier run set to a near-zero window figure gets the extension's back."""
+    focus = Event.interval(
+        WindowFocus(app="Chrome", exe="chrome.exe", title="x - Stack Overflow - Google Chrome"),
+        T0, T0 + timedelta(seconds=2), observer_version="t",
+    )  # fmt: skip
+    rec = visit(start=T0.isoformat(), end=(T0 + timedelta(minutes=1)).isoformat(),
+                last_seen=(T0 + timedelta(minutes=1)).isoformat(), activeMs=50_000)  # fmt: skip
+    pipe.process([focus, *parse_record(rec)])  # type: ignore[misc]
+    assert recompute_dwell(pipe.conn) == (0, 1)  # 2 s vs 50 s: not trusted
+    # Simulate what the earlier version stored.
+    row_id, payload = pipe.conn.execute(
+        "SELECT id, payload FROM events WHERE source = 'browser'"
+    ).fetchone()
+    p = json.loads(payload)
+    p["active_dwell_ms"] = 2000
+    p["enrichment"].update(dwell_source="window", extension_active_ms=50_000)
+    pipe.conn.execute("UPDATE events SET payload = ? WHERE id = ?", (json.dumps(p), row_id))
+    assert recompute_dwell(pipe.conn) == (1, 1)
+    e = next(repo.iter_events(pipe.conn, source="browser"))
+    assert e.payload.active_dwell_ms == 50_000  # type: ignore[union-attr]
+    assert e.payload.enrichment["dwell_source"] == "extension"  # type: ignore[union-attr]
+    assert recompute_dwell(pipe.conn) == (0, 1)
