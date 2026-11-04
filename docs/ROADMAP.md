@@ -11,7 +11,7 @@
 | 0–2 | Foundation, desktop capture, browser | Accepted 2026-11-03 |
 | 3 | Projects, inbox, sessions | Built, awaiting review |
 | 4 | Local model: summaries, hybrid search, `ask` | Built, awaiting review |
-| 5 | Action layer: tool registry, tiers, confirmation, audit log, kill switch, injection tests | In progress |
+| 5 | Action layer: tool registry, tiers, confirmation, audit log, kill switch, injection tests | Built, awaiting review |
 | 6 | Tray, hotkey overlay, web dashboard (reachable from your phone), privacy centre | Planned |
 | 7 | Voice, briefings, MCP/plugin API, Google Calendar and Gmail | Planned |
 
@@ -24,6 +24,7 @@
 | Conversation memory: short-term chat context, plus long-term facts you confirm ("remember that…"), stored separately and editable (§8) | Phase 6, with the overlay chat |
 | Per-project timeline: daily and weekly summaries, plus a living "current state" note (§5). Deferred in phase 4; weekly questions are answered from session summaries at question time | Phase 6, project pages |
 | First-run wizard that explains each source before enabling it (§9) | Phase 6 |
+| Tier 1 tools that need notifications: brightness, do-not-disturb, timers and reminders (§7) | Phase 6, with the tray |
 | Optional encryption at rest (§5; deferred by your answer to Q8) | Phase 7 or right after the MVP |
 | Embeddings in the project resolver (§6; deferred in phases 3–4) | After the MVP, once retrieval shows the vectors are reliable |
 
