@@ -60,3 +60,11 @@ A spoken "yes" for a step that needs confirming is covered by tests (yes approve
 3. **"Hey Donna":** train the model on Colab (docs/VOICE.md), drop the `.onnx` in `voice\wakewords\`, then `voice wake on`.
 4. **Speechify, if you want it:** `personal-os voice speechify-key`. This sends spoken replies to Speechify.
 5. **Daily briefings:** `personal-os briefing --enable` (off by default).
+
+## After your first try (2026-11-04)
+
+| You saw | Cause | Fixed |
+|---|---|---|
+| "brief me" gave no briefing | The daemon had been stopped at 17:41 (the tray's *Stop capture*, or `daemon stop`), and stopping it ends the voice process. Its status file still said "ready", because a killed process can't update it. | Status is now checked against the real process. `voice status`, `doctor` and a new Voice card on Today say **not running**. `voice log` shows every exchange: heard, taken as, reply, and timings. The tray item now reads *Stop capture and voice (until you start them again)*. |
+| Reminders didn't pop up | They fired (logged at 16:34 and 17:13), but the tray's balloon tip doesn't show up on Windows 11 here. | Reminders and briefings are now real Windows notifications (reminder style, with sound and Dismiss). They're also spoken when voice is on. Verified: a test reminder fired with `"shown": true` and was read aloud. |
+| Wanted a female voice | | Zira (US English) is the default; Hazel (UK English) is the other choice installed. `voice voices` lists them. |

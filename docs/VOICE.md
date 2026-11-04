@@ -21,6 +21,17 @@ Press **Ctrl+Alt+Shift+V**, wait for the beep, and speak. It stops listening at 
 
 Speech is recognised **on this laptop** with faster-whisper `small.en`, on the CPU, so the GPU stays free for the chat model. That takes about 3–5 s per phrase here. Audio stays in memory; only the recognised command text is kept, in the action log, when it triggers an action. `uv run personal-os voice demo` runs the whole path without a microphone, using a synthesized voice.
 
+## Is it working?
+
+```powershell
+uv run personal-os voice status    # "process ready" means it's listening for the hotkey
+uv run personal-os voice log       # what it heard, what it took that as, the reply, how long each step took
+```
+
+The dashboard's Today page shows the same in a **Voice** card.
+
+**No beep when you press the hotkey?** Then the voice process isn't running. It runs under the daemon, so check `personal-os status`. The tray's **Stop capture and voice** stops both until you start them again (`personal-os daemon start`, or log in again). `doctor` reports *voice is on but its process isn't running*.
+
 ## Wake word: "hey Donna"
 
 openWakeWord has no ready-made model for "hey Donna", so you train one once. It takes about 1.5 hours on Google Colab, mostly waiting. A two-word phrase with "hey" is more reliable than "Donna" alone.
@@ -41,7 +52,7 @@ With the wake word on, the microphone is read continuously and scored on this la
 
 | Voice | Where it runs | Setup |
 |---|---|---|
-| **Windows** (default) | This laptop | None |
+| **Windows** (default) | This laptop | None. Female by default (Zira, US English); `personal-os voice voices` lists the others (Hazel is UK English), and `personal-os config set voice.windows_voice "Microsoft Hazel Desktop"` switches. |
 | **Piper** (natural, local) | This laptop | `uv add piper-tts`, then put a voice's `.onnx` and `.onnx.json` in `voice\piper\` ([voices](https://huggingface.co/rhasspy/piper-voices)), then `personal-os config set voice.tts piper` |
 | **Speechify** (natural, cloud) | Speechify's servers: **the sentence being spoken is sent to them** | See below |
 
