@@ -14,7 +14,27 @@ from typing import Literal
 from personal_os.context.retrieval import query_terms
 from personal_os.projects.registry import NONE_PROJECT, Project
 
-Intent = Literal["leave_off", "changed_since", "weekly", "activity", "research", "bug", "search"]
+Intent = Literal[
+    "leave_off",
+    "changed_since",
+    "weekly",
+    "activity",
+    "research",
+    "bug",
+    "search",
+    "usage",  # how long on a site or app (context/usage.py)
+    "visits",  # which pages/videos on a site
+]
+
+
+@dataclass(frozen=True)
+class Target:
+    """A website or an app named in a question ("youtube", "chrome")."""
+
+    kind: Literal["site", "app"]
+    label: str
+    names: frozenset[str]  # domains for a site, app names for an app
+
 
 WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 MONTHS = [
@@ -148,6 +168,7 @@ class ParsedQuestion:
     end: datetime | None = None
     range_label: str = ""
     terms: list[str] = field(default_factory=list)
+    target: Target | None = None
 
 
 def _day(dt: datetime) -> datetime:
@@ -250,6 +271,10 @@ def _norm(text: str) -> str:
     return " " + re.sub(r"[^a-z0-9]+", " ", text.lower()).strip() + " "
 
 
+# Project ids that are also ordinary words in questions ("my project", "test", "app").
+GENERIC_PROJECT_IDS = frozenset({"project", "projects", "repo", "app", "test", "code", "work"})
+
+
 def match_project(q: str, projects: list[Project]) -> Project | None:
     """The project whose id or name appears in the question (longest match wins)."""
     nq = _norm(q)
@@ -270,10 +295,17 @@ def parse_question(text: str, projects: list[Project], now: datetime) -> ParsedQ
     start, end, label, _used = parse_time_range(q, now)
     project = match_project(q, projects)
     mention = None
-    if project is None:
-        m = _MENTION.search(q)
-        if m:
-            mention = m[1]
+    m = _MENTION.search(q)
+    # A repo called "project" matches "...on moon-base project": the name given wins.
+    if (
+        project is not None
+        and project.id in GENERIC_PROJECT_IDS
+        and m
+        and _norm(m[1]) != _norm(project.id)
+    ):
+        project = None
+    if project is None and m:
+        mention = m[1]
     intent: Intent = "search"
     for name, pattern in _INTENTS:
         if pattern.search(q):

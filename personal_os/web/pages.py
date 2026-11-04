@@ -304,8 +304,8 @@ async function go(ev) {{ ev && ev.preventDefault(); const q = document.getElemen
     if (r.remember) {{ out.innerHTML = '<div class="card">' + esc(r.text) +
       ' <button onclick="act(\\'/api/memory/add\\',{{text:' + JSON.stringify(r.remember).replace(/"/g,'&quot;') +
       '}},false).then(()=>{{document.getElementById(\\'out\\').innerHTML=\\'<div class=card>Remembered.</div>\\'}})">Remember</button></div>'; return; }}
-    let h = '<div class="card"><div>' + r.sentences.map(s => esc(s.text) + s.refs.map(n =>
-      ' <a href="#ev' + n + '">[' + n + ']</a>').join('')).join(' ') + '</div>';
+    let h = '<div class="card"><div>' + r.sentences.map(s => (s.text.startsWith('\\n') ? '<br>' : ' ') +
+      esc(s.text.trim()) + s.refs.map(n => ' <a href="#ev' + n + '">[' + n + ']</a>').join('')).join('') + '</div>';
     if (r.answered) h += '<div class="small muted">Confidence: ' + esc(r.confidence) + ' · ' +
       esc(r.intent) + (r.project ? ' · ' + esc(r.project) : '') + (r.range ? ' · ' + esc(r.range) : '') + '</div>';
     if (r.facts.length) h += '<div class="small muted">' + r.facts.map(esc).join(' ') + '</div>';

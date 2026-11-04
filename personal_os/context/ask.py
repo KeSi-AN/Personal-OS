@@ -20,7 +20,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from personal_os.context import memory
+from personal_os.context import memory, usage
 from personal_os.context.evidence import (
     EvidenceLine,
     EvidencePack,
@@ -99,9 +99,11 @@ class Answer:
 
     @property
     def text(self) -> str:
-        return " ".join(
+        parts = [
             s + ("".join(f" [{r}]" for r in refs) if refs else "") for s, refs in self.sentences
-        )
+        ]
+        # A sentence starting with a newline is a list item: no space before it.
+        return "".join(p if i == 0 or p.startswith("\n") else " " + p for i, p in enumerate(parts))
 
     def cited(self) -> list[EvidenceLine]:
         refs = sorted({r for _, rs in self.sentences for r in rs})
@@ -310,13 +312,21 @@ def gather_activity(conn: sqlite3.Connection, q: ParsedQuestion, now: datetime) 
     by_project: dict[str, int] = {}
     lines = []
     for s in sessions:
-        key = s.project_id or "no project"
-        by_project[key] = by_project.get(key, 0) + s.active_ms
+        # A mixed session counts each project's share, not its whole length for its label.
+        split = s.stats.get("by_project_s") or {}
+        shares = {
+            ("not in a project" if k in ("?", "none") else k): v * 1000 for k, v in split.items()
+        } or {s.project_id or "no project": s.active_ms}
+        for key, ms in shares.items():
+            if pid is None or key == pid:
+                by_project[key] = by_project.get(key, 0) + ms
         lines.append(summary_line(summaries[s.id]) if s.id in summaries else _session_line(conn, s))
     facts = [
         f"Time by project ({label}): "
         + ", ".join(
-            f"{k} {_fmt_dur(v)}" for k, v in sorted(by_project.items(), key=lambda x: -x[1])
+            f"{k} {_fmt_dur(v)}"
+            for k, v in sorted(by_project.items(), key=lambda x: -x[1])
+            if v >= 60_000
         )
     ]
     rows = fetch_rows(conn, to_ms(start), to_ms(end), project_id=pid, sources=("git", "terminal"))
@@ -491,7 +501,22 @@ def follow_up(q: ParsedQuestion, previous: ParsedQuestion) -> ParsedQuestion:
         q.start, q.end, q.range_label = previous.start, previous.end, previous.range_label
     if q.intent == "search" and not q.terms and previous.intent != "search":
         q.intent = previous.intent
+        q.target = q.target or previous.target  # "and yesterday?" after "how long on youtube?"
     return q
+
+
+def _direct(conn: sqlite3.Connection, q: ParsedQuestion, now: datetime) -> usage.Direct | None:
+    """Questions answered by adding up what was captured, without the model (context/usage.py):
+    time on a site or app, pages on a site, and how long you worked on a project."""
+    if q.intent == "usage" and q.target is not None:
+        if q.target.kind == "site":
+            return usage.site_usage(conn, q, now)
+        return usage.app_usage(conn, q, now)
+    if q.intent == "visits" and q.target is not None:
+        return usage.site_visits(conn, q, now)
+    if q.project is not None and usage.USAGE_Q.search(q.text.lower()):
+        return usage.project_usage(conn, q, now)
+    return None
 
 
 def ask(
@@ -507,6 +532,13 @@ def ask(
     q = parse_question(question, load_projects(conn), now)
     if previous is not None:
         q = follow_up(q, previous)
+    q = usage.classify(conn, q, now)
+    direct = _direct(conn, q, now)
+    if direct is not None:
+        g = Gathered(EvidencePack(direct.lines), direct.facts, scope=direct.scope)
+        if not direct.sentences:
+            return Answer(q, "no_data", [(f"{NO_DATA} I looked for {g.scope}.", [])], "high", g)
+        return Answer(q, "facts", direct.sentences, "high", g)
     g = gather(conn, provider, q, now)
     g.facts += memory.prompt_lines(conn)
     if not g.pack:
