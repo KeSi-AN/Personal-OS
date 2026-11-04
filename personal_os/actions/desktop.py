@@ -39,6 +39,8 @@ class Desktop(Protocol):
     def windows(self, title_part: str) -> list[WindowInfo]: ...
     def set_window(self, handle: int, action: str) -> None: ...
     def recycle(self, path: Path) -> None: ...
+    def get_brightness(self) -> int | None: ...
+    def set_brightness(self, percent: int) -> None: ...
 
 
 @dataclass
@@ -48,6 +50,14 @@ class FakeDesktop:
     calls: list[tuple[str, object]] = field(default_factory=list)
     clipboard: str | None = "before"
     open_windows: list[WindowInfo] = field(default_factory=list)
+    brightness: int | None = 50
+
+    def get_brightness(self) -> int | None:
+        return self.brightness
+
+    def set_brightness(self, percent: int) -> None:
+        self.calls.append(("set_brightness", percent))
+        self.brightness = percent
 
     def open_path(self, path: Path) -> None:
         self.calls.append(("open_path", str(path)))
@@ -167,6 +177,37 @@ class WindowsDesktop:  # pragma: no cover - exercised by the live tests and the 
         from personal_os.platform import windows as w
 
         w.recycle(path)
+
+    def _powershell(self, script: str) -> str:
+        out = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if out.returncode != 0:
+            from personal_os.actions.base import ActionError
+
+            raise ActionError("this screen's brightness can't be set from Windows")
+        return out.stdout.strip()
+
+    def get_brightness(self) -> int | None:
+        try:
+            value = self._powershell(
+                "(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness)"
+                ".CurrentBrightness"
+            )
+            return int(value.splitlines()[0]) if value else None
+        except Exception:
+            return None
+
+    def set_brightness(self, percent: int) -> None:
+        self._powershell(
+            "Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods | "
+            "Invoke-CimMethod -MethodName WmiSetBrightness "
+            f"-Arguments @{{Timeout=1; Brightness={int(percent)}}} | Out-Null"
+        )
 
 
 def default_desktop() -> Desktop:

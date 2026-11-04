@@ -78,6 +78,7 @@ class Tool:
     reversible: ClassVar[bool] = False
     network: ClassVar[bool] = False  # can send data off the machine (exfiltration guard)
     internal: ClassVar[bool] = False  # only used as an undo step; never offered to the planner
+    cues: ClassVar[tuple[str, ...]] = ()  # if set, a planned call needs one in the request
     args_model: ClassVar[type[Args]]
 
     def preview(self, args: Any, ctx: ToolContext) -> str:

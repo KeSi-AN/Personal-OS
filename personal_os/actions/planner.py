@@ -121,6 +121,12 @@ def run_request(
             ):  # "C:\Users\me\notes" written into JSON unescaped turns \n into a newline
                 problems.append(f"{call.tool}: a path got mangled; write it with forward slashes")
                 continue
+            if tool.cues and not any(c in request.lower() for c in tool.cues):
+                problems.append(
+                    f"{tool.name} is only for requests about {'/'.join(tool.cues)}, and this "
+                    "request isn't: pick the tool that matches what was asked"
+                )
+                continue
             try:
                 tool.args_model.model_validate(call.args)
             except ValidationError as exc:

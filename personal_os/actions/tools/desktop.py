@@ -162,7 +162,7 @@ INVERSE = {"play_pause": "play_pause", "next": "previous", "previous": "next", "
 
 class Media(Tool):
     name = "media"
-    summary = "media keys: play_pause, next, previous, mute, volume_up, volume_down"
+    summary = "music and sound: play/pause, next or previous track, mute, sound volume up/down"
     tier = Tier.LOW
     reversible = True
     args_model = MediaArgs

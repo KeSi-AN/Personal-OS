@@ -29,8 +29,14 @@ from personal_os.core.clock import Clock, to_ms
 from personal_os.core.ids import uuid7
 from personal_os.llm.provider import LLMProvider
 
-Status = Literal["succeeded", "failed", "blocked", "declined", "cancelled", "invalid", "dry_run"]
+Status = Literal[
+    "succeeded", "failed", "blocked", "declined", "cancelled", "invalid", "dry_run", "pending"
+]
 EXFIL_RUN = 40  # chars of earlier-read text that may not reappear in a network call
+
+
+class Deferred(Exception):
+    """Raised by a confirmer that asks elsewhere (the dashboard): the action waits for approval."""
 
 
 class Cancelled(Exception):
@@ -170,7 +176,12 @@ class Executor:
             prompt = self._prompt(
                 tool.name, int(tool.tier), origin, tainted, preview, decision.reason
             )
-            if not self.confirmer(prompt):
+            try:
+                approved = self.confirmer(prompt)
+            except Deferred:
+                log("declined", "waiting for your approval in the dashboard")
+                return Outcome(aid, tool.name, "pending", decision.reason, preview)
+            if not approved:
                 log("declined", decision.reason)
                 return Outcome(aid, tool.name, "declined", "you declined", preview)
             log("confirmed", decision.reason)

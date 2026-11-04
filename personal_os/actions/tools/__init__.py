@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from personal_os.actions.base import Registry
-from personal_os.actions.tools import commands, desktop, files, read
+from personal_os.actions.tools import commands, desktop, files, notify, read
 
 
 def build_registry() -> Registry:
@@ -22,6 +22,9 @@ def build_registry() -> Registry:
             desktop.Screenshot(),
             desktop.Window(),
             desktop.RemoveCreated(),
+            notify.SetReminder(),
+            notify.CancelReminder(),
+            notify.SetBrightness(),
             files.CreateFile(),
             files.EditFile(),
             files.RestoreFile(),
