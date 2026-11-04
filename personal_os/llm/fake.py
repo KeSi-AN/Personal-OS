@@ -38,6 +38,8 @@ class FakeProvider:
         *,
         think: bool = False,
         validate: Callable[[T], None] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> T:
         if not self.available or self.responder is None:
             raise LLMUnavailable("fake provider has no responder")

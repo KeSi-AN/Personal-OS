@@ -45,6 +45,8 @@ class LLMProvider(Protocol):
         *,
         think: bool = False,
         validate: Callable[[T], None] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> T:
         """Structured output: the reply must parse as `schema`, then pass `validate` (which
         raises ValueError with a reason). One retry shows the model what was wrong."""

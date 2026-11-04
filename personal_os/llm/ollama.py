@@ -89,6 +89,8 @@ class OllamaProvider:
         *,
         think: bool = False,
         validate: Callable[[T], None] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> T:
         messages: list[dict[str, str]] = [
             {"role": "system", "content": system},
@@ -108,8 +110,12 @@ class OllamaProvider:
                 "format": schema.model_json_schema(),
                 "keep_alive": self.cfg.keep_alive,
                 "options": self._options(
-                    gpu=True, num_ctx=self.cfg.num_ctx, temperature=0.6 if think else 0.2
-                ),
+                    gpu=True,
+                    num_ctx=self.cfg.num_ctx,
+                    temperature=temperature if temperature is not None else (0.6 if think else 0.2),
+                )
+                # A cap on output: a small model can loop forever (seen at temperature 0).
+                | {"num_predict": max_tokens or (4096 if think else 1024)},
             }
             reply = self._with_gpu_fallback("/api/chat", body)
             stats["prompt_tokens"] += int(reply.get("prompt_eval_count") or 0)
