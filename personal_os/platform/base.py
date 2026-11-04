@@ -6,7 +6,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-SessionSignal = Literal["lock", "unlock", "logon", "logoff", "sleep", "wake", "hotkey"]
+SessionSignal = Literal[
+    "lock", "unlock", "logon", "logoff", "sleep", "wake", "hotkey", "kill_hotkey"
+]
 
 
 class NotSupportedError(RuntimeError):
