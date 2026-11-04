@@ -108,6 +108,7 @@ class LLMConfig(_Section):
 
 class LanConfig(_Section):
     enabled: bool = False
+    port: int = Field(47822, ge=1024, le=65535)
 
 
 class ApiConfig(_Section):

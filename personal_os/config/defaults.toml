@@ -122,6 +122,7 @@ port = 47821
 
 [api.lan]
 enabled = false            # phone access (phase 6): HTTPS + per-device pairing
+port = 47822
 
 [actions]
 auto_allow_tiers = [0, 1]  # only for requests you make directly; see DESIGN.md section 6.3

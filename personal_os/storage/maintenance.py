@@ -63,6 +63,14 @@ def forget(
             )
         ]
         forget_window(conn, params["start"], params["end"])
+        # Rollups are made from what's forgotten; facts and reminders you gave in the window go.
+        conn.execute("DELETE FROM rollups WHERE ts_start < :end AND ts_end >= :start", params)
+        conn.execute(
+            "DELETE FROM memory_facts WHERE created_at >= :start AND created_at < :end", params
+        )
+        conn.execute(
+            "DELETE FROM reminders WHERE created_at >= :start AND created_at < :end", params
+        )
         if marker:
             event = Event.point(
                 MetaEvent(kind="meta.forget", range_start=start, range_end=end),
@@ -192,6 +200,10 @@ def inspect(conn: sqlite3.Connection, db_path: Path | None) -> Inspection:
             "summaries",
             "embeddings",
             "action_audit",
+            "memory_facts",
+            "reminders",
+            "rollups",
+            "devices",
             "counters",
             "kv_settings",
         )
