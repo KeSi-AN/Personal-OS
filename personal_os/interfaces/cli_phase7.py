@@ -31,12 +31,31 @@ app.add_typer(plugins_app, name="plugins")
 @voice_app.command("on")
 def voice_on() -> None:
     """Turn voice on (push-to-talk Ctrl+Alt+Shift+V); the daemon starts it within 30 s."""
+    from personal_os.voice.main import status as voice_proc_status
     from personal_os.voice.stt import Transcriber
 
     cfg = set_value("voice.enabled", True, _state.home)
     if not Transcriber(cfg.data_dir, cfg.voice.stt_model).available:
         typer.echo("Note: the speech model isn't downloaded yet; run `personal-os voice setup`.")
-    typer.echo("Voice on. Press Ctrl+Alt+Shift+V, wait for the beep, and speak.")
+    if not runtime.daemon_info(cfg.runtime_dir).running:
+        typer.echo("Voice on, but the daemon isn't running: `personal-os daemon start` starts it.")
+        return
+    typer.echo("Voice on. Starting it (up to 30 s)...", nl=False)
+    deadline = time.monotonic() + 45
+    state: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        state = voice_proc_status(cfg.runtime_dir)
+        if state.get("running") and state.get("state") == "ready":
+            break
+        time.sleep(1)
+        typer.echo(".", nl=False)
+    typer.echo("")
+    if state.get("error"):
+        typer.echo(f"Problem: {state['error']}.")
+    elif state.get("running"):
+        typer.echo("Ready. Press Ctrl+Alt+Shift+V, wait for the beep, and speak.")
+    else:
+        typer.echo("It hasn't started yet. Check `personal-os voice status` in a minute.")
 
 
 @voice_app.command("off")
@@ -108,9 +127,15 @@ def voice_status() -> None:
     if running.get("error"):
         typer.echo(f"problem      {running['error']}")
     if v.enabled and not running.get("running"):
-        typer.echo(
-            "problem      the voice process isn't running: is the daemon running? (personal-os status)"
-        )
+        if runtime.daemon_info(cfg.runtime_dir).running:
+            typer.echo(
+                "note         starting: the daemon starts voice within 30 s of turning it on"
+            )
+        else:
+            typer.echo(
+                "problem      the daemon isn't running, so voice can't: personal-os daemon start"
+            )
+    typer.echo(f"mic floor    {v.mic_floor} (`personal-os voice mic` shows your speech level)")
     typer.echo(f"windows voice {v.windows_voice}")
 
 
@@ -134,6 +159,54 @@ def voice_log(last: Annotated[int, typer.Option(help="How many exchanges.")] = 1
             typer.echo(f"          reply: {x['reply'][:200]}")
         if x.get("error"):
             typer.echo(f"          ERROR: {x['error']}")
+
+
+@voice_app.command("mic")
+def voice_mic() -> None:
+    """Test the microphone: say a sentence after the beep; shows your level and what was heard."""
+    import numpy as np
+    import sounddevice as sd
+
+    from personal_os.voice.audio import CALIBRATE_BLOCKS, record_utterance, threshold
+    from personal_os.voice.stt import Transcriber
+    from personal_os.voice.tts import beep
+
+    cfg = _config()
+    floor = cfg.voice.mic_floor
+    try:
+        device = sd.query_devices(kind="input")
+    except Exception as exc:
+        typer.echo(f"No microphone found: {exc}")
+        raise typer.Exit(1) from None
+    typer.echo(f"microphone   {device['name']}")
+    typer.echo("After the beep, say a sentence, e.g. 'what did I do today'.")
+    beep()
+    levels: list[float] = []
+    audio = record_utterance(floor=floor, levels=levels)
+    if not levels:
+        typer.echo("No sound came in at all: check Windows Settings > Privacy > Microphone.")
+        raise typer.Exit(1)
+    noise = float(np.median(levels[:CALIBRATE_BLOCKS]))
+    loudest = max(levels[CALIBRATE_BLOCKS:] or levels)
+    need = threshold(noise, floor)
+    typer.echo(f"background   {noise:.4f}")
+    typer.echo(f"your voice   {loudest:.4f}  (counts as speech above {need:.4f})")
+    if audio is None:
+        typer.echo("Heard: nothing. Your voice didn't get above the speech level.")
+        if loudest > noise * 1.5:
+            suggest = round(max(loudest / 2, noise * 2, 0.0003), 4)
+            typer.echo(
+                f"Try a lower floor: personal-os config set voice.mic_floor {suggest}, "
+                "or raise the mic's input volume (Settings > System > Sound > Input)."
+            )
+        else:
+            typer.echo("The level barely moved: is the right mic the default input, and unmuted?")
+        return
+    stt = Transcriber(cfg.data_dir, cfg.voice.stt_model)
+    if not stt.available:
+        typer.echo("Speech was detected, but the speech model isn't downloaded: voice setup.")
+        return
+    typer.echo(f"Heard: {stt.transcribe(audio) or '(speech, but no words recognised)'}")
 
 
 @voice_app.command("voices")

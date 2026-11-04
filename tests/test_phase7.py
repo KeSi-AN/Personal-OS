@@ -50,10 +50,80 @@ def w(home: Path, config: Config) -> World:
         ("what's the weather like", "ask"),
         ("stop", "stop"),
         ("Hey Donna, cancel.", "stop"),
+        ("Can you open brave?", "do"),
+        ("could you please take a screenshot", "do"),
+        ("I want you to mute the sound", "do"),
+        ("can you tell me what I did today?", "ask"),
+        ("Hello.", "chat"),
+        ("Thank you.", "chat"),
     ],
 )
 def test_route(text: str, kind: str):
     assert route(text) == kind
+
+
+@pytest.mark.parametrize(
+    ("text", "cut_off"),
+    [
+        ("Can you open?", True),
+        ("Can you open the-", True),
+        ("Can you?", True),
+        ("open the", True),
+        ("Can you open brave?", False),
+        ("mute", False),
+        ("Hello.", False),
+        ("what did I do today?", False),
+    ],
+)
+def test_incomplete_requests_are_noticed(text: str, cut_off: bool):
+    from personal_os.context.route import incomplete
+
+    assert incomplete(text) is cut_off
+
+
+def test_spoken_replies_are_short():
+    from personal_os.voice.main import spoken
+
+    long = "One. Two. Three. Four."
+    assert spoken(long) == "One. Two. The rest is on the dashboard."
+    assert spoken("Just one.") == "Just one."
+    listing = "You watched 5 videos:\n- 18:47 'A' (15m)\n- 19:18 'B'\n- 19:21 'C'\n- 19:28 'D'"
+    assert spoken(listing) == (
+        "You watched 5 videos: 18:47 'A' (15m); 19:18 'B'; 19:21 'C'. "
+        "There's more on the dashboard."
+    )
+
+
+def test_presses_while_busy_interrupt_and_never_pile_up(home: Path, config: Config):
+    v = Voice(Env(home, config).config)
+    v.state = "ready"
+    v.pressed("hotkey")
+    v.pressed("hotkey")
+    assert v.triggers.qsize() == 1 and not v.interrupt.is_set()
+    v.triggers.get_nowait()
+    v.state = "listening"
+    v.pressed("hotkey")
+    assert v.triggers.empty()  # already listening: ignored
+    v.state = "speaking"
+    v.pressed("hotkey")
+    assert v.interrupt.is_set() and v.triggers.qsize() == 1  # cut short, listen again
+
+
+def test_greetings_get_a_short_reply_not_an_answer(home: Path, config: Config):
+    env = Env(home, config)
+    v, _h = voice_for(env)
+    assert v.handle("Hello.") == "Hi. Ask me what you did, or tell me to open something."
+    assert v.handle("Thank you.") == "You're welcome."
+
+
+def test_the_beep_is_a_playable_wav():
+    import io
+    import wave
+
+    from personal_os.voice.tts import BEEP
+
+    with wave.open(io.BytesIO(BEEP), "rb") as w:
+        assert w.getnchannels() == 1 and 0.1 < w.getnframes() / w.getframerate() < 0.3
 
 
 def test_strip_wake_and_speakable():

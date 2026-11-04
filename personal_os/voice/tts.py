@@ -7,13 +7,18 @@ stopped ("stop") the same way whichever voice spoke.
 from __future__ import annotations
 
 import base64
+import io
 import json
+import math
 import os
 import re
+import struct
 import subprocess
 import tempfile
+import threading
 import urllib.error
 import urllib.request
+import wave
 from pathlib import Path
 from typing import Protocol
 
@@ -147,14 +152,12 @@ class PiperVoice:
         if model is None:
             raise TTSError("no Piper voice in " + str(self.voice_dir))
         try:
-            import wave
-
             from piper import PiperVoice as _Piper  # type: ignore[import-not-found,unused-ignore]
         except ImportError:
             raise TTSError("the piper package isn't installed") from None
         voice = _Piper.load(str(model))
-        with wave.open(str(out), "wb") as w:
-            voice.synthesize_wav(text, w)
+        with wave.open(str(out), "wb") as wav:
+            voice.synthesize_wav(text, wav)
 
 
 def voices(cfg: VoiceConfig, data_dir: Path) -> list[Voice]:
@@ -188,26 +191,68 @@ class Speaker:
                 _log.warning("voice unavailable", extra={"fields": {"voice": voice.name}})
         raise TTSError("; ".join(errors))
 
-    def say(self, text: str, *, wait: bool = True) -> str | None:
+    def say(
+        self, text: str, *, wait: bool = True, interrupt: threading.Event | None = None
+    ) -> str | None:
         if not text.strip():
             return None
         out = Path(tempfile.gettempdir()) / f"pos-say-{os.getpid()}.wav"
         used = self.synthesize(text, out)
-        play(out, wait=wait)
+        if interrupt is not None and interrupt.is_set():
+            return used  # cut off while the speech was being made
+        play(out, wait=wait, interrupt=interrupt)
         return used
 
 
-def play(path: Path, *, wait: bool = True) -> None:
+def play(path: Path, *, wait: bool = True, interrupt: threading.Event | None = None) -> bool:
+    """Play a WAV. With `interrupt`, playback stops as soon as it's set; returns False then."""
     import winsound
 
-    flags = winsound.SND_FILENAME | (0 if wait else winsound.SND_ASYNC)
-    winsound.PlaySound(str(path), flags)
+    if interrupt is None:
+        winsound.PlaySound(str(path), winsound.SND_FILENAME | (0 if wait else winsound.SND_ASYNC))
+        return True
+    with wave.open(str(path), "rb") as w:
+        seconds = w.getnframes() / float(w.getframerate() or 1)
+    winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_ASYNC)
+    if interrupt.wait(seconds + 0.2):
+        stop()
+        return False
+    return True
 
 
 def stop() -> None:
     import winsound
 
-    winsound.PlaySound(None, winsound.SND_PURGE)
+    winsound.PlaySound(None, 0)  # stops an async sound (SND_PURGE does nothing on Windows 10+)
+
+
+def _tone(freq: float, ms: int, rate: int = 22_050, volume: float = 0.45) -> bytes:
+    """A short sine tone as WAV bytes, faded in and out so it doesn't click."""
+    n = rate * ms // 1000
+    fade = max(1, rate // 200)
+    frames = bytearray()
+    for i in range(n):
+        env = min(1.0, i / fade, (n - i) / fade)
+        sample = int(32767 * volume * env * math.sin(2 * math.pi * freq * i / rate))
+        frames += struct.pack("<h", sample)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(bytes(frames))
+    return buf.getvalue()
+
+
+BEEP = _tone(880, 150)
+
+
+def beep() -> None:
+    """The "I'm listening" sound, through the speakers. (winsound.Beep uses the old PC-speaker
+    path, which many laptop audio drivers play silently.)"""
+    import winsound
+
+    winsound.PlaySound(BEEP, winsound.SND_MEMORY)
 
 
 def windows_voices() -> list[tuple[str, str]]:

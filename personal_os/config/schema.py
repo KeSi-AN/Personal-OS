@@ -112,6 +112,8 @@ class VoiceConfig(_Section):
     stt_model: str = "small.en"
     wake_word_enabled: bool = False  # needs a trained model in voice/wakewords/ (docs/VOICE.md)
     wake_threshold: float = Field(0.5, gt=0, lt=1)
+    # Quietest sound level (RMS) that counts as speech; `personal-os voice mic` shows yours.
+    mic_floor: float = Field(0.002, gt=0, lt=0.5)
     tts: Literal["windows", "piper", "speechify"] = "windows"
     windows_voice: str = "Microsoft Zira Desktop"  # female, US English; or Hazel (UK)
     speechify_voice: str = "geffen_32"

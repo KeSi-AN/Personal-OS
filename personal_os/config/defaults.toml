@@ -164,6 +164,7 @@ enabled = false            # push-to-talk Ctrl+Alt+Shift+V; runs in its own proc
 stt_model = "small.en"     # faster-whisper, on the CPU
 wake_word_enabled = false  # "hey Donna": needs a trained model in voice/wakewords/ (docs/VOICE.md)
 wake_threshold = 0.5
+mic_floor = 0.002          # quietest level counted as speech; `personal-os voice mic` shows yours
 tts = "windows"            # windows (built in) | piper (local) | speechify (cloud: spoken text is sent)
 windows_voice = "Microsoft Zira Desktop"   # `personal-os voice voices` lists them; Hazel is UK English
 speechify_voice = "geffen_32"

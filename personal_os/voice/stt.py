@@ -13,6 +13,19 @@ SAMPLE_RATE = 16_000
 IDLE_UNLOAD_S = 600
 
 
+MAX_GAIN = 30.0
+
+
+def normalize(audio: np.ndarray) -> np.ndarray:
+    """Quiet recordings (laptop mic arrays) raised to a normal level, at most 30x, so the
+    speech filter and the model don't take quiet speech for silence. Loud audio is unchanged."""
+    out = audio.astype(np.float32)
+    peak = float(np.max(np.abs(out))) if out.size else 0.0
+    if 0 < peak < 0.5:
+        out = out * min(0.9 / peak, MAX_GAIN)
+    return out
+
+
 def model_dir(data_dir: Path, name: str) -> Path:
     return data_dir / "models" / f"whisper-{name}"
 
@@ -45,7 +58,7 @@ class Transcriber:
                 self._model = self._load()
             self._last_used = time.monotonic()
             segments, _info = self._model.transcribe(
-                audio.astype(np.float32),
+                normalize(audio),
                 language="en",
                 beam_size=1,
                 vad_filter=True,

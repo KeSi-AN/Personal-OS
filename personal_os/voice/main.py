@@ -55,12 +55,17 @@ class Voice:
         self.wake: Any = None
         self.wake_thread: threading.Thread | None = None
         self.stop = threading.Event()
+        self.hotkey_error: str | None = None  # kept, so "ready" writes don't hide it
+        self.state = "starting"
+        # Set by a hotkey press while thinking or speaking: stop talking, listen again.
+        self.interrupt = threading.Event()
 
     # --- status ---------------------------------------------------------------------------
 
     def write_status(self, state: str, **extra: Any) -> None:
         from personal_os.voice.wake import wake_models
 
+        self.state = state
         data = {
             "state": state,
             "pid": __import__("os").getpid(),
@@ -69,26 +74,42 @@ class Voice:
             "tts": self.cfg.voice.tts,
             "last_voice": self.speaker.last_voice,
             "stt_ready": self.stt.available,
+            **({"error": self.hotkey_error} if self.hotkey_error else {}),
             **extra,
         }
         runtime.write_json_atomic(self.cfg.runtime_dir / STATUS, data)
 
     # --- listening ------------------------------------------------------------------------------
 
-    def hotkey_loop(self) -> None:
+    def hotkey_loop(self, registered: threading.Event) -> None:
         user32 = ctypes.WinDLL("user32", use_last_error=True)
-        if not user32.RegisterHotKey(
+        ok = user32.RegisterHotKey(
             None, PTT_ID, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, VK_V
-        ):
-            self.write_status("error", error="Ctrl+Alt+Shift+V is taken by another app")
+        )
+        if not ok:
+            self.hotkey_error = "Ctrl+Alt+Shift+V is taken by another app"
+            _log.warning("push-to-talk hotkey taken")
+        registered.set()
+        if not ok:
             return
         msg = wintypes.MSG()
         try:
             while not self.stop.is_set() and user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
                 if msg.message == WM_HOTKEY and msg.wParam == PTT_ID:
-                    self.triggers.put("hotkey")
+                    self.pressed("hotkey")
         finally:
             user32.UnregisterHotKey(None, PTT_ID)
+
+    def pressed(self, trigger: str) -> None:
+        """A press (or the wake word). While listening it's ignored (you're already being
+        heard). While thinking or speaking it cuts the reply short and starts a new listen.
+        At most one press waits, so presses never pile up and fire later."""
+        if self.state == "listening":
+            return
+        if self.state in ("thinking", "speaking"):
+            self.interrupt.set()
+        if self.triggers.empty():
+            self.triggers.put(trigger)
 
     def sync_wake(self) -> None:
         """Start or stop the wake-word listener to match the (re-read) config."""
@@ -100,7 +121,7 @@ class Voice:
             self.wake = WakeListener(
                 wake_models(self.cfg.data_dir),
                 self.cfg.voice.wake_threshold,
-                lambda: self.triggers.put("wake"),
+                lambda: self.pressed("wake"),
             )
             self.wake_thread = threading.Thread(target=self._run_wake, name="pos-wake", daemon=True)
             self.wake_thread.start()
@@ -120,7 +141,7 @@ class Voice:
         if self.wake is not None:
             self.wake.paused.set()
         try:
-            audio = record_utterance(self.stop.is_set)
+            audio = record_utterance(self.stop.is_set, floor=self.cfg.voice.mic_floor)
         finally:
             if self.wake is not None:
                 self.wake.paused.clear()
@@ -137,13 +158,21 @@ class Voice:
             names = [p.id for p in load_projects(conn) if p.id != "none"][:30]
         finally:
             conn.close()
-        return "Donna. Projects: " + ", ".join(names) + "."
+        # App names bias recognition too: "open brave", not "open the braid".
+        apps = [a.replace("_", " ") for a in self.cfg.actions.apps][:20]
+        return (
+            "Donna. Open "
+            + ", ".join(apps)
+            + ", YouTube, GitHub. Projects: "
+            + ", ".join(names)
+            + "."
+        )
 
     # --- handling --------------------------------------------------------------------------------
 
     def say(self, text: str) -> None:
         try:
-            self.speaker.say(text)
+            self.speaker.say(text, interrupt=self.interrupt)
         except tts.TTSError:
             _log.warning("no voice could speak")
 
@@ -164,7 +193,7 @@ class Voice:
         return ok
 
     def handle(self, text: str) -> str:
-        from personal_os.context.route import evening, route, strip_wake
+        from personal_os.context.route import chat_reply, evening, route, strip_polite, strip_wake
         from personal_os.storage.db import open_db
 
         kind = route(text)
@@ -172,6 +201,10 @@ class Voice:
         if kind == "stop":
             tts.stop()
             return ""
+        if kind == "chat":
+            return chat_reply(text)
+        if kind == "do":
+            request = strip_polite(request)
         conn = open_db(self.cfg.db_path)
         try:
             if kind == "briefing":
@@ -256,9 +289,14 @@ class Voice:
     # --- main loop ---------------------------------------------------------------------------
 
     def run(self) -> None:
-        threading.Thread(target=self.hotkey_loop, name="pos-ptt", daemon=True).start()
+        registered = threading.Event()
+        threading.Thread(
+            target=self.hotkey_loop, args=(registered,), name="pos-ptt", daemon=True
+        ).start()
+        registered.wait(5)  # "ready" only once the hotkey is (or failed to be) registered
         self.sync_wake()
         self.write_status("ready")
+        _log.info("voice ready", extra={"fields": {"hotkey": self.hotkey_error is None}})
         last_reload = time.monotonic()
         while not self.stop.is_set():
             try:
@@ -273,23 +311,28 @@ class Voice:
                     self.stt.unload_if_idle()
                     self.write_status("ready")
                 continue
+            while not self.triggers.empty():  # presses made while busy count once
+                self.triggers.get_nowait()
             self.respond(trigger)
 
     def respond(self, trigger: str) -> None:
-        import winsound
-
-        from personal_os.context.route import route
+        from personal_os.context.route import incomplete, route
 
         entry: dict[str, Any] = {"at": self.clock.now().isoformat(), "trigger": trigger}
         t0 = time.monotonic()
+        self.interrupt.clear()
         self.write_status("listening", trigger=trigger)
-        winsound.Beep(880, 120)
         try:
+            tts.beep()
             text = self.listen()
             entry["heard"] = text
             entry["listen_s"] = round(time.monotonic() - t0, 1)
             if not text:
                 entry["route"] = "nothing heard"
+                return
+            if incomplete(text):
+                entry["route"] = "incomplete"
+                self.say(f"Sorry, I only caught: {text.rstrip('-. ')}. Please say it again.")
                 return
             entry["route"] = route(text)
             self.write_status("thinking", heard=text)
@@ -297,11 +340,16 @@ class Voice:
             reply = self.handle(text)
             entry["reply"] = reply
             entry["handle_s"] = round(time.monotonic() - t1, 1)
+            if self.interrupt.is_set():
+                entry["route"] = f"{entry['route']} (interrupted)"
+                return
             if reply:
                 self.write_status("speaking")
                 t2 = time.monotonic()
-                self.say(reply)
+                self.say(spoken(reply))
                 entry["speak_s"] = round(time.monotonic() - t2, 1)
+                if self.interrupt.is_set():
+                    entry["route"] = f"{entry['route']} (interrupted)"
         except Exception as exc:  # never let one request kill the voice process
             entry["error"] = f"{type(exc).__name__}: {exc}"[:300]
             _log.warning("voice request failed", extra={"fields": {"exc_type": type(exc).__name__}})
@@ -320,6 +368,23 @@ class Voice:
                 },
             )
             self.write_status("ready")
+
+
+SPOKEN_SENTENCES = 2
+
+
+def spoken(reply: str) -> str:
+    """What's said out loud: the first two sentences (or a list's heading and first items),
+    pointing to the dashboard for the rest. The full answer is still saved for the dashboard."""
+    lines = [ln.strip() for ln in reply.splitlines() if ln.strip()]
+    if len(lines) > 1:  # a list: heading plus the first three items
+        items = [ln.lstrip("- ").strip() for ln in lines[1:4]]
+        more = " There's more on the dashboard." if len(lines) > 4 else ""
+        return lines[0] + " " + "; ".join(items) + "." + more
+    parts = re.split(r"(?<=[.!?])\s+", reply.strip())
+    if len(parts) <= SPOKEN_SENTENCES:
+        return reply
+    return " ".join(parts[:SPOKEN_SENTENCES]) + " The rest is on the dashboard."
 
 
 HISTORY = "voice_history.jsonl"
