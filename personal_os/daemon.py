@@ -12,6 +12,7 @@ import contextlib
 import os
 import sqlite3
 import sys
+import threading
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
@@ -514,7 +515,9 @@ class Daemon:
         finally:
             conn.close()
         _log.info("briefing delivered", extra={"fields": {"kind": kind}})
-        if self.tray is not None:
+        from personal_os.interfaces.notify import toast
+
+        if not toast(b.title, " ".join(b.lines)) and self.tray is not None:
             self.tray.notify(" ".join(b.lines)[:240], b.title)
         if cfg.voice.enabled and cfg.briefings.speak:
             from personal_os.voice.tts import Speaker, TTSError
@@ -525,14 +528,25 @@ class Daemon:
     def _fire_reminders(self) -> None:
         from personal_os.actions import reminders
 
-        for r in reminders.take_due(self.control_conn, self.clock):
-            _log.info("reminder fired")
-            if self.tray is not None:
-                self.tray.notify(r.text, "Reminder")
-            elif sys.platform == "win32":
-                import winsound
+        due = reminders.take_due(self.control_conn, self.clock)
+        if due:
+            threading.Thread(target=self._announce_reminders, args=(due,), daemon=True).start()
 
-                winsound.MessageBeep(winsound.MB_ICONASTERISK)
+    def _announce_reminders(self, due: list[Any]) -> None:
+        """A Windows notification for each (tray balloon if that fails); spoken if voice is on."""
+        from personal_os.interfaces.notify import toast
+
+        cfg = self._fresh_config()
+        for r in due:
+            shown = toast("Reminder", r.text, reminder=True)
+            if not shown and self.tray is not None:
+                self.tray.notify(r.text, "Reminder")
+            _log.info("reminder fired", extra={"fields": {"shown": shown}})
+            if cfg.voice.enabled:
+                from personal_os.voice.tts import Speaker, TTSError
+
+                with contextlib.suppress(TTSError):
+                    Speaker(cfg.voice, cfg.data_dir).say(f"Reminder: {r.text}")
 
     def engage_kill_switch(self) -> None:
         """Global hotkey (Ctrl+Alt+Shift+K): actions go observe-only and running ones stop."""

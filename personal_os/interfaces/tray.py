@@ -92,7 +92,9 @@ class Tray:
                 ),
                 pystray.Menu.SEPARATOR,
                 item("Restart capture", self._wrap(actions.restart)),
-                item("Stop capture", self._wrap(actions.stop)),
+                item(
+                    "Stop capture and voice (until you start them again)", self._wrap(actions.stop)
+                ),
             ),
         )
         self._thread: threading.Thread | None = None
