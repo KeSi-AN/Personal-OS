@@ -30,11 +30,13 @@ class SessionObserver(BaseObserver):
         state: SessionState,
         *,
         on_hotkey: Callable[[], None] | None = None,
+        on_kill: Callable[[], None] | None = None,
     ) -> None:
         super().__init__()
         self.watcher = watcher
         self.state = state
         self.on_hotkey = on_hotkey
+        self.on_kill = on_kill
         self._stopped = asyncio.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -59,6 +61,10 @@ class SessionObserver(BaseObserver):
         if signal == "hotkey":
             if self.on_hotkey is not None:
                 self.on_hotkey()
+            return
+        if signal == "kill_hotkey":
+            if self.on_kill is not None:
+                self.on_kill()
             return
         if signal == "lock":
             self.state.locked = True

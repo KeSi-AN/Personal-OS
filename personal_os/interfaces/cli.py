@@ -280,7 +280,7 @@ def forget_cmd(
     window = f"{start.astimezone().strftime(local)} -> {end.astimezone().strftime(local)}"
     if not yes and not typer.confirm(f"Permanently delete everything captured {window}?"):
         raise typer.Abort()
-    report = maintenance.forget(conn, start, end, clock)
+    report = maintenance.forget(conn, start, end, clock, undo_dir=cfg.data_dir / "undo")
     typer.echo(
         f"Forgot {report.events} events and {report.page_extracts} page extracts ({window})."
     )
@@ -380,9 +380,9 @@ def main() -> None:
 
 # Registers the daemon/doctor/hooks/autostart/config-set and project commands on `app`
 # (they need `app` to exist, so this import comes last).
-from personal_os.interfaces import cli_context, cli_ops, cli_projects  # noqa: E402
+from personal_os.interfaces import cli_actions, cli_context, cli_ops, cli_projects  # noqa: E402
 
-_ = (cli_context, cli_ops, cli_projects)
+_ = (cli_actions, cli_context, cli_ops, cli_projects)
 
 if __name__ == "__main__":
     main()

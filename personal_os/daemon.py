@@ -18,6 +18,7 @@ from typing import Any
 
 import psutil
 
+from personal_os.actions import killswitch
 from personal_os.config.loader import ensure_dirs, load_config
 from personal_os.config.schema import Config
 from personal_os.context.gate import JobGate
@@ -195,7 +196,12 @@ class Daemon:
         window: WindowObserver | None = None
         if self.window_probe and self.session_watcher:
             sup.add(
-                SessionObserver(self.session_watcher, self.session, on_hotkey=self.toggle_pause),
+                SessionObserver(
+                    self.session_watcher,
+                    self.session,
+                    on_hotkey=self.toggle_pause,
+                    on_kill=self.engage_kill_switch,
+                ),
                 enabled=oc.window.enabled,
             )
             window = WindowObserver(self.window_probe, self.session, oc.window, oc.idle)
@@ -321,6 +327,15 @@ class Daemon:
             now_paused = marker.type == "pause"
             winsound.MessageBeep(winsound.MB_OK if now_paused else winsound.MB_ICONASTERISK)
 
+    def engage_kill_switch(self) -> None:
+        """Global hotkey (Ctrl+Alt+Shift+K): actions go observe-only and running ones stop."""
+        killswitch.engage(self.config.runtime_dir, self.clock.now(), "hotkey")
+        _log.info("kill switch engaged", extra={"fields": {"by": "hotkey"}})
+        if sys.platform == "win32":
+            import winsound
+
+            winsound.MessageBeep(winsound.MB_ICONHAND)
+
     async def _sync_forget(self) -> None:
         for rowid, start, end in maintenance.forget_markers_since(
             self.control_conn, self._forget_rowid
@@ -336,7 +351,10 @@ class Daemon:
             # A batch already past the guard may still be writing (e.g. a checkpoint written
             # between the CLI's delete and now): let it finish, then delete once more.
             await self._drain()
-            maintenance.forget(self.control_conn, start, end, self.clock, marker=False)
+            maintenance.forget(
+                self.control_conn, start, end, self.clock, marker=False,
+                undo_dir=self.config.data_dir / "undo",
+            )  # fmt: skip
             _log.info("forget applied", extra={"fields": {"queued_purged": purged}})
 
     def _project_jobs(self, rebuild_sessions_too: bool) -> None:
@@ -405,6 +423,8 @@ class Daemon:
         conn = connect(self.config.db_path)
         try:
             maintenance.purge_expired(conn, self.clock.now())
+            keep = timedelta(days=self.config.actions.undo_keep_days)
+            maintenance.purge_undo(self.config.data_dir / "undo", self.clock.now() - keep)
         finally:
             conn.close()
 
