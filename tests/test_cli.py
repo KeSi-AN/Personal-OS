@@ -18,7 +18,13 @@ def run(*args: str):
 
 def test_cli_status_on_empty_db(home: Path):
     out = run("status")
-    assert "schema        v1" in out and "events        0" in out and "active" in out
+    from personal_os.storage.db import available_migrations
+
+    assert (
+        f"schema        v{len(available_migrations())}" in out
+        and "events        0" in out
+        and "active" in out
+    )
 
 
 def test_cli_pause_resume(home: Path):
@@ -42,6 +48,15 @@ def test_cli_sim_search_inspect_forget(home: Path):
               "--yes", "--db", db)  # fmt: skip
     assert "Forgot" in out
     assert "No matches." in run("search", "refresh token", "--db", db)
+
+
+def test_cli_events_show_project(home: Path):
+    run("sim", "run", str(FIXTURES / "scenarios" / "workday.toml"))
+    db = str(home / "sim.db")
+    assert "  -  " in run("events", "--source", "terminal", "--db", db)  # not resolved yet
+    run("resolve", "--db", db)
+    out = run("events", "--source", "terminal", "--db", db)
+    assert "auth-service" in out
 
 
 def test_cli_sim_refuses_real_db(home: Path):

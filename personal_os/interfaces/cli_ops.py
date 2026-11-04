@@ -6,7 +6,6 @@ import json
 import os
 import subprocess
 import time
-import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -16,6 +15,7 @@ import typer
 
 from personal_os.browser import install as browser_install
 from personal_os.config.loader import set_value
+from personal_os.config.schema import Config
 from personal_os.core import pause as pause_mod
 from personal_os.core import runtime, spawn
 from personal_os.core.clock import SystemClock
@@ -119,13 +119,21 @@ def daemon_stop() -> None:
 # --- doctor --------------------------------------------------------------------------------
 
 
-def _ollama() -> str:
-    try:
-        with urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=1.0) as resp:
-            names = [m.get("name") for m in json.load(resp).get("models", [])]
-        return "reachable (" + ", ".join(n for n in names if n) + ")"
-    except Exception:
-        return "not reachable (not needed until phase 4)"
+def _ollama(cfg: Config) -> tuple[str, str | None]:
+    """(status line, problem or None)."""
+    from personal_os.llm import make_provider
+
+    if not cfg.llm.enabled:
+        return "disabled in config (llm.enabled = false)", None
+    h = make_provider(cfg.llm).health()
+    if not h.reachable:
+        problem = "ollama not running"
+        return "not reachable: `ask` answers from facts only and summaries wait", problem
+    if h.missing:
+        pulls = "; ".join(f"ollama pull {m}" for m in h.missing)
+        return f"reachable, but missing {', '.join(h.missing)} ({pulls})", "llm model missing"
+    loaded = ", ".join(f"{n} {b / 1e9:.1f} GB" for n, b in h.loaded) or "nothing loaded"
+    return f"reachable, {cfg.llm.fast_model} + {cfg.llm.embedding_model} ({loaded})", None
 
 
 @app.command()
@@ -223,7 +231,15 @@ def doctor() -> None:
         reg = "registered" if host.registered else "not registered"
         typer.echo(f"browser    {b:<7} native host {reg}")
     typer.echo(f"autostart  {'enabled' if autostart.is_enabled() else 'disabled'}")
-    typer.echo(f"ollama     {_ollama()}")
+    line, problem = _ollama(cfg)
+    typer.echo(f"ollama     {line}")
+    if problem:
+        problems.append(problem)
+    llm = h.get("llm") or {}
+    if llm:
+        last = f", last run {_ago(llm['last_run'])}" if llm.get("last_run") else ""
+        error = f", error: {llm['error']}" if llm.get("error") else ""
+        typer.echo(f"llm jobs   {llm.get('gate', '?')}{last}{error}")
 
     if problems:
         typer.echo("\nproblems:\n  - " + "\n  - ".join(problems))

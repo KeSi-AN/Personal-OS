@@ -23,6 +23,7 @@ from personal_os.observers.gitutil import (
     detect_op,
     discover_repos,
     norm,
+    normalize_remote,
     parse_log,
     parse_numstat_z,
     parse_status_v2,
@@ -44,6 +45,7 @@ class _RepoState:
     last_activity: float = 0.0
     last_refresh: float = 0.0
     my_email: str | None = None
+    remote: str | None = None
     unreadable: str | None = None
 
 
@@ -155,6 +157,9 @@ class GitObserver(BaseObserver):
         heads: dict[str, str] = self._ctx.state.get(HEADS_KEY, {}) or {}
         previous_head = repo.head or (heads.get(repo.root) if baseline else None)
 
+        if repo.remote is None:
+            out = await r.run(repo.root, "config", "--get", "remote.origin.url", check=False)
+            repo.remote = normalize_remote(out.decode("utf-8", "replace")) or ""
         if repo.my_email is None:
             out = await r.run(repo.root, "config", "user.email", check=False)
             repo.my_email = out.decode("utf-8", "replace").strip().lower()
@@ -210,6 +215,7 @@ class GitObserver(BaseObserver):
             files=files,
             op=op,
             stash_count=status.stash_count,
+            remote=repo.remote or None,
         )
         # Line counts are left out of the change test: they move on every save (the fs observer
         # already reports each edit), while branch/HEAD/which files are dirty is what "state" means.

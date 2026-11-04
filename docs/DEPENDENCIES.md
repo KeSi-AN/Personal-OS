@@ -17,8 +17,8 @@ Transitive packages pulled in by the ones below (for example `rich`, `click` and
 | `pathspec` | 1 | Exact `.gitignore` semantics. Hand-rolled gitignore matching is a known source of bugs. |
 | `fastapi` | 4+ | Local ingest, control, and query API, plus the phase 6 dashboard. Validation through pydantic. |
 | `uvicorn` | 4+ | ASGI server for FastAPI, run inside the daemon's own event loop. |
-| `httpx` | 4 | Async HTTP client for Ollama calls (no need for the `ollama` SDK). The native host no longer needs it (ADR-029). |
-| `sqlite-vec` | 4 | Vector search inside the same SQLite file. No separate vector database. |
+| ~~`httpx`~~ | - | Not needed after all: Ollama is called with the standard library's `urllib` (ADR-043), and the native host doesn't need it either (ADR-029). |
+| ~~`sqlite-vec`~~ | - | Not used: vectors are plain rows searched by brute force, so `forget` can guarantee they're overwritten (ADR-044). |
 | `keyring` | 4+ | DPAPI / OS keychain storage for an optional encryption key (only if encryption is enabled). |
 | `pystray` + `Pillow` | 6 | System tray icon (Pillow is required by pystray for the icon image). |
 

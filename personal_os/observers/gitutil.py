@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -131,6 +132,24 @@ def discover_repos(roots: list[Path], max_depth: int = 4) -> list[str]:
         if root.is_dir():
             walk(root, 0)
     return sorted(set(found))
+
+
+def normalize_remote(url: str) -> str | None:
+    """'git@github.com:Owner/Repo.git' or 'https://user:tok@github.com/Owner/Repo' ->
+    'github.com/owner/repo'. Credentials are dropped; None if it isn't a host/path remote."""
+    url = url.strip()
+    m = re.match(r"^(?:[\w.+-]+@)?([\w.-]+):(?!//)(.+)$", url)  # scp-like: git@host:path
+    if m and "://" not in url:
+        host, path = m.group(1), m.group(2)
+        if len(host) == 1:
+            return None  # "C:/path": a Windows drive letter, i.e. a local remote
+    else:
+        m = re.match(r"^[a-z][a-z0-9+.-]*://(?:[^@/]*@)?([^/:]+)(?::\d+)?/(.+)$", url, re.I)
+        if not m:
+            return None
+        host, path = m.group(1), m.group(2)
+    path = path.strip("/").removesuffix(".git").strip("/")
+    return f"{host.lower()}/{path.lower()}" if path else None
 
 
 # --- runner --------------------------------------------------------------------------------

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from personal_os.actions.audit import forget_window
 from personal_os.core.clock import Clock, to_ms
 from personal_os.core.events import Event, MetaEvent
 from personal_os.storage.db import transaction
@@ -23,7 +24,13 @@ class ForgetReport:
 
 
 def forget(
-    conn: sqlite3.Connection, start: datetime, end: datetime, clock: Clock, *, marker: bool = True
+    conn: sqlite3.Connection,
+    start: datetime,
+    end: datetime,
+    clock: Clock,
+    *,
+    marker: bool = True,
+    undo_dir: Path | None = None,
 ) -> ForgetReport:
     """Delete everything captured that overlaps [start, end), then leave a content-free marker.
 
@@ -44,6 +51,18 @@ def forget(
             params,
         ).fetchone()[0]
         n_events = conn.execute(f"DELETE FROM events WHERE {overlap}", params).rowcount
+        conn.execute("DELETE FROM sessions WHERE ts_start < :end AND ts_end >= :start", params)
+        # Summaries are derived from what's being forgotten; their vectors go with them (trigger).
+        conn.execute("DELETE FROM summaries WHERE ts_start < :end AND ts_end >= :start", params)
+        # Actions: keep who-did-what-when, tombstone the arguments (ADR-011); drop edit backups.
+        edited = [
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT action_id FROM action_audit WHERE ts >= :start AND ts < :end",
+                params,
+            )
+        ]
+        forget_window(conn, params["start"], params["end"])
         if marker:
             event = Event.point(
                 MetaEvent(kind="meta.forget", range_start=start, range_end=end),
@@ -65,7 +84,23 @@ def forget(
                 ),
             )
     checkpoint(conn)
+    if undo_dir is not None:
+        for action_id in edited:
+            (undo_dir / f"{action_id}.orig").unlink(missing_ok=True)
     return ForgetReport(start, end, n_events, int(n_extracts))
+
+
+def purge_undo(undo_dir: Path, older_than: datetime) -> int:
+    """Edit backups older than actions.undo_keep_days (those edits can't be undone any more)."""
+    if not undo_dir.is_dir():
+        return 0
+    cutoff = older_than.timestamp()
+    n = 0
+    for f in undo_dir.glob("*.orig"):
+        if f.stat().st_mtime < cutoff:
+            f.unlink(missing_ok=True)
+            n += 1
+    return n
 
 
 def purge_expired(conn: sqlite3.Connection, now: datetime) -> dict[str, int]:
@@ -148,7 +183,18 @@ class Inspection:
 def inspect(conn: sqlite3.Connection, db_path: Path | None) -> Inspection:
     tables = {
         name: conn.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
-        for name in ("events", "page_extracts", "counters", "kv_settings")
+        for name in (
+            "events",
+            "page_extracts",
+            "projects",
+            "assignment_rules",
+            "sessions",
+            "summaries",
+            "embeddings",
+            "action_audit",
+            "counters",
+            "kv_settings",
+        )
     }
     by_source = [
         (r[0], r[1], r[2], r[3] or 0)

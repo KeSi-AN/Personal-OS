@@ -84,8 +84,26 @@ class LLMConfig(_Section):
     fast_model: str = "qwen3:4b"
     reasoning_model: str = "qwen3:4b"
     embedding_model: str = "qwen3-embedding:0.6b"
+    enabled: bool = True
+    num_ctx: int = Field(8192, ge=2048)
+    gpu_layers: int = Field(99, ge=-1)  # -1 = let Ollama decide (it offloads too few here)
+    embedding_dims: int = Field(512, ge=32, le=1024)
+    timeout_s: float = Field(180, gt=0)
+    keep_alive: str = "2m"
     only_on_ac_power: bool = True
     min_user_idle_s: int = 120
+    skip_when_fullscreen: bool = True
+    summarize_min_active_s: int = Field(300, ge=0)
+
+    @field_validator("base_url")
+    @classmethod
+    def _loopback_only(cls, v: str) -> str:
+        from urllib.parse import urlsplit
+
+        host = urlsplit(v).hostname or ""
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            raise ValueError("llm.base_url must be on this machine (127.0.0.1 or localhost)")
+        return v.rstrip("/")
 
 
 class LanConfig(_Section):
@@ -106,8 +124,22 @@ class ApiConfig(_Section):
         return v
 
 
+class CommandSpec(_Section):
+    argv: list[str] = Field(min_length=1)
+    cwd: str | None = None
+    timeout_s: float | None = Field(None, gt=0)
+
+
 class ActionsConfig(_Section):
     auto_allow_tiers: list[int] = [0, 1]
+    allowed_paths: list[Path] = []
+    confirm_tools: list[str] = []
+    rate_per_minute: int = Field(30, ge=1)
+    tier2_rate_per_minute: int = Field(10, ge=1)
+    command_timeout_s: float = Field(120, gt=0)
+    undo_keep_days: int = Field(7, ge=1)
+    apps: dict[str, list[str]] = {}
+    commands: dict[str, CommandSpec] = {}
 
     @field_validator("auto_allow_tiers")
     @classmethod

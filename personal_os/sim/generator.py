@@ -12,6 +12,7 @@ from pathlib import PurePosixPath
 from urllib.parse import quote_plus, urlsplit
 from uuid import UUID
 
+from personal_os.browser.enrich import classify
 from personal_os.core.clock import SimClock
 from personal_os.core.events import (
     BrowserSignal,
@@ -72,6 +73,10 @@ class Generator:
         self.tz: tzinfo = tz
         self.events: list[Event] = []
         self._focus: _OpenFocus | None = None
+        # Ground-truth project per event id (from step `project` labels), for evaluation.
+        self.labels: dict[UUID, str] = {}
+        self._label: str | None = None
+        self._focus_label: str | None = None
 
     def now(self) -> datetime:
         return self.clock.now().astimezone(self.tz)
@@ -81,6 +86,7 @@ class Generator:
                                observer_version=SIM_VERSION))  # fmt: skip
         for step in self.scenario.steps:
             self._advance(step.gap)
+            self._label = step.project
             match step:
                 case FocusStep():
                     self._focus_step(step)
@@ -105,6 +111,10 @@ class Generator:
 
     def _emit(self, event: Event) -> None:
         self.events.append(event)
+        is_focus = self._focus is not None and event.id == self._focus.id
+        label = self._focus_label if is_focus else self._label
+        if label is not None and event.id not in self.labels:
+            self.labels[event.id] = label
 
     def _advance(self, seconds: float) -> None:
         """Move time forward, emitting checkpoints for the open focus interval on the way."""
@@ -137,6 +147,7 @@ class Generator:
         self._close_focus()
         start = self.now()
         self._focus = _OpenFocus(uuid7(start), payload, start)
+        self._focus_label = self._label
         self._emit(self._focus_event(self._focus, end=None))
 
     def _close_focus(self) -> None:
@@ -246,6 +257,11 @@ class Generator:
                 content_hash=hashlib.sha256(text.encode()).hexdigest()[:32],
                 lang=step.extract.lang,
             )
+        # Classify like the live browser observer does (content type, GitHub repo, docs, ...).
+        derived_type, enrichment = classify(
+            step.url, word_count=extract.word_count if extract else 0, hints={}
+        )
+        content_type = step.content_type if step.content_type != "other" else derived_type
         self._emit(
             Event.interval(
                 PageVisit(
@@ -258,11 +274,12 @@ class Generator:
                     bookmarked=step.bookmarked,
                     searched=bool(step.search_query),
                     search_query=step.search_query,
-                    content_type=step.content_type,
+                    content_type=content_type,
                     lang=step.extract.lang if step.extract else None,
                     incognito=step.incognito,
                     has_password_field=step.has_password_field,
                     extract=extract,
+                    enrichment=enrichment,
                 ),
                 start,
                 self.now(),
@@ -291,7 +308,9 @@ class Generator:
         )
         self._emit(
             Event.point(
-                GitState(repo_root=step.repo_root, branch=step.branch, head=sha[:12]),
+                GitState(
+                    repo_root=step.repo_root, branch=step.branch, head=sha[:12], remote=step.remote
+                ),
                 now,
                 observer_version=SIM_VERSION,
             )

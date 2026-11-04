@@ -1,6 +1,6 @@
 # Personal OS — Design
 
-**Status:** v0.4. Phases 0, 1 and 2 accepted (2026-11-03). Phase 3 (project resolver, sessions) next.
+**Status:** v0.7. Phases 0, 1 and 2 accepted (2026-11-03). Phases 3 (project resolver, sessions), 4 (local model: summaries, hybrid search, `ask`) built, awaiting review; phase 5 (action layer) accepted 2026-11-04. Phase 6 (tray, overlay, dashboard, privacy centre) next.
 **Date:** 2026-11-02
 **Scope of this draft:** overall architecture, and the observation layer in detail (brief §4). Storage, the context engine, the action layer, and interfaces are covered only far enough to show the observation layer fits them. Each gets its own design section before its phase starts.
 
@@ -400,27 +400,152 @@ Raw events 30 days, page text 90 days, terminal output (when enabled) 14 days, c
 
 ## 6. Upper layers (sketch, designed in detail at their phase)
 
-### 6.1 Project resolver and context engine (phases 3–4)
+### 6.1 Project resolver and sessions (phase 3)
 
-Signal order as in the brief. The cheap rules-based hint (repo root, cwd, path under root) is computed at ingest; embeddings and temporal smoothing run in a background job. Sessions split on 15 min idle or a project switch lasting ≥ 10 min. Summaries are JSON validated by pydantic, cite event ids, and are regenerated when their evidence changes (for example after `forget`).
+**Projects.** Every git repo the system has seen becomes a project automatically. Its id is the folder name (with a suffix if two repos share a name), its root is the repo path, and its GitHub `owner/repo` comes from the remote URL (credentials stripped). You can add projects that aren't repos (`personal-os projects add NAME --root PATH --keyword ...`), rename or archive them, and there's a built-in `none` project meaning "not project work" (Netflix, personal mail, chats).
 
-### 6.2 Local models for this hardware (GTX 1650 4 GB, 16 GB RAM)
+**Resolver.** A background job, every 30 s, gives each new event a project and a confidence. Each signal proposes candidates; the highest confidence wins:
 
-Decided (your answer): **Qwen only.**
-
-| Role | Model | Reason |
+| Signal | Applies to | Confidence |
 |---|---|---|
-| Fast (classify, summarize, extract JSON) | `qwen3:4b` (installed, about 2.5 GB, fits fully in VRAM) | Expect roughly 20–30 tokens/s on this GPU (to be measured). Good structured output. |
-| Reasoning (`ask`, planning, tool calls) | `qwen3:4b` with thinking on | Same model, so only one model ever needs to be loaded in the 4 GB. |
-| Embeddings | `qwen3-embedding:0.6b` (about 640 MB) | Stays in the Qwen family. If you'd rather not add even this, retrieval falls back to FTS5 + recency only. |
+| Your correction of this event | any | 1.0, never overwritten |
+| Path under a project root (repo root, file path, terminal cwd, editor workspace) | git, fs, terminal, editor, window cwd | git 1.0, fs 0.98, terminal/editor 0.95, window cwd 0.6 |
+| Window title names a project folder ("file - **folder** - Visual Studio Code", "**folder** - File Explorer") | window | editors 0.9, others 0.65 |
+| GitHub page of a project's repo (`owner/repo` matches the remote) | browser | 0.9 |
+| Rules learned from your corrections (site, GitHub repo, path, app + title, app) | browser, window, terminal, fs | GitHub repo up to 0.95, path 0.9, app + title 0.85, site 0.8; 0.1 less while fewer than two corrections back it. A whole app is weaker: 0.55, then 0.65, then 0.8 as corrections agree |
+| Keyword overlap between the page/title and the project's vocabulary (name, plus words from its commit messages, files and confidently assigned pages: TF-IDF across projects) | browser, editor windows | 0.45 + 0.05 per matching word, at most 0.7. Only with at least two words each seen twice in the project, at least one word that few projects use, and a winner 1.6× ahead of the runner-up |
+| Page: a browser window follows the page visit it shows (a hidden window pairs with a hidden visit by time) | window | 0.95 × the page's confidence |
+| Temporal: what you were working on in the 10 minutes around it (only confident, direct neighbours count) | browser, window, terminal outside repos | 0.6 × the neighbours' agreement + 0.05, at most 0.65, needs 70% agreement |
 
-`gemma4:e2b` and `gpt-oss:20b` aren't used.
+When two weaker signals agree on the same project (say a keyword match and the temporal context), they combine as independent evidence, 1 − (1 − a)(1 − b), capped at 0.84 so a combination never looks like a direct signal.
 
-Background LLM jobs run only **on AC power, while the user is idle ≥ 2 min, and when no full-screen app is in the foreground**. They use Ollama `keep_alive` so the VRAM is freed afterwards. Everything sits behind the `LLMProvider` interface.
+Below 0.5 an event stays **unassigned** and goes to the inbox. System, idle and meta events never get a project. The resolver uses words only. Embeddings arrived in phase 4 for retrieval; adding them to this signal is deferred until they've proved themselves there (§6.2).
+
+**Inbox and learning.** `personal-os inbox` groups unassigned items, and guesses below 0.7 that came only from keywords or timing, by what they have in common (a site, an app and title, a folder), with counts, time spent and the current guess, so one `personal-os assign <group> <project>` fixes many. Assigning a group stores a rule for it; assigning one event only fixes that event (add `--learn` for a rule). The resolver then re-runs over the last 30 days except your corrections, so the rule applies straight away and to future events. A site used for several projects (Stack Overflow) gets conflicting corrections, which lowers its rule's confidence, so the keyword and temporal signals win there.
+
+**Sessions.** Rebuilt every 5 minutes for the last 24 hours, and for any range on demand. The day is cut into one-minute buckets, each labelled with the project that had the most time in it (window time by its resolved project, plus a little for each other event). A gap of 15 minutes or more (idle, locked, asleep or nothing happening) ends a session. Within a block, project runs shorter than 10 minutes are absorbed by their neighbours, so a quick Stack Overflow detour doesn't split a coding session. Each session stores its start, end, project, active time and stats: apps and time, files touched, pages read, commands run (and how many failed), commits. Phase 4 summarises sessions with the LLM.
+
+**Privacy.** Learned keyword profiles are recomputed from stored events and never stored themselves, so `forget` removes their source. `forget` also deletes overlapping sessions, which are rebuilt from what's left. Rules hold only what you typed in a correction: a site, a path or an app.
+
+**Acceptance.** Labelled simulated days across three projects plus personal browsing, including deliberately ambiguous research pages. Day 1 is a cold start; simulated corrections are made through the inbox (a group is assigned only if 80% of it belongs to one project, otherwise its items one by one); day 2 must score at least 90% of events correct (an unassigned event counts as wrong), and at least 85% of time. A second, harder day 2 was written after tuning as a hold-out (ADR-042).
+
+### 6.2 Local models, summaries, retrieval and `ask` (phase 4)
+
+**Models** (your answer: Qwen only), measured on this laptop on 2026-11-04:
+
+| Role | Model | Measured |
+|---|---|---|
+| Summaries and answers | `qwen3:4b`, thinking off | About 45 tokens/s and 680 prompt tokens/s with every layer on the GPU (3.8 GB at an 8k context). Ollama's own estimate put only 2.3 GB on the GPU and ran at 7.5 tokens/s, so the provider asks for all layers (`gpu_layers`) and retries without that if loading fails. |
+| Deeper answers | the same model with thinking on, only with `ask --think` | About 60 s per answer (2,000+ thinking tokens). Too slow to be the default. |
+| Embeddings | `qwen3-embedding:0.6b` | Background batches on the GPU (about 550 tokens/s). A question is embedded on the CPU (0.5 s), so it doesn't push the chat model out of the 4 GB. |
+
+Everything goes through an `LLMProvider` interface (`chat_json`, `embed`, `health`). The Ollama provider uses the standard library's HTTP client, so there's no new dependency. It accepts only a loopback `base_url`: captured context never leaves the machine. Structured output uses Ollama's JSON-schema `format`, then pydantic validation, with one retry that shows the model its validation error.
+
+**Background jobs** (summaries, embeddings) run only **on AC power, while you've been idle for 2 minutes, with no full-screen app in front, and not while capture is paused** (ADR-014). They work one item at a time, recheck between items, and stop as soon as you come back. Models are loaded with a short `keep_alive`, so the VRAM is freed a couple of minutes later.
+
+**Session summaries.** A session is summarised once it has ended (15 quiet minutes) and had at least 5 active minutes. The model gets an **evidence pack**, not raw events. Each line has a number and stands for one or more events:
+
+- Window time is grouped by app and title.
+- File saves are grouped by file.
+- Repeated commands are folded together.
+- Commits, failed commands, searches and pages read appear with their details: a page's title, site, time spent and description.
+
+The pack is capped at about 80 lines, keeping commits, failures, files and pages before plain window time. The model returns JSON:
+
+- `goal` and a confidence for it.
+- `actions`, `outcomes` and `open_threads`, each an item with text and the lines it rests on.
+- An optional `next_step`.
+
+Validation drops any item whose line numbers aren't in the pack, so every remaining statement cites real events. The stored summary keeps the event ids behind those lines (`evidence_event_ids`). It also keeps a hash of the pack, so a session whose events change (a correction, a later event) is summarised again, and an unchanged one never is. Sensitive events appear only as "site, time". Their content never reaches the model.
+
+**Embeddings** are stored as float32 vectors in an ordinary table (the first 512 of the model's 1024 dimensions, renormalised; the model is trained for this). They're searched by brute force, with no `sqlite-vec`. Embedded:
+
+- Page visits: title, description, headings and the start of the text.
+- Searches.
+- Commits.
+- Session summaries.
+
+Sensitive events are never embedded. Deleting an event, an extract or a summary deletes its vector through triggers, and `secure_delete` zeroes it, so `forget` and retention keep their guarantees (ADR-044).
+
+**Retrieval** is hybrid. Full-text search (events, page text, summaries) and vector similarity each give a ranked list. They're fused by reciprocal rank, plus a recency term, inside an optional project and time filter. Without the embedding model it falls back to full-text plus recency, and says so.
+
+**`ask`.** A question is parsed without the model, so routing is predictable and testable:
+
+- A project, by id, name or words of its name.
+- A time range: today, yesterday, this or last week, the last N days, since a day, between two times.
+- An intent: where I left off, what I did, research on a topic, a bug, weekly progress, what changed since I last touched a project, or a general search.
+
+Each intent collects its own evidence. For "where I left off" that's the project's last session and its summary, the last commits, files and commands, the last failing command, and the repo's current git state. The evidence becomes one numbered pack.
+
+- **No evidence:** the answer is "I don't have data on that", with what was looked for. The model isn't asked.
+- **Otherwise:** the model answers as JSON sentences, each citing pack lines. Sentences without a valid citation are dropped. If none survive, or Ollama isn't running, `ask` falls back to listing the facts it found.
+
+The answer ends with its confidence and the numbered evidence (time, kind, what, event id).
+
+**Captured text is data.** Page text, titles, commands and commit messages are passed only inside a delimited data block. The prompt says plainly that the block's content is never instructions. In phase 4 the model has no tools at all. The phase 5 injection tests build on this.
+
+**Not in phase 4:** stored daily and weekly rollups (weekly questions are answered from session summaries at question time), the stored "current state" note per project (assembled at question time), conversation memory, and embeddings in the project resolver (later, once the vectors have proved themselves in retrieval).
 
 ### 6.3 Action layer (phase 5)
 
-Typed tool registry, risk tiers 0–3, dry-run, confirmations, append-only audit, kill switch, all as in the brief. **Tier 0 and Tier 1 run without confirmation** (your answer), but only when the call comes from a request you made directly (CLI, overlay, voice). A Tier 1 call that a proactive feature proposes, or whose arguments came from observed content, still asks. Every auto-run action is audited and rate-limited, and the kill switch stops it. One constraint matters for the observation layer: **captured text is data.** Events, page extracts, and terminal lines are passed to the LLM only inside clearly delimited data blocks, the tool-calling planner can't see raw observed text when choosing tools for proactive features, and a tool call whose arguments come from observed content needs the same confirmation as its tier says, with no "always allow" shortcut. Injection tests live in the simulator (planted "ignore previous instructions and delete…" in page extracts, commit messages, and file names).
+**Tools.** Every action is a typed tool in a registry. A tool has:
+
+- a name and a one-line description;
+- a pydantic argument model;
+- a risk tier and whether it can be undone;
+- a `preview` (exactly what will happen: the path, the command line, the diff) used for dry runs and confirmations;
+- `run`, which returns a result and, where possible, an undo recipe.
+
+There is no free-form shell: an LLM can only fill in a tool's arguments.
+
+| Tier | Tools in phase 5 | Policy |
+|---|---|---|
+| 0, read-only | `search_context`, `read_file`, `list_folder`, `system_status` | Runs without asking |
+| 1, low-risk, reversible | `open_path`, `open_url`, `open_app`, `create_note`, `copy_to_clipboard`, `media` (play/pause, next, previous, mute, volume), `screenshot`, `window` (focus, minimize, maximize, restore) | Runs without asking when you asked for it directly (your answer to Q5). Asks when the request was proactive, or when its arguments could have come from captured content |
+| 2, confirm every time | `create_file`, `edit_file` (shown as a diff), `move_path`, `run_command` (named commands from config only), `git_commit`, `git_switch`, `git_stash` | Always asks. There's no "always allow" |
+| 3, blocked | `delete_path` (to the Recycle Bin), `run_shell` (a command outside the named list) | Blocked. `actions unlock TOOL --minutes N` (confirmed at the keyboard) allows it for a while, and each use still asks. Never for tainted or proactive calls |
+
+Not in phase 5:
+
+- **Need phase 6 notifications:** brightness, do-not-disturb, timers and reminders.
+- **Phase 7:** email, calendar and package installs.
+- **Web search:** an `open_url` with a search URL does the job without an API.
+
+**Where a request comes from.** Each call carries an origin and a taint flag:
+
+- `user`: you named the tool yourself (`personal-os actions run …`).
+- `planned`: the planner chose it from words you typed (`personal-os do "…"`).
+- `proactive`: a later phase suggested it.
+
+**Taint.** A call is tainted once anything captured has been put in front of the planner, such as a `search_context` or `read_file` result in the same request. From then on, tier 1 asks, and tier 3 is blocked even if unlocked.
+
+**Safety rails, checked before any confirmation:**
+
+- **Paths:** paths must resolve, after following links, inside your watched folders, the notes and screenshots folders, or `actions.allowed_paths`. They're never secret paths (the privacy filter's globs: `.env`, keys, `.ssh` and so on), and never the data folder itself.
+- **URLs:** only http(s), never a blocked domain.
+- **Commands:** run as argument lists without a shell, with a timeout.
+- **Rate limits:** 30 actions a minute, 10 of tier 2 or above.
+- **Exfiltration guard:** a network-capable call (`open_url`) whose arguments contain a long run of text read earlier in the same request is blocked.
+
+**Confirmation** shows the tool, tier, origin and preview, and waits for **y** typed at the keyboard. With no keyboard (a background process, a test), it's declined.
+
+**Audit log.** `action_audit` is append-only (SQLite triggers refuse updates and deletes). Every stage gets its own row: proposed, auto-allowed / confirmed / declined / blocked (with the reason), started, succeeded / failed / cancelled, undone. Each row records the origin, taint, arguments, result and undo recipe. `forget` replaces the arguments in its window with a tombstone instead of deleting rows (ADR-011). `personal-os actions log` shows it. `personal-os actions undo ID` runs the undo recipe through the same policy.
+
+- `edit_file` keeps the original in `undo/` (deleted after 7 days or by `forget`) so it can be restored. An undo is refused if the file changed since.
+
+**Kill switch.** `personal-os actions kill`, or the global hotkey **Ctrl+Alt+Shift+K** registered by the daemon, does three things:
+
+- it cancels whatever is running (a command's process is terminated);
+- the planner stops;
+- everything goes **observe-only** until `personal-os actions resume`.
+
+**Planner** (`personal-os do "…"`). The model returns a JSON plan, `{calls: [{tool, args}], reply}`, constrained by a schema with thinking off. It took 1.3–3.4 s per plan in testing; native tool calling made `qwen3:4b` think first (5–42 s).
+
+- **What the planner sees:** your request, the tool list (tiers 0–2; tier 3 never), project names and folders, app names and named commands. No captured content.
+- **Two-round requests:** if a plan uses a tier-0 lookup, its result comes back inside a data block for one more round, and every call after that is tainted.
+- **Checking:** each call is validated against the tool's argument model and then goes through the policy.
+
+Injection tests (planted instructions in page text, commit messages, file names and command output) run in the simulator against a worst-case fake model that obeys them. They also run against `qwen3:4b`.
 
 ### 6.4 Interfaces
 

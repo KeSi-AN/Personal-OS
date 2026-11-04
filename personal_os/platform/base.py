@@ -6,7 +6,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-SessionSignal = Literal["lock", "unlock", "logon", "logoff", "sleep", "wake", "hotkey"]
+SessionSignal = Literal[
+    "lock", "unlock", "logon", "logoff", "sleep", "wake", "hotkey", "kill_hotkey"
+]
 
 
 class NotSupportedError(RuntimeError):
@@ -36,6 +38,10 @@ class WindowProbe(Protocol):
 
     def idle_seconds(self) -> float:
         """Seconds since the last keyboard/mouse input anywhere in the session."""
+        ...
+
+    def fullscreen(self) -> bool:
+        """A full-screen app, game or presentation is in the foreground."""
         ...
 
 

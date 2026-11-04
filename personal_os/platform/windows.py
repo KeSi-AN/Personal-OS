@@ -30,6 +30,7 @@ user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 wtsapi32 = ctypes.WinDLL("wtsapi32", use_last_error=True)
 version_dll = ctypes.WinDLL("version", use_last_error=True)
+shell32 = ctypes.WinDLL("shell32", use_last_error=True)
 
 LRESULT = ctypes.c_ssize_t
 WNDPROC = ctypes.WINFUNCTYPE(
@@ -267,6 +268,15 @@ class WindowsWindowProbe:
         now32 = kernel32.GetTickCount64() & 0xFFFFFFFF
         return float((now32 - lii.dwTime) & 0xFFFFFFFF) / 1000.0
 
+    def fullscreen(self) -> bool:
+        """A full-screen app, game (Direct3D exclusive) or presentation is in front, as Windows'
+        own Focus Assist sees it (SHQueryUserNotificationState)."""
+        state = ctypes.c_int(0)
+        if shell32.SHQueryUserNotificationState(ctypes.byref(state)) != 0:
+            return False
+        # QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN, QUNS_PRESENTATION_MODE
+        return state.value in (2, 3, 4)
+
     def _proc(self, pid: int | None) -> _ProcInfo | None:
         if not pid:
             return None
@@ -326,11 +336,17 @@ class WindowsSessionWatcher:
     broadcasts (which message-only windows don't get) and the global pause hotkey."""
 
     HOTKEY_ID = 0x5053  # "PS"
+    KILL_HOTKEY_ID = 0x504B  # "PK"
 
     def __init__(
-        self, *, hotkey: tuple[int, int] | None = (MOD_CONTROL | MOD_ALT | MOD_SHIFT, 0x50)
+        self,
+        *,
+        hotkey: tuple[int, int] | None = (MOD_CONTROL | MOD_ALT | MOD_SHIFT, 0x50),  # P: pause
+        kill_hotkey: tuple[int, int] | None = (MOD_CONTROL | MOD_ALT | MOD_SHIFT, 0x4B),  # K
     ):
         self._hotkey = hotkey
+        self._kill_hotkey = kill_hotkey
+        self.kill_hotkey_registered = False
         self._thread: threading.Thread | None = None
         self._thread_id: int | None = None
         self._ready = threading.Event()
@@ -380,6 +396,9 @@ class WindowsSessionWatcher:
         if msg == WM_HOTKEY and wparam == self.HOTKEY_ID:
             self._emit("hotkey")
             return 0
+        if msg == WM_HOTKEY and wparam == self.KILL_HOTKEY_ID:
+            self._emit("kill_hotkey")
+            return 0
         return int(user32.DefWindowProcW(hwnd, msg, wparam, lparam))
 
     def _run(self) -> None:
@@ -411,6 +430,11 @@ class WindowsSessionWatcher:
             self.hotkey_registered = bool(
                 user32.RegisterHotKey(hwnd, self.HOTKEY_ID, mods | MOD_NOREPEAT, vk)
             )
+        if self._kill_hotkey:
+            mods, vk = self._kill_hotkey
+            self.kill_hotkey_registered = bool(
+                user32.RegisterHotKey(hwnd, self.KILL_HOTKEY_ID, mods | MOD_NOREPEAT, vk)
+            )
         self._ready.set()
         msg = wintypes.MSG()
         try:
@@ -420,6 +444,147 @@ class WindowsSessionWatcher:
         finally:
             if self.hotkey_registered:
                 user32.UnregisterHotKey(hwnd, self.HOTKEY_ID)
+            if self.kill_hotkey_registered:
+                user32.UnregisterHotKey(hwnd, self.KILL_HOTKEY_ID)
             wtsapi32.WTSUnRegisterSessionNotification(hwnd)
             user32.DestroyWindow(hwnd)
             user32.UnregisterClassW(class_name, hinst)
+
+
+# --- actions (phase 5): keys, clipboard, windows, Recycle Bin ------------------------------------
+
+KEYEVENTF_KEYUP = 0x0002
+CF_UNICODETEXT = 13
+GMEM_MOVEABLE = 0x0002
+SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE = 3, 6, 9
+
+user32.keybd_event.argtypes = [wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ctypes.c_size_t]
+user32.OpenClipboard.argtypes = [wintypes.HWND]
+user32.OpenClipboard.restype = wintypes.BOOL
+user32.GetClipboardData.argtypes = [wintypes.UINT]
+user32.GetClipboardData.restype = wintypes.HANDLE
+user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+user32.SetClipboardData.restype = wintypes.HANDLE
+user32.IsIconic.argtypes = [wintypes.HWND]
+user32.IsZoomed.argtypes = [wintypes.HWND]
+user32.IsWindowVisible.argtypes = [wintypes.HWND]
+user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+user32.EnumWindows.argtypes = [WNDENUMPROC, wintypes.LPARAM]
+kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+kernel32.GlobalLock.restype = ctypes.c_void_p
+kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+
+
+def press_key(vk: int) -> None:
+    """A key press and release (media and volume keys)."""
+    user32.keybd_event(vk, 0, 0, 0)
+    user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
+
+
+def _open_clipboard() -> None:
+    for _ in range(10):  # another app may hold it for a moment
+        if user32.OpenClipboard(None):
+            return
+        time.sleep(0.05)
+    raise OSError("the clipboard is busy")
+
+
+def get_clipboard_text() -> str | None:
+    _open_clipboard()
+    try:
+        handle = user32.GetClipboardData(CF_UNICODETEXT)
+        if not handle:
+            return None
+        ptr = kernel32.GlobalLock(handle)
+        try:
+            return ctypes.wstring_at(ptr) if ptr else None
+        finally:
+            kernel32.GlobalUnlock(handle)
+    finally:
+        user32.CloseClipboard()
+
+
+def set_clipboard_text(text: str) -> None:
+    data = ctypes.create_unicode_buffer(text)
+    size = ctypes.sizeof(data)
+    handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, size)
+    if not handle:
+        raise OSError("GlobalAlloc failed")
+    ptr = kernel32.GlobalLock(handle)
+    ctypes.memmove(ptr, data, size)
+    kernel32.GlobalUnlock(handle)
+    _open_clipboard()
+    try:
+        user32.EmptyClipboard()
+        if not user32.SetClipboardData(CF_UNICODETEXT, handle):
+            kernel32.GlobalFree(handle)
+            raise OSError("SetClipboardData failed")
+    finally:
+        user32.CloseClipboard()
+
+
+def top_level_windows() -> list[tuple[int, str, str]]:
+    """Visible top-level windows with a title: (handle, title, state)."""
+    out: list[tuple[int, str, str]] = []
+
+    def cb(hwnd: int, _lparam: int) -> bool:
+        if user32.IsWindowVisible(hwnd):
+            title = _window_text(hwnd)
+            if title:
+                state = (
+                    "minimized" if user32.IsIconic(hwnd)
+                    else "maximized" if user32.IsZoomed(hwnd) else "normal"
+                )  # fmt: skip
+                out.append((int(hwnd), title, state))
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(cb), 0)
+    return out
+
+
+def set_window(hwnd: int, action: str) -> None:
+    if action == "minimize":
+        user32.ShowWindow(hwnd, SW_MINIMIZE)
+    elif action == "maximize":
+        user32.ShowWindow(hwnd, SW_MAXIMIZE)
+    elif action == "restore":
+        user32.ShowWindow(hwnd, SW_RESTORE)
+    elif action == "focus":
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, SW_RESTORE)
+        user32.SetForegroundWindow(hwnd)
+    else:
+        raise ValueError(action)
+
+
+class SHFILEOPSTRUCTW(ctypes.Structure):
+    _fields_ = [
+        ("hwnd", wintypes.HWND),
+        ("wFunc", wintypes.UINT),
+        ("pFrom", wintypes.LPCWSTR),
+        ("pTo", wintypes.LPCWSTR),
+        ("fFlags", ctypes.c_ushort),
+        ("fAnyOperationsAborted", wintypes.BOOL),
+        ("hNameMappings", ctypes.c_void_p),
+        ("lpszProgressTitle", wintypes.LPCWSTR),
+    ]
+
+
+FO_DELETE = 3
+FOF_SILENT, FOF_NOCONFIRMATION, FOF_ALLOWUNDO, FOF_NOERRORUI = 0x4, 0x10, 0x40, 0x400
+
+
+def recycle(path: Path) -> None:
+    """Move a file or folder to the Recycle Bin (restorable from there)."""
+    op = SHFILEOPSTRUCTW(
+        wFunc=FO_DELETE,
+        pFrom=str(path) + "\0",  # double-NUL-terminated list
+        fFlags=FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI,
+    )
+    rc = shell32.SHFileOperationW(ctypes.byref(op))
+    if rc != 0 or op.fAnyOperationsAborted:
+        raise OSError(f"moving {path} to the Recycle Bin failed ({rc})")
