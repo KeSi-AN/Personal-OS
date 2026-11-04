@@ -44,6 +44,25 @@ class PathPolicy:
             raise ActionError(f"{path} doesn't exist")
         return path
 
+    def locate(self, raw: str) -> str:
+        """A bare or relative name ("newtab") that isn't in the current folder is looked up
+        directly inside each allowed folder (E:/newtab). Several matches are an error, so a
+        guess never picks the wrong one. Anything else is returned unchanged for check()."""
+        if not raw or "\x00" in raw:
+            return raw
+        given = Path(os.path.expandvars(raw)).expanduser()
+        if given.is_absolute() or given.drive or given.exists():
+            return raw
+        found: list[Path] = []
+        for root in self.roots:
+            candidate = _resolve(root / given)
+            if candidate.exists() and candidate not in found:
+                found.append(candidate)
+        if len(found) > 1:
+            shown = ", ".join(str(p) for p in found)
+            raise ActionError(f"'{raw}' is in more than one of your folders ({shown}); say which")
+        return str(found[0]) if found else raw
+
     def _secret(self, path: Path) -> bool:
         privacy = self.config.privacy
         parts = {p.lower() for p in path.parts}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -30,13 +31,13 @@ class OpenPath(Tool):
     args_model = PathArgs
 
     def preview(self, args: PathArgs, ctx: ToolContext) -> str:
-        path = ctx.paths.check(args.path, must_exist=True)
+        path = ctx.paths.check(ctx.paths.locate(args.path), must_exist=True)
         if path.suffix.lower() in {".exe", ".bat", ".cmd", ".ps1", ".vbs", ".msi", ".lnk", ".js"}:
             raise ActionError(f"{path.name} is a program or script; open_path only opens documents")
         return f"open {path}"
 
     def run(self, args: PathArgs, ctx: ToolContext) -> Result:
-        path = ctx.paths.check(args.path, must_exist=True)
+        path = ctx.paths.check(ctx.paths.locate(args.path), must_exist=True)
         ctx.desktop.open_path(path)
         return Result(f"Opened {path.name or path}")
 
@@ -67,6 +68,13 @@ class OpenUrl(Tool):
         return Result(f"opened {args.url}")
 
 
+def _program_exists(program: str) -> bool:
+    """A full path must exist; a bare name ("wt.exe") must be on PATH."""
+    if os.path.dirname(program):
+        return Path(program).is_file()
+    return shutil.which(program) is not None
+
+
 class AppArgs(Args):
     app: str
     target: str | None = None
@@ -84,9 +92,15 @@ class OpenApp(Tool):
         spec = apps.get(args.app.lower())
         if not spec:
             raise ActionError(f"'{args.app}' isn't in your app list ({', '.join(apps)})")
-        argv = [os.path.expandvars(spec[0]), *spec[1:]]
+        program = os.path.expandvars(spec[0])
+        if not _program_exists(program):
+            raise ActionError(
+                f"{args.app} isn't installed at {program}. Set where it is with: personal-os "
+                f"config set actions.apps.{args.app.lower()} '[\"C:/path/to/app.exe\"]'"
+            )
+        argv = [program, *spec[1:]]
         if args.target:
-            argv.append(str(ctx.paths.check(args.target, must_exist=True)))
+            argv.append(str(ctx.paths.check(ctx.paths.locate(args.target), must_exist=True)))
         return argv
 
     def preview(self, args: AppArgs, ctx: ToolContext) -> str:

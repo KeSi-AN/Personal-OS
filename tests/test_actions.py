@@ -144,6 +144,33 @@ def test_path_policy(env: Env):
     assert p.check(str(p.notes_dir / "n.md")).parent == p.notes_dir
 
 
+def test_bare_names_are_found_inside_your_folders(env: Env, tmp_path: Path, monkeypatch):
+    (env.work / "newtab").mkdir()
+    monkeypatch.chdir(tmp_path)  # the current folder has no "newtab"
+    p = PathPolicy(env.config)
+    assert Path(p.locate("newtab")) == (env.work / "newtab").resolve()
+    assert p.locate("nowhere") == "nowhere"  # left for check() to refuse
+    absolute = str(env.work / "newtab")
+    assert p.locate(absolute) == absolute
+    out = env.run("open_app", app="notepad", target="newtab")
+    assert out.ok and env.desktop.calls[-1][1][-1] == str((env.work / "newtab").resolve())
+    other = tmp_path / "other"
+    (other / "newtab").mkdir(parents=True)
+    twice = PathPolicy(env.config.model_copy(update={"watched_roots": [env.work, other]}))
+    with pytest.raises(ActionError, match="more than one"):
+        twice.locate("newtab")
+
+
+def test_open_app_explains_a_missing_program(env: Env, tmp_path: Path):
+    apps = {"vscode": [str(tmp_path / "nope" / "Code.exe")]}
+    env.ex.config = env.config.model_copy(
+        update={"actions": env.config.actions.model_copy(update={"apps": apps})}
+    )
+    out = env.run("open_app", app="vscode", target=str(env.work))
+    assert out.status == "blocked" and "isn't installed at" in out.message
+    assert env.desktop.calls == []
+
+
 # --- tiers through the executor ----------------------------------------------------------------------
 
 
