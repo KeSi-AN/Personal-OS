@@ -89,6 +89,17 @@ popup_autoclose_s = 5.0           # seconds after the reply, unless pinned
 
 **Reminders show here too.** When a reminder is due, the popup opens with it and stays until you click **Dismiss**, and Donna says it when she isn't busy talking to you. Windows hides its own notification banners while a full-screen app is running or Do Not Disturb is on, so a Windows notification is used only when the popup can't open. A new briefing shows its title here; the briefing itself is on the dashboard and in the notification centre.
 
+**Setting, changing and cancelling reminders.** These are understood by rules, not guessed by the model, and Donna always says back what she set:
+
+| You say | She does |
+|---|---|
+| "Remind me in 10 minutes to stretch", "remind me to call mum at 5 p.m." | Sets it: *I'll remind you at 17:00 today: "call mum"* |
+| "Remind me in a minute" (and nothing more) | Listens a moment longer, then asks *What should I remind you about?* |
+| "Remind me to stretch" | Asks *When should I remind you to stretch?* |
+| "Edit that reminder to say go for a stretch", "change it to 5 pm", "push it back 10 minutes" | Changes the reminder you set last |
+| "Move the water reminder to 6", "cancel the stretch reminder" | Changes or cancels the one whose words match |
+| "Cancel that reminder", "cancel all my reminders" | Cancels the last one, or all of them |
+
 **Asking about reminders.** "What reminders do I have?" or "What did I ask you to remind me?" is answered from your reminders: what's coming up, and what went off in the last day. Times can be said the way speech recognition writes them ("2.10", "5 p.m.").
 
 It needs the WebView2 runtime, which Windows 11 includes. Without it, voice works as before with no popup, and `doctor` says why on its `popup` line.
