@@ -32,3 +32,23 @@ The PowerShell hook adds about **8–11 ms** per prompt on this machine (measure
 - Result: **within budget**
 
 You chose to stop at about 25 minutes instead of 60, so this uses the daemon's lifetime CPU time rather than the sampling script. That's the same measure, averaged over the whole run instead of 5-second samples.
+
+## Voice popup (phase 8)
+
+The popup is a separate process that exists only while it's on screen, so it isn't part of the daemon's budget. Measured with:
+
+```powershell
+uv run python scripts/measure_budget.py --popup 60
+```
+
+This opens the demo pinned and looping (so the listening, thinking and speaking animations keep running, which is the worst case), samples the Python host and its WebView2 processes every second, closes it, and checks that every one of those processes has exited.
+
+### 2026-11-06 01:11, 59 samples over 60 s
+
+- Open (demo, pinned, animating): 7 processes (Python host, and WebView2's browser, GPU, renderer, two utility processes and crash handler)
+- Renderer up 1.5 s after the spawn
+- CPU (% of machine): median **1.71%**, max 9.15% (the max is a state change; the Python host polling the runtime files is about 0.15% of that)
+- Memory: private (USS) median **145 MB**, max 167 MB. The sum of RSS was 491 MB, but that counts memory shared between WebView2's processes several times.
+- Closed: **every popup process exited**, so the cost while closed is zero.
+
+A first run, with the speaker bars animating `height`, used 2.65% median CPU. Animating `transform` instead (no layout every frame) brought it to 1.71%. A real turn keeps the popup open only for the turn plus 5 seconds.

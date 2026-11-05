@@ -32,6 +32,35 @@ The dashboard's Today page shows the same in a **Voice** card.
 
 **No beep when you press the hotkey?** Then the voice process isn't running. It runs under the daemon, so check `personal-os status`. The tray's **Stop capture and voice** stops both until you start them again (`personal-os daemon start`, or log in again). `doctor` reports *voice is on but its process isn't running*.
 
+## The popup
+
+When a turn starts (the hotkey, the wake word, or talking over a reply), a small window opens in the bottom-right corner, on top, without taking the keyboard from what you're doing. It shows:
+
+- **State:** a pulsing dot while it listens, a spinner while it thinks, moving bars while it speaks.
+- **What it heard,** as soon as speech is recognised, then **the reply.**
+- **"Did you mean …?"** when it isn't sure what you said.
+- **Paused** or **kill switch on**, when they apply.
+
+It closes 5 seconds after the reply. **Pin** keeps it open, **Esc** or ✕ closes it (click it first, since it opens without focus), and **Dashboard** opens the dashboard through the usual one-time login link. A new turn reuses the open window.
+
+It shows only what voice already keeps in its status file, never anything from captured activity, and it writes nothing. It reads the runtime folder about 5 times a second while it's open, and isn't running at all otherwise.
+
+```powershell
+uv run personal-os voice popup          # open it now
+uv run personal-os voice popup --demo   # cycle through the states with fake data
+```
+
+Settings, in `config.toml`:
+
+```toml
+[voice]
+popup = true                      # false: no popup
+popup_position = "bottom-right"   # bottom-right | top-right | bottom-left | top-left
+popup_autoclose_s = 5.0           # seconds after the reply, unless pinned
+```
+
+It needs the WebView2 runtime, which Windows 11 includes. Without it, voice works as before with no popup, and `doctor` says why on its `popup` line.
+
 ## Wake word: "hey Donna"
 
 openWakeWord has no ready-made model for "hey Donna", so you train one once. It takes about 1.5 hours on Google Colab, mostly waiting. A two-word phrase with "hey" is more reliable than "Donna" alone.
