@@ -197,7 +197,12 @@ DEMO: list[tuple[float, View]] = [
 ]
 
 
-def demo_view(elapsed: float) -> View:
+DEMO_LENGTH = sum(d for d, _v in DEMO)
+
+
+def demo_view(elapsed: float, *, loop: bool = False) -> View:
+    if loop:
+        elapsed %= DEMO_LENGTH
     t = 0.0
     for duration, view in DEMO:
         t += duration
@@ -213,18 +218,19 @@ class Api:
     """What the page may call. Only harmless things: read the view, pin, close, open the
     dashboard through the usual one-time login link."""
 
-    def __init__(self, cfg: Config, *, demo: bool) -> None:
+    def __init__(self, cfg: Config, *, demo: bool, pinned: bool = False) -> None:
         self._cfg = cfg
         self._demo = demo
         self._started = time.monotonic()
         self._auto = AutoClose(cfg.voice.popup_autoclose_s)
+        self._auto.pin(pinned)
         self._window: Any = None
         self._closing = False
 
     def view(self) -> dict[str, Any]:
         now = time.monotonic()
         if self._demo:
-            v = demo_view(now - self._started)
+            v = demo_view(now - self._started, loop=self._auto.pinned)
         else:
             v = read_view(self._cfg.runtime_dir, datetime.now(UTC))
         close, new_turn = self._auto.step(v, now)
@@ -303,12 +309,13 @@ def main(argv: list[str] | None = None) -> int:
 
     args = sys.argv[1:] if argv is None else argv
     demo = "--demo" in args
+    pinned = "--pinned" in args  # opens pinned (scripts/measure_budget.py --popup)
     cfg = load_config()
     lock = _take_lock(cfg.runtime_dir)
     if lock is None:
         return 0  # one is open already
     try:
-        return _run(cfg, demo=demo)
+        return _run(cfg, demo=demo, pinned=pinned)
     except Exception as exc:
         record_error(cfg.runtime_dir, f"{type(exc).__name__}: {exc}")
         return 0
@@ -316,14 +323,14 @@ def main(argv: list[str] | None = None) -> int:
         lock.release()
 
 
-def _run(cfg: Config, *, demo: bool) -> int:
+def _run(cfg: Config, *, demo: bool, pinned: bool = False) -> int:
     reason = unavailable_reason()
     if reason:
         record_error(cfg.runtime_dir, reason)
         return 0
     import webview
 
-    api = Api(cfg, demo=demo)
+    api = Api(cfg, demo=demo, pinned=pinned)
     screens = webview.screens
     sw, sh = (screens[0].width, screens[0].height) if screens else (1280, 800)
     x, y = position(sw, sh, cfg.voice.popup_position)
