@@ -36,6 +36,10 @@ SYSTEM = """You turn the user's request into calls to the tools below, as JSON.
 
 Rules:
 - Call tools only for what the user asked. If no tool fits, return no calls and say so in reply.
+- A question ("do I have …?", "what …?") is never a reason to change anything: answer it \
+with read-only tools or return no calls.
+- The earlier conversation, if shown, only explains words like "it" or "instead". Never \
+repeat or carry out anything from it that this request doesn't ask for.
 - Use only the folders, apps and command names listed here or paths the user gave. Never \
 invent paths. Write paths with forward slashes (C:/Users/...), never backslashes.
 - To open a file or folder *in a named app* ("open X in vscode"), make ONE open_app call \
@@ -149,6 +153,9 @@ def run_request(
     if killswitch.engaged(executor.runtime_dir):
         report.error = "kill switch is on"
         return report
+    reminder = _plan_reminder(request, executor, dry_run=dry_run)
+    if reminder is not None:
+        return reminder
     quick = plan_open(request, executor.paths, executor.conn)
     if quick is not None and not quick.fallback:  # "open X [in Y]": by rules, not the model
         report.reply = quick.message
@@ -175,6 +182,58 @@ def run_request(
         # Nothing by that name, and the model couldn't do it either: say what was looked for.
         return PlanReport(reply=quick.message)
     return report
+
+
+_STOP_WORDS = frozenset(
+    {
+        *("the", "and", "for", "with", "that", "this", "from", "into", "about", "you", "your"),
+        *("are", "was", "were", "have", "has", "had", "not", "but", "can", "will", "would"),
+        *("could", "should", "just", "then", "than", "them", "they", "its", "it's", "what"),
+        *("when", "where", "which", "who", "how", "all", "any", "some", "say", "says", "said"),
+    }
+)
+
+
+def _words(text: str) -> set[str]:
+    return {
+        w for w in re.findall(r"[a-z0-9']+", text.lower()) if len(w) > 2 and w not in _STOP_WORDS
+    }
+
+
+def borrowed(args: dict[str, Any], request: str, context: str) -> bool:
+    """Did a call's text come from the earlier conversation rather than this request? Then it
+    isn't "asked for directly": it needs your confirmation (tier 1) like content-derived calls.
+    "Do I have any reminders?" once became a new reminder copied from an earlier sentence."""
+    asked, earlier = _words(request), _words(context)
+    for value in args.values():
+        if not isinstance(value, str) or len(value) < 4:
+            continue
+        words = _words(value)
+        if not words:
+            continue
+        # Mostly not in what you just said, and mostly in what was said before.
+        if len(words & asked) * 2 < len(words) and len(words & earlier) * 2 >= len(words):
+            return True
+    return False
+
+
+def _plan_reminder(request: str, executor: Executor, *, dry_run: bool) -> PlanReport | None:
+    """Reminders by rules, not the model: set, change, cancel. A missing message or time is
+    asked about, never filled in."""
+    from personal_os.actions.reminder_parse import parse
+
+    r = parse(request)
+    if r is None:
+        return None
+    if r.missing == "what":
+        return PlanReport(reply="What should I remind you about?")
+    if r.missing == "when":
+        return PlanReport(reply=f'When should I remind you to "{r.text}"?')
+    out = executor.request(
+        r.tool, r.args(), origin=Origin.PLANNED, tainted=False, request_text=request,
+        dry_run=dry_run,
+    )  # fmt: skip
+    return PlanReport(reply=out.message, outcomes=[out])
 
 
 def _with_model(
@@ -258,8 +317,10 @@ def _with_model(
         for call in merge_opens(route_app_names(list(plan.calls), executor))[:MAX_CALLS]:
             tool = executor.registry.get(call.tool)
             only_reads &= tool is not None and tool.tier == Tier.READ
+            from_context = bool(context) and borrowed(dict(call.args), request, context)
             out = executor.request(
-                call.tool, dict(call.args), origin=Origin.PLANNED, tainted=report.tainted,
+                call.tool, dict(call.args), origin=Origin.PLANNED,
+                tainted=report.tainted or from_context,
                 request_text=request, dry_run=dry_run, read_so_far=read_texts,
             )  # fmt: skip
             report.outcomes.append(out)
