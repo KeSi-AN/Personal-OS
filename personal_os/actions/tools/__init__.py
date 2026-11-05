@@ -24,6 +24,7 @@ def build_registry(config: Config | None = None) -> Registry:
         desktop.Window(),
         desktop.RemoveCreated(),
         notify.SetReminder(),
+        notify.UpdateReminder(),
         notify.CancelReminder(),
         notify.SetBrightness(),
         notify.SetVolume(),

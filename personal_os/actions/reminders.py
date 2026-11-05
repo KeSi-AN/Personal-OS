@@ -107,7 +107,8 @@ def is_question(text: str) -> bool:
     return bool(REMINDER_Q.search(text) and QUESTION.match(text))
 
 
-def _when(due: datetime, now: datetime) -> str:
+def when(due: datetime, now: datetime) -> str:
+    """ "at 17:30 today", "at 09:00 tomorrow", "on Mon 10 Nov at 09:00", in local time."""
     d, n = due.astimezone(), now.astimezone()
     if d.date() == n.date():
         return f"at {d:%H:%M} today"
@@ -132,12 +133,79 @@ def answer(conn: sqlite3.Connection, now: datetime) -> list[str]:
     ]
     out = []
     if upcoming:
-        items = "; ".join(f'"{r.text}" {_when(r.due, now)}' for r in upcoming)
+        items = "; ".join(f'"{r.text}" {when(r.due, now)}' for r in upcoming)
         n = len(upcoming)
         out.append(f"You have {n} reminder{'s' if n > 1 else ''} coming up: {items}.")
     else:
         out.append("You have no reminders coming up.")
     if fired:
-        items = "; ".join(f'"{text}" {_when(due, now)}' for text, due in fired)
+        items = "; ".join(f'"{text}" {when(due, now)}' for text, due in fired)
         out.append(f"In the last day: {items}.")
     return out
+
+
+@dataclass
+class Pending:
+    id: str
+    text: str
+    due: datetime
+    created: datetime
+
+
+def pending_full(conn: sqlite3.Connection) -> list[Pending]:
+    """Reminders still to come, newest first (the one you just set is "that reminder")."""
+    return [
+        Pending(r[0], r[1], from_ms(r[2]), from_ms(r[3]))
+        for r in conn.execute(
+            "SELECT id, text, due_at, created_at FROM reminders WHERE fired_at IS NULL "
+            "AND cancelled = 0 ORDER BY created_at DESC, rowid DESC"
+        )
+    ]
+
+
+def find(conn: sqlite3.Connection, which: str = "", reminder_id: str = "") -> Pending | None:
+    """The reminder meant: by id; by words in its text ("the stretch reminder"); or, with
+    neither, the one set most recently ("that reminder"). None if nothing matches."""
+    items = pending_full(conn)
+    if reminder_id:
+        return next((p for p in items if p.id == reminder_id), None)
+    if not which.strip():
+        return items[0] if items else None
+    from rapidfuzz import fuzz
+
+    scored = [(fuzz.partial_ratio(which.lower(), p.text.lower()), p) for p in items]
+    scored.sort(key=lambda x: -x[0])
+    return scored[0][1] if scored and scored[0][0] >= 70 else None
+
+
+def update(
+    conn: sqlite3.Connection, rid: str, *, text: str | None = None, due: datetime | None = None
+) -> bool:
+    sets: list[str] = []
+    params: list[object] = []
+    if text is not None:
+        sets.append("text = ?")
+        params.append(text)
+    if due is not None:
+        sets.append("due_at = ?")
+        params.append(to_ms(due))
+    if not sets:
+        return False
+    cur = conn.execute(
+        f"UPDATE reminders SET {', '.join(sets)} WHERE id = ? AND fired_at IS NULL "
+        "AND cancelled = 0",
+        (*params, rid),
+    )
+    return cur.rowcount == 1
+
+
+# A message that is really the request itself ("Remind me in a minute"): the model's guess
+# when the actual message was never said. Refused, so the gap is asked about, not stored.
+_NOT_A_MESSAGE = re.compile(
+    r"^\s*(?:remind me|set (?:a )?reminder|reminder|in (?:a|an|one|\d+) \w+|at \d)", re.I
+)
+
+
+def is_real_message(text: str) -> bool:
+    t = text.strip()
+    return bool(t) and not _NOT_A_MESSAGE.match(t)
