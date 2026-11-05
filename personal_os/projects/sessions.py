@@ -193,12 +193,63 @@ def _session(
     return Session(start, end, pid, confidence, active, stats)
 
 
+REACH_MS = 24 * 3600 * 1000  # how far a window edge may move to reach a quiet gap
+
+
+def _quiet_edge(conn: sqlite3.Connection, edge_ms: int, *, backwards: bool, limit_ms: int) -> int:
+    """Move a window edge to the nearest quiet gap (GAP_BUCKETS minutes without activity), so
+    a session running across it is built whole rather than cut in two. A session's id is its
+    start: cutting one at a sliding "last 24 hours" line gave it a new start, a new id and a
+    new summary on every rebuild (ten summaries of one evening were seen)."""
+    if backwards:
+        lo, hi = max(limit_ms, edge_ms - REACH_MS), edge_ms
+    else:
+        lo, hi = edge_ms, min(limit_ms, edge_ms + REACH_MS)
+    if hi <= lo:
+        return edge_ms
+    busy: set[int] = set()  # minute buckets with activity (what build_sessions counts)
+    for r in _rows(conn, lo, hi):
+        if r["source"] in ("system", "idle"):
+            continue
+        a, b = max(r["ts_start"], lo), min(r["ts_stop"], hi)
+        busy.update(range(a // BUCKET_MS, b // BUCKET_MS + 1))
+    step = -1 if backwards else 1
+    first, last = lo // BUCKET_MS, hi // BUCKET_MS
+    bucket, quiet = edge_ms // BUCKET_MS, 0
+    while first <= bucket <= last:
+        if bucket in busy:
+            quiet = 0
+        else:
+            quiet += 1
+            if quiet >= GAP_BUCKETS:
+                # The middle of the quiet run: nothing on either side belongs to one session.
+                middle = bucket - step * (quiet // 2)
+                return min(max(middle * BUCKET_MS, lo), hi)
+        bucket += step
+    return lo if backwards else hi
+
+
 def rebuild_sessions(
     conn: sqlite3.Connection, clock: Clock, start: datetime, end: datetime
 ) -> list[Session]:
-    """Replace stored sessions overlapping [start, end) with freshly built ones."""
-    sessions = build_sessions(conn, start, end)
+    """Replace stored sessions overlapping [start, end) with freshly built ones.
+
+    The window is first widened to whole sessions: back to where a stored session crossing
+    `start` began (or to the last quiet gap), forward past one crossing `end`, never past now.
+    Summaries of sessions that no longer exist in the window are removed with them.
+    """
     now = to_ms(clock.now())
+    start_ms, end_ms = to_ms(start), min(to_ms(end), now)
+    row = conn.execute(
+        "SELECT min(ts_start), max(ts_end) FROM sessions WHERE ts_start < ? AND ts_end >= ?",
+        (end_ms, start_ms),
+    ).fetchone()
+    if row and row[0] is not None:
+        start_ms = min(start_ms, int(row[0]))
+    start_ms = _quiet_edge(conn, start_ms, backwards=True, limit_ms=start_ms - REACH_MS)
+    end_ms = max(end_ms, _quiet_edge(conn, end_ms, backwards=False, limit_ms=now))
+    start, end = from_ms(start_ms), from_ms(end_ms)
+    sessions = build_sessions(conn, start, end)
     with transaction(conn):
         conn.execute(
             "DELETE FROM sessions WHERE ts_start < ? AND ts_end >= ?", (to_ms(end), to_ms(start))
@@ -219,6 +270,13 @@ def rebuild_sessions(
                 )
                 for s in sessions
             ],
+        )
+        # A summary of a session that's gone (re-cut, merged) describes nothing now; its
+        # vector goes with it (database trigger).
+        conn.execute(
+            "DELETE FROM summaries WHERE kind = 'session' AND ts_start < ? AND ts_end >= ? "
+            "AND session_id NOT IN (SELECT id FROM sessions)",
+            (to_ms(end), to_ms(start)),
         )
     return sessions
 

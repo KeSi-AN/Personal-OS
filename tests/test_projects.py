@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from personal_os.config.schema import Config
-from personal_os.core.clock import SimClock
+from personal_os.core.clock import SimClock, to_ms
 from personal_os.core.events import (
     Event,
     FsChange,
@@ -262,6 +262,33 @@ def test_sessions_split_on_gaps_and_absorb_short_detours(w: World):
     # credited for the portfolio-site commit and its state event at minute 0)
     assert 0.8 < first.confidence < 1 and first.stats["by_project_s"]["portfolio-site"] == 320
     assert second.start >= T0 + timedelta(minutes=109)
+
+
+def test_a_sliding_rebuild_window_never_cuts_a_session(w: World):
+    """The daemon rebuilds "the last 24 hours" every 30 s. A session crossing that line was
+    cut at it: a new start, a new id, a new summary every time, and the full session lost."""
+    w.commit(0, AUTH, "x")
+    w.window(0, 300, "session.py - auth-service - Visual Studio Code")  # 09:00-14:00
+    w.resolve()
+    full = rebuild_sessions(w.conn, w.clock, T0, T0 + timedelta(hours=6))
+    assert len(full) == 1
+    w.conn.execute(
+        "INSERT INTO summaries (id, kind, session_id, project_id, ts_start, ts_end, input_hash, "
+        "status, attempts, model, prompt_version, body, search_text, evidence_event_ids, "
+        "created_at) VALUES ('orphan', 'session', 'gone', 'auth-service', ?, ?, 'h', 'ok', 1, "
+        "'m', 1, '{}', 'x', '[]', 0)",
+        (to_ms(T0 + timedelta(minutes=60)), to_ms(T0 + timedelta(minutes=300))),
+    )
+    for minutes in (60, 120, 200):  # the window's start slides into the session
+        again = rebuild_sessions(
+            w.conn, w.clock, T0 + timedelta(minutes=minutes), T0 + timedelta(hours=6)
+        )
+        assert [s.id for s in again] == [full[0].id], minutes
+        assert again[0].start == full[0].start
+    stored = [tuple(r) for r in w.conn.execute("SELECT id, ts_start FROM sessions")]
+    assert stored == [(full[0].id, to_ms(full[0].start))]
+    left = w.conn.execute("SELECT count(*) FROM summaries").fetchone()[0]
+    assert left == 0  # the summary of a session that no longer exists went with it
 
 
 def test_forget_removes_overlapping_sessions(w: World):
