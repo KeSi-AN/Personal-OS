@@ -31,7 +31,7 @@ from personal_os.config.schema import Config
 from personal_os.core import runtime
 from personal_os.core.clock import SystemClock
 from personal_os.core.logging import get_logger, setup_logging
-from personal_os.voice import tts
+from personal_os.voice import dialogue, tts
 from personal_os.voice.stt import Transcriber
 
 _log = get_logger("voice")
@@ -76,6 +76,9 @@ class Voice:
         self.hotkey_error: str | None = None  # kept, so "ready" writes don't hide it
         self.state = "starting"
         self.turn: dict[str, Any] | None = None  # the current or last exchange, for the popup
+        self.convo = dialogue.Conversation()  # the last few exchanges, in memory only
+        # A request to run next, without listening: "no, at 5 pm instead" or "I wanted X".
+        self.next_request: str | None = None
         # Set by a hotkey press while thinking or speaking: stop talking, listen again.
         self.interrupt = threading.Event()
 
@@ -166,13 +169,13 @@ class Voice:
         except Exception as exc:
             _log.warning("wake word stopped", extra={"fields": {"exc_type": type(exc).__name__}})
 
-    def listen(self, preroll: list[Any] | None = None) -> str:
+    def listen(self, preroll: list[Any] | None = None, start_timeout_s: float | None = None) -> str:
         """Record one turn and transcribe it. If what was said is clearly unfinished ("open
         ..."), keep listening a moment for the rest instead of acting on half a sentence."""
         import numpy as np
 
         from personal_os.context.route import incomplete
-        from personal_os.voice.audio import record_utterance
+        from personal_os.voice.audio import START_TIMEOUT_S, record_utterance
 
         v = self.cfg.voice
         if self.wake is not None:
@@ -180,7 +183,7 @@ class Voice:
         try:
             audio = record_utterance(
                 self.stop.is_set, floor=v.mic_floor, silence_ms=v.vad_silence_ms,
-                preroll=preroll or (),
+                preroll=preroll or (), start_timeout_s=start_timeout_s or START_TIMEOUT_S,
             )  # fmt: skip
             if audio is None:
                 self.last_audio = None
@@ -271,22 +274,51 @@ class Voice:
             second = router.route(rechecked, self.index.current(), threshold=threshold)
             if second is not None and router.confirms(second, intent):
                 intent = second
-        if not intent.sure:
-            # Ask, then beep, so it's clear it's now waiting for your answer.
-            self.say(intent.question)
-            if self.turn is not None:
-                self.turn.update(question=intent.question, state="listening")
-            self.write_status("listening", question=intent.question)
-            self.speaker.earcon("listen")
-            answer = self.listen()
+        asks = 0
+        while not intent.sure:
+            if asks == dialogue.MAX_ASKS:
+                return "I still couldn't tell which one, so I left it."
+            asks += 1
+            answer = self.ask_aloud(intent.question)
             self.asked = {"question": intent.question, "answer": answer or "(nothing)"}
             if not answer:
                 return "I didn't hear an answer, so I left it."
-            chosen = router.choose(answer, intent, threshold=threshold)
-            if chosen is None:
-                return "Okay, never mind."
-            intent = chosen
+            reading = dialogue.understand(
+                answer, intent, self.index.current(), threshold=threshold,
+                classify=self.classifier(),
+            )  # fmt: skip
+            self.asked["understood"] = reading.kind + (" (model)" if reading.by_model else "")
+            if reading.kind in ("choose", "correct") and reading.intent is not None:
+                intent = reading.intent  # may itself be unsure: then it asks about that
+            elif reading.kind == "new":
+                self.next_request = reading.text  # handled right after, as its own request
+                return ""
+            elif reading.kind == "cancel":
+                return "Okay, I'll leave it."
+            else:
+                intent = router.Intent(
+                    [], "", guesses=intent.guesses, verb=intent.verb, build=intent.build,
+                    question="Sorry, which one? " + intent.question,
+                )  # fmt: skip
         return self.run_intent(intent, text)
+
+    def ask_aloud(self, question: str) -> str:
+        """Ask, then beep, so it's clear it's now waiting for your answer."""
+        self.say(question)
+        if self.turn is not None:
+            self.turn.update(question=question, state="listening")
+        self.write_status("listening", question=question)
+        self.speaker.earcon("listen")
+        return self.listen()
+
+    def classifier(self) -> Any:
+        """The local model, for answers the rules can't place (None if it's off)."""
+        provider = self.provider()
+        if provider is None:
+            return None
+        return dialogue.model_classifier(
+            provider, self.index.current(), threshold=self.cfg.voice.router_threshold
+        )
 
     def run_intent(self, intent: Any, text: str) -> str:
         from personal_os.actions.base import Origin
@@ -332,9 +364,13 @@ class Voice:
         )
         self.say(f"Shall I {first.replace('_', ' ')}: {detail[:160]}? Say yes or no.")
         answer = self.listen()
-        ok = is_yes(answer)
-        self.say("Okay." if ok else "Not doing it.")
-        return ok
+        verdict, change = dialogue.yes_no(answer)
+        if verdict == "amend":
+            self.next_request = change
+            self.say("Okay, changing it.")
+            return False
+        self.say("Okay." if verdict == "yes" else "Not doing it.")
+        return verdict == "yes"
 
     def handle(self, text: str) -> str:
         from personal_os.context.route import chat_reply, evening, route, strip_polite, strip_wake
@@ -366,14 +402,20 @@ class Voice:
 
                 fact = memory.parse_remember(request) or request
                 self.say(f"Remember that {fact}? Say yes or no.")
-                if is_yes(self.listen()):
+                verdict, change = dialogue.yes_no(self.listen())
+                if verdict == "yes":
                     memory.add(conn, self.clock, fact, "voice")
                     return "Remembered."
+                if verdict == "amend":
+                    self.next_request = change
+                    return ""
                 return "I won't remember it."
             if kind == "do":
                 return self.do(conn, request)
             from personal_os.context.ask import ask
 
+            if not self.convo.active():
+                self.previous = None  # "and yesterday?" means nothing after a long gap
             answer = ask(conn, self.provider(), request, self.clock.now(), previous=self.previous)
             self.previous = answer.question
             self.save_last(request, answer.text, [x.render() for x in answer.cited()])
@@ -388,7 +430,7 @@ class Voice:
         if provider is None:
             return "The local model is turned off, so I can't plan actions."
         ex = self.executor(conn, provider)
-        report = run_request(request, ex, provider)
+        report = run_request(request, ex, provider, context=self.convo.for_planner())
         if report.error:
             return "I couldn't do that. " + (
                 "The kill switch is on." if "kill" in report.error else ""
@@ -448,7 +490,23 @@ class Voice:
                 continue
             while not self.triggers.empty():  # presses made while busy count once
                 self.triggers.get_nowait()
-            self.respond(trigger)
+            self.converse(trigger)
+
+    def converse(self, trigger: str) -> None:
+        """One turn, then any follow-ups: a request it was told to make next ("no, at 5 pm
+        instead"), and whatever you say in the few seconds after a reply, without the hotkey.
+        "Thanks" or silence ends it; so does a press (that starts a fresh turn)."""
+        more = self.respond(trigger)
+        for _ in range(MAX_FOLLOWUPS):
+            if self.stop.is_set() or not self.triggers.empty():
+                return
+            if self.next_request:
+                text, self.next_request = self.next_request, None
+                more = self.respond("followup", text=text)
+                continue
+            if not more or self.cfg.voice.followup_s <= 0:
+                return
+            more = self.respond("followup")
 
     def launch_popup(self) -> None:
         """Show the voice popup for this turn, off-thread: recording never waits on it, and a
@@ -473,7 +531,9 @@ class Voice:
         self.stt_fast.warm()
         self.stt.warm()
 
-    def respond(self, trigger: str) -> None:
+    def respond(self, trigger: str, text: str | None = None) -> bool:
+        """One exchange. `text`: a request to handle without listening. Returns True when a
+        reply was spoken in full, so a follow-up can be listened for."""
         from personal_os.context.route import incomplete, route
 
         entry: dict[str, Any] = {"at": self.clock.now().isoformat(), "trigger": trigger}
@@ -489,32 +549,49 @@ class Voice:
         }  # fmt: skip
         self.write_status("listening", trigger=trigger)
         self.launch_popup()
+        spoke = ended = False
+        given = text is not None
         try:
-            if trigger != "barge":  # when you interrupted, you're already talking
-                self.speaker.earcon("listen")
-            text = self.listen(preroll) if trigger == "barge" and preroll else self.listen()
+            if given:
+                pass  # a request already made: "no, at 5 pm instead"
+            elif trigger == "followup":
+                self.speaker.earcon("more")  # softer: "anything else?"
+                text = self.listen(start_timeout_s=self.cfg.voice.followup_s)
+            else:
+                if trigger != "barge":  # when you interrupted, you're already talking
+                    self.speaker.earcon("listen")
+                text = self.listen(preroll) if trigger == "barge" and preroll else self.listen()
+            assert text is not None
             entry["heard"] = text
             entry["listen_s"] = round(time.monotonic() - t0, 1)
             if not text:
                 entry["route"] = "nothing heard"
-                return
+                if trigger == "followup":
+                    entry["quiet"] = True  # the window closed unused: not worth a log line
+                return False
+            if trigger == "followup" and not given and dialogue.closing(text):
+                entry["route"] = "end of conversation"
+                self.convo.clear()
+                ended = True
+                return False
             if incomplete(text):
                 entry["route"] = "incomplete"
                 self.say(f"Sorry, I only caught: {text.rstrip('-. ')}. Please say it again.")
-                return
+                return False
             self.turn["heard"] = text
             self.turn["state"] = "thinking"
             self.write_status("thinking", heard=text)
             t1 = time.monotonic()
             self.asked = {}
-            reply = self.fast(text)
+            reply = None if given else self.fast(text)
             if self.asked:
                 entry["asked"] = self.asked
             if reply is not None:
                 entry["route"] = "fast"
             else:
                 # Not a quick command: questions and requests get the accurate transcript.
-                text = self.accurate_text() or text
+                if not given:
+                    text = self.accurate_text() or text
                 entry["heard"] = text
                 self.turn_update(heard=text)
                 entry["route"] = route(text)
@@ -523,7 +600,7 @@ class Voice:
             entry["handle_s"] = round(time.monotonic() - t1, 1)
             if self.interrupt.is_set():
                 entry["route"] = f"{entry['route']} (interrupted)"
-                return
+                return False
             if reply:
                 self.turn.update(reply=reply, state="speaking")
                 self.write_status("speaking")
@@ -532,6 +609,8 @@ class Voice:
                 entry["speak_s"] = round(time.monotonic() - t2, 1)
                 if self.interrupt.is_set():
                     entry["route"] = f"{entry['route']} (interrupted)"
+                else:
+                    spoke = True
         except Exception as exc:  # never let one request kill the voice process
             entry["error"] = f"{type(exc).__name__}: {exc}"[:300]
             _log.warning("voice request failed", extra={"fields": {"exc_type": type(exc).__name__}})
@@ -545,7 +624,10 @@ class Voice:
                     reply=entry.get("reply") or self.turn["reply"],
                     **({"error": "Something went wrong."} if "error" in entry else {}),
                 )  # fmt: skip
-            record_history(self.cfg.runtime_dir, entry)
+            if not entry.get("quiet"):
+                record_history(self.cfg.runtime_dir, entry)
+            if entry.get("heard") and "error" not in entry and not ended:
+                self.convo.add(entry["heard"], entry.get("reply", ""), str(entry.get("route", "")))
             _log.info(
                 "voice request",
                 extra={
@@ -557,6 +639,7 @@ class Voice:
                 },
             )
             self.write_status("ready")
+        return spoke
 
 
 def _launch_popup(cfg: Config) -> None:
@@ -571,6 +654,7 @@ def _launch_popup(cfg: Config) -> None:
 
 
 SPOKEN_SENTENCES = 2
+MAX_FOLLOWUPS = 8  # a conversation ends after this many follow-ups without a press
 
 
 def spoken(reply: str) -> str:

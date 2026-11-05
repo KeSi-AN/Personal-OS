@@ -376,7 +376,7 @@ def test_still_unsure_it_asks_and_acts_on_yes(home: Path, config: Config):
     v2, _ = voice_for(env, "no")
     v2.index._index = INDEX
     v2.last_audio = None
-    assert v2.fast("open brat") == "Okay, never mind."
+    assert v2.fast("open brat") == "Okay, I'll leave it."
 
 
 def test_fast_path_commands_run_through_the_executor(home: Path, config: Config, monkeypatch):

@@ -129,6 +129,7 @@ class VoiceConfig(_Section):
     popup: bool = True  # show a small window with the transcript and reply for each turn
     popup_position: Literal["bottom-right", "top-right", "bottom-left", "top-left"] = "bottom-right"
     popup_autoclose_s: float = Field(5.0, ge=1, le=120)
+    followup_s: float = Field(6.0, ge=0, le=20)  # listen this long after a reply; 0: off
     speechify_voice: str = "geffen_32"
     speechify_model: str = "simba-3.5"
     max_spoken_chars: int = Field(600, ge=100, le=2000)

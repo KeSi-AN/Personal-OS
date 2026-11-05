@@ -177,6 +177,7 @@ windows_voice = "Microsoft Zira Desktop"   # `personal-os voice voices` lists th
 popup = true               # a small window shows each turn live: transcript, reply, state
 popup_position = "bottom-right"   # bottom-right | top-right | bottom-left | top-left
 popup_autoclose_s = 5.0    # closes this long after the reply is spoken, unless pinned
+followup_s = 6.0           # after a reply, listen this long for a follow-up (no hotkey); 0 = off
 speechify_voice = "geffen_32"
 speechify_model = "simba-3.5"
 max_spoken_chars = 600

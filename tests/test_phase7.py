@@ -316,7 +316,7 @@ class Heard:
         self.phrases = list(phrases)
         self.said: list[str] = []
 
-    def listen(self) -> str:
+    def listen(self, *_a: Any, **_k: Any) -> str:
         return self.phrases.pop(0) if self.phrases else ""
 
     def say(self, text: str) -> None:

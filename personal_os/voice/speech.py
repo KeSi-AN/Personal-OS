@@ -73,6 +73,7 @@ EARCONS = {
     "listen": np.concatenate([tone((660,), 70), tone((880,), 90)]),
     "ack": np.concatenate([tone((988,), 55), np.zeros(600, np.float32), tone((1319,), 70)]),
     "error": tone((330,), 160),
+    "more": tone((784,), 60, volume=0.18),  # quieter: "anything else?" after a reply
 }
 
 
