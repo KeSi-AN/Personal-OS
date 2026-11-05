@@ -32,6 +32,34 @@ The dashboard's Today page shows the same in a **Voice** card.
 
 **No beep when you press the hotkey?** Then the voice process isn't running. It runs under the daemon, so check `personal-os status`. The tray's **Stop capture and voice** stops both until you start them again (`personal-os daemon start`, or log in again). `doctor` reports *voice is on but its process isn't running*.
 
+## Talking with Donna
+
+Donna answers like a conversation, not a series of one-off commands.
+
+**When she isn't sure, answer however you like.** After "Did you mean Brave?":
+
+| You say | She does |
+|---|---|
+| "yes", "the second one", "Brave" | Opens the one you picked |
+| "No, I wanted the calculator", "I meant Zoom", "actually, Spotify" | Opens that instead. If she's unsure about that too, she asks once more, and gives up after two questions. |
+| "No, open Chrome", "forget that, what's the weather?" | Does the new request instead |
+| "No", "never mind", or nothing | Leaves it |
+
+Answers the rules can't place ("the one with the lion logo", "the maths thing") go to the local model, which only decides how to read your answer. Whatever it picks still goes through the same checks as any command.
+
+**Changing your mind during a confirmation.** "Shall I set a reminder at 16:34?" → "No, make it 5 pm instead" changes the request rather than dropping it. "Yes but in VS Code" works the same way. As before, only a clear yes approves anything.
+
+**Follow-ups without the hotkey.** After a reply, a soft tone means she's listening for a few more seconds (6 by default), and the popup says *Anything else?* Just keep talking: "and open the calculator", "what about yesterday?". Say "thanks" or "that's all", or stay quiet, and she stops listening. A window that closes unused isn't logged.
+
+**Short-term memory.** For five minutes she remembers what was said, so "open it", "make it 5 pm instead" or "and yesterday?" make sense. This is kept in memory only and forgotten when voice restarts. The action planner sees your words and the results of Donna's own commands, never answers built from your captured activity (ADR-050).
+
+```toml
+[voice]
+followup_s = 6.0   # seconds to listen after a reply; 0 turns follow-ups off
+```
+
+Follow-ups keep the microphone open a few seconds longer after each reply. Audio still stays in memory and is never written to disk, and the tone and popup show when it's listening. Set `followup_s = 0` if you'd rather press the hotkey every time.
+
 ## The popup
 
 When a turn starts (the hotkey, the wake word, or talking over a reply), a small window opens in the bottom-right corner, on top, without taking the keyboard from what you're doing. It shows:
