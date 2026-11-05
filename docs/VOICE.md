@@ -87,6 +87,10 @@ popup_position = "bottom-right"   # bottom-right | top-right | bottom-left | top
 popup_autoclose_s = 5.0           # seconds after the reply, unless pinned
 ```
 
+**Reminders show here too.** When a reminder is due, the popup opens with it and stays until you click **Dismiss**, and Donna says it when she isn't busy talking to you. Windows hides its own notification banners while a full-screen app is running or Do Not Disturb is on, so a Windows notification is used only when the popup can't open. A new briefing shows its title here; the briefing itself is on the dashboard and in the notification centre.
+
+**Asking about reminders.** "What reminders do I have?" or "What did I ask you to remind me?" is answered from your reminders: what's coming up, and what went off in the last day. Times can be said the way speech recognition writes them ("2.10", "5 p.m.").
+
 It needs the WebView2 runtime, which Windows 11 includes. Without it, voice works as before with no popup, and `doctor` says why on its `popup` line.
 
 ## Wake word: "hey Donna"
