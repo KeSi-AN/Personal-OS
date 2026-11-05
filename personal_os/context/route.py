@@ -18,10 +18,26 @@ _BRIEFING = re.compile(
     r"end of (the )?day|evening summary|wrap up( the day)?|how was my day)\W*$",
     re.I,
 )
+# Requests start with a verb. Not "do": "do I have ...?" is a question.
 _DO = re.compile(
-    r"^\s*(please\s+)?(do|open|start|launch|play|pause|resume|skip|mute|unmute|turn|set|"
+    r"^\s*(please\s+)?(open|start|launch|play|pause|resume|skip|mute|unmute|turn|set|"
     r"remind|take|save|note|create|move|rename|commit|switch|stash|run|copy|minimi[sz]e|"
-    r"maximi[sz]e|focus|dim|brighten|volume|next|previous)\b",
+    r"maximi[sz]e|focus|dim|brighten|volume|next|previous|edit|change|update|modify|cancel|"
+    r"delete|remove|clear|add|schedule|reschedule|postpone|delay|snooze|push|close|lock|"
+    r"raise|lower|increase|decrease|make|stop|unpause|go to)\b",
+    re.I,
+)
+# Questions: asked, never acted on. Checked before the verbs above ("is there ...", "do I ...").
+_QUESTION = re.compile(
+    r"^\s*(what|what's|whats|when|when's|where|where's|who|who's|whom|whose|why|how|how's|"
+    r"which|is|isn't|are|aren't|was|wasn't|were|do|does|did|don't|doesn't|didn't|have|has|"
+    r"had|haven't|hasn't|am|any|should|shall i|will i|would i|could i|can i)\b",
+    re.I,
+)
+# Words that carry nothing before a request: "Actually, edit that", "okay so open brave".
+_FILLER = re.compile(
+    r"^\s*(?:(?:actually|okay|ok|so|um+|uh+|er+|erm|well|and|also|then|alright|all right|"
+    r"right|oh|hmm+|now|wait|sorry|listen|yeah|yes|no|hey)\b[\s,.!-]*)+",
     re.I,
 )
 _WAKE = re.compile(r"^\s*(hey\s+)?donna\W*\s*", re.I)
@@ -52,22 +68,34 @@ def strip_wake(text: str) -> str:
     return _WAKE.sub("", text, count=1).strip()
 
 
+def normalize(text: str) -> str:
+    """Without the wake word and leading filler: "Hey Donna, actually, edit that" -> "edit
+    that". A bare filler ("okay", "no") is left as it is: that's the whole message."""
+    t = strip_wake(text)
+    stripped = _FILLER.sub("", t, count=1).strip()
+    return stripped if stripped else t
+
+
 def strip_polite(text: str) -> str:
     """ "Can you open brave?" -> "open brave?"."""
     return _POLITE.sub("", text, count=1).strip()
 
 
 def route(text: str) -> Route:
-    text = strip_wake(text)
-    if _STOP.match(text):
+    whole = strip_wake(text)
+    if _STOP.match(whole):
         return "stop"
-    if _CHAT.match(text):
+    if _CHAT.match(whole):
         return "chat"
+    text = normalize(text)
     if _BRIEFING.match(text):
         return "briefing"
     if parse_remember(text):
         return "remember"
-    if _DO.match(strip_polite(text)):
+    request = strip_polite(text)  # "can you open ..." is a request; "can I ...?" isn't
+    if _QUESTION.match(request) and not _POLITE.match(text):
+        return "ask"
+    if _DO.match(request):
         return "do"
     return "ask"
 

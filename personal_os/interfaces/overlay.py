@@ -10,7 +10,6 @@ background, so the first answer skips the cold start. Typing:
 
 from __future__ import annotations
 
-import re
 import sys
 import threading
 import tkinter as tk
@@ -21,11 +20,6 @@ from personal_os.config.loader import load_config
 from personal_os.core import runtime
 from personal_os.core.clock import SystemClock
 
-DO_WORDS = re.compile(
-    r"^\s*(do|open|start|launch|play|pause|skip|mute|turn|set|remind|take|save|note|create|"
-    r"move|rename|commit|switch|stash|run|copy|minimi[sz]e|maximi[sz]e|focus)\b",
-    re.I,
-)
 LOCK = "overlay.lock"
 
 
@@ -108,7 +102,10 @@ class Overlay:
             )
             return
         self.show("Working…")
-        target = self._do if DO_WORDS.match(text) else self._ask
+        from personal_os.context.route import route
+
+        # The same router as voice: "do I have ...?" is a question, "actually, cancel it" isn't.
+        target = self._do if route(text) == "do" else self._ask
         threading.Thread(target=target, args=(text,), daemon=True).start()
 
     def _remember(self, fact: str) -> None:
