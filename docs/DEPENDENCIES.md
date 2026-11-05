@@ -26,6 +26,7 @@ Transitive packages pulled in by the ones below (for example `rich`, `click` and
 | `openwakeword` | 7 | The optional "hey Donna" wake word (ONNX on Windows). Brings `onnxruntime` and `scipy`. |
 | `keyring` | 7 | Windows Credential Manager for the Google refresh token and the Speechify key. |
 | `mcp` | 7 | The official MCP SDK for the read-only `personal-os mcp` server. |
+| `pywebview` | 8 | The voice popup: a small native window drawn by WebView2 (Edge), which Windows 11 already has. Brings `pythonnet` (to reach WinForms and WebView2 from Python), `clr-loader`, `bottle` and `proxy-tools`. The page is passed as a string, so pywebview's built-in `bottle` server never starts and no port opens (ADR-071). |
 
 ## Development and test only
 
