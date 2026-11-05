@@ -154,6 +154,7 @@ def position(screen_w: int, screen_h: int, corner: str) -> tuple[int, int]:
 
 # --- the demo: fake turns, so the states can be seen without speaking ---------------------
 
+DEMO_AT = "2026-01-01T09:00:00+00:00"
 DEMO: list[tuple[float, View]] = [
     (1.8, View(True, "listening", "demo1", "hotkey")),
     (1.6, View(True, "thinking", "demo1", "hotkey", heard="What's the weather like?")),
@@ -192,6 +193,16 @@ DEMO: list[tuple[float, View]] = [
     (
         2.0,
         View(True, "done", "demo3", "hotkey", killed=True),
+    ),
+    (
+        2.5,
+        View(
+            True,
+            "done",
+            "demo3",
+            "hotkey",
+            alerts=({"id": "demo", "title": "Reminder", "text": "Stretch (demo)", "at": DEMO_AT},),
+        ),
     ),
     (0.0, View(True, "done", "demo4", "hotkey", heard="That's the demo.", reply="Closing soon.")),
 ]
@@ -239,6 +250,12 @@ class Api:
         if close:
             self.close()
         return data
+
+    def dismiss(self, alert_id: str) -> bool:
+        """Dismiss a reminder shown in the popup."""
+        from personal_os.interfaces import alerts
+
+        return alerts.dismiss(self._cfg.runtime_dir, str(alert_id))
 
     def pin(self, on: bool) -> bool:
         self._auto.pin(bool(on))

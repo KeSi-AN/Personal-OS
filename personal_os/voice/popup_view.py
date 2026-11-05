@@ -26,6 +26,7 @@ class View:
     error: str = ""
     paused: bool = False
     killed: bool = False
+    alerts: tuple[dict[str, Any], ...] = ()  # due reminders: shown until dismissed
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -47,7 +48,13 @@ def _paused(runtime_dir: Path, now: datetime) -> bool:
         return True
 
 
-def view_from(status: dict[str, Any], *, paused: bool, killed: bool) -> View:
+def view_from(
+    status: dict[str, Any],
+    *,
+    paused: bool,
+    killed: bool,
+    alerts: tuple[dict[str, Any], ...] = (),
+) -> View:
     """The popup's view of a voice status dict (as voice.main.status() returns it)."""
     running = bool(status.get("running"))
     turn = status.get("turn") or {}
@@ -68,17 +75,20 @@ def view_from(status: dict[str, Any], *, paused: bool, killed: bool) -> View:
         error=str(turn.get("error", "")) or str(status.get("error", "")),
         paused=paused,
         killed=killed,
+        alerts=alerts,
     )
 
 
 def read_view(runtime_dir: Path, now: datetime) -> View:
     from personal_os.actions import killswitch
+    from personal_os.interfaces import alerts
     from personal_os.voice.main import status
 
     return view_from(
         status(runtime_dir),
         paused=_paused(runtime_dir, now),
         killed=killswitch.engaged(runtime_dir),
+        alerts=tuple(alerts.pending(runtime_dir, now)),
     )
 
 
@@ -103,8 +113,8 @@ class AutoClose:
         if new_turn:
             self.turn_id = view.turn_id
             self.done_since = None
-        finished = view.state in ("done", "idle", "not running")
-        if not finished:
+        finished = view.state in ("done", "idle", "not running") and not view.alerts
+        if not finished:  # a turn in progress, or a reminder not yet dismissed
             self.done_since = None
             return False, new_turn
         if self.done_since is None:

@@ -31,6 +31,11 @@ main { flex:1; padding:0 12px; overflow-y:auto; scrollbar-width:thin;
 footer { display:flex; gap:6px; padding:6px 12px 10px; align-items:center; }
 #note { color:var(--muted); font-size:12px; flex:1; }
 .hidden { display:none; }
+.alert { border:1px solid var(--warn); border-radius:8px; padding:6px 8px; margin:6px 0;
+  display:flex; gap:8px; align-items:flex-start; }
+.alert .body { flex:1; } .alert b { color:var(--warn); } .alert .when { color:var(--muted); font-size:12px; }
+.bell { width:10px; height:10px; margin:6px; border-radius:50%; background:var(--warn);
+  animation:pulse 1.6s ease-out infinite; }
 
 /* State indicator */
 #ind { width:22px; height:22px; position:relative; flex:none; }
@@ -59,6 +64,7 @@ footer { display:flex; gap:6px; padding:6px 12px 10px; align-items:center; }
   <span id="trigger"></span>
 </header>
 <main>
+  <div id="alerts"></div>
   <div id="notice" class="line hidden"></div>
   <div id="heardbox" class="hidden"><span class="who">You</span><div id="heard" class="line"></div></div>
   <div id="question" class="line hidden"></div>
@@ -93,13 +99,50 @@ function box(id, text) {
   $(id + "box").classList.toggle("hidden", !text);
 }
 
+const ACTIVE = ["listening", "thinking", "speaking"];
+let lastAlerts = "";
+
+function renderAlerts(alerts) {
+  const key = alerts.map((a) => a.id).join(",");
+  if (key === lastAlerts) return;
+  lastAlerts = key;
+  const box = $("alerts");
+  box.replaceChildren();
+  for (const a of alerts) {  // built with textContent: reminder text is never parsed as HTML
+    const card = document.createElement("div");
+    card.className = "alert";
+    const body = document.createElement("div");
+    body.className = "body";
+    const title = document.createElement("b");
+    title.textContent = a.title;
+    const when = document.createElement("span");
+    when.className = "when";
+    const t = new Date(a.at);
+    when.textContent = isNaN(t) ? "" : "  " + t.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const text = document.createElement("div");
+    text.className = "line";
+    text.textContent = a.text;
+    body.append(title, when, text);
+    const btn = document.createElement("button");
+    btn.textContent = "Dismiss";
+    btn.onclick = () => window.pywebview.api.dismiss(a.id).then(tick);
+    card.append(body, btn);
+    box.append(card);
+  }
+}
+
 function render(v) {
-  const ind = IND[v.state] || '<div class="dot"></div>';
+  const alerts = v.alerts || [];
+  const alertOnly = alerts.length > 0 && !ACTIVE.includes(v.state);
+  renderAlerts(alerts);
+  const ind = alertOnly ? '<div class="bell"></div>' : (IND[v.state] || '<div class="dot"></div>');
   if (ind !== lastInd) { $("ind").innerHTML = ind; lastInd = ind; }
   const followup = v.trigger === "followup";
-  $("label").textContent = followup && v.state === "listening" && !v.question
+  $("label").textContent = alertOnly ? alerts[alerts.length - 1].title
+    : followup && v.state === "listening" && !v.question
     ? "Anything else?" : (LABELS[v.state] || v.state);
-  $("trigger").textContent = v.trigger && !followup ? "via " + v.trigger : "";
+  $("trigger").textContent = v.trigger && !followup && !alertOnly ? "via " + v.trigger : "";
+  if (alertOnly) v = Object.assign({}, v, { heard: "", reply: "", question: "", error: "" });
   const notices = [];
   if (v.killed) notices.push("Actions are off (kill switch).");
   if (v.paused) notices.push("Capture is paused.");
