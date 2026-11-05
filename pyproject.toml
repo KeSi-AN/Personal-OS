@@ -26,6 +26,7 @@ dependencies = [
     "rapidfuzz>=3.14.6",
     "piper-tts>=1.8.0",
     "pycaw>=20260927",
+    "pywebview>=5",
 ]
 
 [project.scripts]
@@ -92,7 +93,7 @@ module = ["tests.*"]
 disallow_untyped_defs = false
 
 [[tool.mypy.overrides]]
-module = ["scipy", "scipy.*", "pystray", "pystray.*", "faster_whisper", "faster_whisper.*", "sounddevice", "openwakeword", "openwakeword.*", "piper", "piper.*", "onnxruntime", "onnxruntime.*", "pycaw", "pycaw.*", "comtypes", "comtypes.*"]
+module = ["scipy", "scipy.*", "pystray", "pystray.*", "faster_whisper", "faster_whisper.*", "sounddevice", "openwakeword", "openwakeword.*", "piper", "piper.*", "onnxruntime", "onnxruntime.*", "webview", "webview.*", "pycaw", "pycaw.*", "comtypes", "comtypes.*"]
 ignore_missing_imports = true
 
 [tool.uv]

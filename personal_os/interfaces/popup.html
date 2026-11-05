@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<title>Personal OS voice</title>
+<style>
+/* The dashboard's dark palette (web/html.py). */
+:root { --bg:#141416; --card:#1d1d20; --ink:#ececee; --muted:#9a9aa2; --line:#2c2c31;
+  --accent:#7f9cff; --ok:#4cc483; --warn:#f0a63a; --bad:#ff6b5e; --chip:#262a38; }
+* { box-sizing: border-box; }
+html, body { margin:0; height:100%; background:var(--card); color:var(--ink);
+  font:14px/1.4 "Segoe UI", system-ui, sans-serif; overflow:hidden; user-select:none; }
+body { display:flex; flex-direction:column; border:1px solid var(--line); }
+header { display:flex; align-items:center; gap:10px; padding:10px 12px 6px; }
+#label { font-weight:600; flex:1; }
+#trigger { color:var(--muted); font-size:12px; }
+button { background:var(--chip); color:var(--ink); border:1px solid var(--line); border-radius:6px;
+  font:inherit; font-size:12px; padding:2px 8px; cursor:pointer; }
+button:hover { border-color:var(--accent); }
+button[aria-pressed="true"] { background:var(--accent); color:#10131c; }
+main { flex:1; padding:0 12px; overflow-y:auto; scrollbar-width:thin;
+  scrollbar-color:var(--line) transparent; }
+.line { margin:4px 0; white-space:pre-wrap; word-wrap:break-word; }
+.who { color:var(--muted); font-size:12px; }
+#heard { color:var(--muted); font-style:italic; }
+#question { color:var(--warn); }
+#error { color:var(--bad); }
+#notice { color:var(--warn); font-size:12px; }
+footer { display:flex; gap:6px; padding:6px 12px 10px; align-items:center; }
+#note { color:var(--muted); font-size:12px; flex:1; }
+.hidden { display:none; }
+
+/* State indicator */
+#ind { width:22px; height:22px; position:relative; flex:none; }
+.mic { width:12px; height:12px; border-radius:50%; background:var(--ok); position:absolute;
+  left:5px; top:5px; }
+.mic::after { content:""; position:absolute; inset:-5px; border-radius:50%;
+  border:2px solid var(--ok); animation:pulse 1.2s ease-out infinite; }
+@keyframes pulse { from { transform:scale(.6); opacity:1; } to { transform:scale(1.4); opacity:0; } }
+.spin { width:18px; height:18px; margin:2px; border-radius:50%; border:3px solid var(--line);
+  border-top-color:var(--accent); animation:spin .8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.bars { display:flex; gap:2px; align-items:center; height:22px; }
+.bars i { width:3px; background:var(--accent); border-radius:2px; animation:bar .9s ease-in-out infinite; }
+.bars i:nth-child(2) { animation-delay:.15s } .bars i:nth-child(3) { animation-delay:.3s }
+.bars i:nth-child(4) { animation-delay:.45s }
+@keyframes bar { 0%,100% { height:4px; } 50% { height:18px; } }
+.dot { width:10px; height:10px; margin:6px; border-radius:50%; background:var(--muted); }
+@media (prefers-reduced-motion: reduce) { * { animation:none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <div id="ind" aria-hidden="true"></div>
+  <div id="label" role="status" aria-live="polite">Starting…</div>
+  <span id="trigger"></span>
+</header>
+<main>
+  <div id="notice" class="line hidden"></div>
+  <div id="heardbox" class="hidden"><span class="who">You</span><div id="heard" class="line"></div></div>
+  <div id="question" class="line hidden"></div>
+  <div id="replybox" class="hidden"><span class="who">Reply</span><div id="reply" class="line"></div></div>
+  <div id="error" class="line hidden"></div>
+</main>
+<footer>
+  <span id="note">Esc closes</span>
+  <button id="pin" aria-pressed="false" title="Keep open">Pin</button>
+  <button id="dash" title="Open the dashboard">Dashboard</button>
+  <button id="close" title="Close (Esc)">✕</button>
+</footer>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const LABELS = { listening: "Listening…", thinking: "Thinking…", speaking: "Speaking…",
+  done: "Done", idle: "Ready", "not running": "Voice isn't running" };
+const IND = {
+  listening: '<div class="mic"></div>',
+  thinking: '<div class="spin"></div>',
+  speaking: '<div class="bars"><i></i><i></i><i></i><i></i></div>',
+};
+let lastInd = "";
+
+function show(id, text) {
+  const el = $(id);
+  el.textContent = text || "";
+  el.classList.toggle("hidden", !text);
+}
+function box(id, text) {
+  $(id).textContent = text || "";
+  $(id + "box").classList.toggle("hidden", !text);
+}
+
+function render(v) {
+  const ind = IND[v.state] || '<div class="dot"></div>';
+  if (ind !== lastInd) { $("ind").innerHTML = ind; lastInd = ind; }
+  $("label").textContent = LABELS[v.state] || v.state;
+  $("trigger").textContent = v.trigger ? "via " + v.trigger : "";
+  const notices = [];
+  if (v.killed) notices.push("Actions are off (kill switch).");
+  if (v.paused) notices.push("Capture is paused.");
+  show("notice", notices.join(" "));
+  box("heard", v.heard);
+  show("question", v.question);
+  box("reply", v.reply);
+  show("error", v.error);
+  $("pin").setAttribute("aria-pressed", v.pinned ? "true" : "false");
+}
+
+async function tick() {
+  if (!window.pywebview || !window.pywebview.api) return;
+  try { render(await window.pywebview.api.view()); } catch (e) { /* the next poll retries */ }
+}
+
+window.addEventListener("pywebviewready", () => { tick(); setInterval(tick, 220); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") window.pywebview.api.close(); });
+document.addEventListener("pointerdown", () => { window.pywebview && window.pywebview.api.focus(); });
+$("close").onclick = () => window.pywebview.api.close();
+$("pin").onclick = async () => {
+  const on = $("pin").getAttribute("aria-pressed") !== "true";
+  const now = await window.pywebview.api.pin(on);
+  $("pin").setAttribute("aria-pressed", now ? "true" : "false");
+};
+$("dash").onclick = async () => {
+  const msg = await window.pywebview.api.open_dashboard();
+  $("note").textContent = msg || "Opened the dashboard.";
+};
+</script>
+</body>
+</html>
