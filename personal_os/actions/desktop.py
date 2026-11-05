@@ -8,7 +8,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 MEDIA_KEYS = {
     "play_pause": 0xB3,
@@ -41,6 +41,10 @@ class Desktop(Protocol):
     def recycle(self, path: Path) -> None: ...
     def get_brightness(self) -> int | None: ...
     def set_brightness(self, percent: int) -> None: ...
+    def get_volume(self) -> int | None: ...
+    def set_volume(self, percent: int) -> None: ...
+    def lock_screen(self) -> None: ...
+    def reveal(self, path: Path) -> None: ...
 
 
 @dataclass
@@ -51,6 +55,20 @@ class FakeDesktop:
     clipboard: str | None = "before"
     open_windows: list[WindowInfo] = field(default_factory=list)
     brightness: int | None = 50
+    volume: int | None = 30
+
+    def get_volume(self) -> int | None:
+        return self.volume
+
+    def set_volume(self, percent: int) -> None:
+        self.calls.append(("set_volume", percent))
+        self.volume = percent
+
+    def lock_screen(self) -> None:
+        self.calls.append(("lock_screen", None))
+
+    def reveal(self, path: Path) -> None:
+        self.calls.append(("reveal", str(path)))
 
     def get_brightness(self) -> int | None:
         return self.brightness
@@ -208,6 +226,33 @@ class WindowsDesktop:  # pragma: no cover - exercised by the live tests and the 
             "Invoke-CimMethod -MethodName WmiSetBrightness "
             f"-Arguments @{{Timeout=1; Brightness={int(percent)}}} | Out-Null"
         )
+
+    def _endpoint(self) -> Any:
+        import comtypes
+        from pycaw.pycaw import AudioUtilities
+
+        comtypes.CoInitialize()  # each thread that uses COM must
+        return AudioUtilities.GetSpeakers().EndpointVolume
+
+    def get_volume(self) -> int | None:
+        try:
+            return round(float(self._endpoint().GetMasterVolumeLevelScalar()) * 100)
+        except Exception:
+            return None
+
+    def set_volume(self, percent: int) -> None:
+        ep = self._endpoint()
+        ep.SetMute(0, None)
+        ep.SetMasterVolumeLevelScalar(max(0, min(100, percent)) / 100.0, None)
+
+    def lock_screen(self) -> None:
+        import ctypes
+
+        ctypes.WinDLL("user32").LockWorkStation()
+
+    def reveal(self, path: Path) -> None:
+        # Explorer with the item selected; the path is one argument, never a shell string.
+        subprocess.Popen(["explorer.exe", f"/select,{path}"], close_fds=True)
 
 
 def default_desktop() -> Desktop:

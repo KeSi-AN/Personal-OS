@@ -83,3 +83,64 @@ class SetBrightness(Tool):
         ctx.desktop.set_brightness(args.percent)
         undo = None if before is None else {"tool": "set_brightness", "args": {"percent": before}}
         return Result(f"brightness {args.percent}%", undo=undo)
+
+
+class VolumeArgs(Args):
+    percent: int = Field(ge=0, le=100)
+
+
+class SetVolume(Tool):
+    name = "set_volume"
+    summary = "set the sound volume to a level from 0 to 100 (also unmutes)"
+    tier = Tier.LOW
+    cues = ("volume", "sound", "loud", "quiet", "audio")
+    reversible = True
+    args_model = VolumeArgs
+
+    def preview(self, args: VolumeArgs, ctx: ToolContext) -> str:
+        return f"set the volume to {args.percent}%"
+
+    def run(self, args: VolumeArgs, ctx: ToolContext) -> Result:
+        before = ctx.desktop.get_volume()
+        ctx.desktop.set_volume(args.percent)
+        undo = None if before is None else {"tool": "set_volume", "args": {"percent": before}}
+        return Result(f"volume {args.percent}%", undo=undo)
+
+
+class NoArgs(Args):
+    pass
+
+
+class LockScreen(Tool):
+    name = "lock_screen"
+    summary = "lock the computer (the Windows lock screen; nothing is closed)"
+    tier = Tier.LOW
+    cues = ("lock",)
+    args_model = NoArgs
+
+    def preview(self, args: NoArgs, ctx: ToolContext) -> str:
+        return "lock the screen"
+
+    def run(self, args: NoArgs, ctx: ToolContext) -> Result:
+        ctx.desktop.lock_screen()
+        return Result("Locked.")
+
+
+class RevealArgs(Args):
+    path: str
+
+
+class RevealPath(Tool):
+    name = "reveal_path"
+    summary = "show a file or folder selected in File Explorer (doesn't open it)"
+    tier = Tier.LOW
+    reversible = True
+    args_model = RevealArgs
+
+    def preview(self, args: RevealArgs, ctx: ToolContext) -> str:
+        return f"show {ctx.paths.check(ctx.paths.locate(args.path), must_exist=True)} in Explorer"
+
+    def run(self, args: RevealArgs, ctx: ToolContext) -> Result:
+        path = ctx.paths.check(ctx.paths.locate(args.path), must_exist=True)
+        ctx.desktop.reveal(path)
+        return Result(f"Showing {path.name}")

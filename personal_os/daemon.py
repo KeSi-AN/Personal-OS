@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import sqlite3
 import sys
@@ -423,7 +424,17 @@ class Daemon:
     def _tray_state(self) -> str:
         if killswitch.engaged(self.config.runtime_dir):
             return "killed"
+        if self._voice_listening():
+            return "listening"
         return "paused" if self.paused.is_set() else "capturing"
+
+    def _voice_listening(self) -> bool:
+        """The voice process has the mic open for a request (not just waiting for the key)."""
+        try:
+            data = json.loads((self.config.runtime_dir / "voice.json").read_text("utf-8"))
+        except (OSError, ValueError):
+            return False
+        return bool(isinstance(data, dict) and data.get("state") == "listening")
 
     def _toggle_kill(self) -> None:
         if killswitch.engaged(self.config.runtime_dir):

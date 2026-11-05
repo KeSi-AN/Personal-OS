@@ -82,18 +82,33 @@ def voice_wake(state: Annotated[str, typer.Argument(help="on or off")]) -> None:
 
 @voice_app.command("setup")
 def voice_setup() -> None:
-    """Download the speech model (faster-whisper small.en, about 480 MB) if it's missing."""
+    """Download what voice needs, if missing: speech in (faster-whisper small.en ~480 MB and
+    base.en ~145 MB) and the Piper voice (~63 MB). All run locally."""
+    import subprocess
+
     from faster_whisper import download_model
 
     from personal_os.voice.stt import model_dir
 
     cfg = _config()
-    target = model_dir(cfg.data_dir, cfg.voice.stt_model)
-    if (target / "model.bin").exists():
-        typer.echo(f"Already there: {target}")
-        return
-    typer.echo(f"Downloading {cfg.voice.stt_model} to {target} ...")
-    download_model(cfg.voice.stt_model, output_dir=str(target))
+    for name in dict.fromkeys(m for m in (cfg.voice.stt_fast_model, cfg.voice.stt_model) if m):
+        target = model_dir(cfg.data_dir, name)
+        if (target / "model.bin").exists():
+            typer.echo(f"Already there: {target}")
+            continue
+        typer.echo(f"Downloading {name} to {target} ...")
+        download_model(name, output_dir=str(target))
+    voices = cfg.data_dir / "voice" / "piper"
+    if (voices / f"{cfg.voice.piper_voice}.onnx").exists():
+        typer.echo(f"Already there: {voices / cfg.voice.piper_voice}.onnx")
+    else:
+        voices.mkdir(parents=True, exist_ok=True)
+        typer.echo(f"Downloading the Piper voice {cfg.voice.piper_voice} to {voices} ...")
+        subprocess.run(
+            [sys.executable, "-m", "piper.download_voices", cfg.voice.piper_voice,
+             "--data-dir", str(voices)],
+            check=True,
+        )  # fmt: skip
     typer.echo("Done.")
 
 
@@ -112,9 +127,10 @@ def voice_status() -> None:
         f"voice        {'on' if v.enabled else 'off'}"
         + (f", process {running['state']}" if running else "")
     )
-    typer.echo(
-        f"speech in    {v.stt_model} ({'ready' if Transcriber(cfg.data_dir, v.stt_model).available else 'not downloaded'})"
-    )
+    for label, name in (("speech in", v.stt_fast_model), ("accurate", v.stt_model)):
+        if name:
+            ready = Transcriber(cfg.data_dir, name).available
+            typer.echo(f"{label:<12} {name} ({'ready' if ready else 'not downloaded'})")
     models = wake_models(cfg.data_dir)
     typer.echo(
         f"wake word    {'on' if v.wake_word_enabled else 'off'}; model: {', '.join(m.name for m in models) or 'none yet (docs/VOICE.md)'}"
@@ -155,6 +171,10 @@ def voice_log(last: Annotated[int, typer.Option(help="How many exchanges.")] = 1
         )
         typer.echo(f"{when}  [{x.get('trigger', '?')}] heard: {x.get('heard') or '(nothing)'}")
         typer.echo(f"          as: {x.get('route', '?')}   ({times})")
+        if x.get("asked"):
+            typer.echo(
+                f"          asked: {x['asked'].get('question')}  you: {x['asked'].get('answer')}"
+            )
         if x.get("reply"):
             typer.echo(f"          reply: {x['reply'][:200]}")
         if x.get("error"):
@@ -207,6 +227,107 @@ def voice_mic() -> None:
         typer.echo("Speech was detected, but the speech model isn't downloaded: voice setup.")
         return
     typer.echo(f"Heard: {stt.transcribe(audio) or '(speech, but no words recognised)'}")
+
+
+BENCH_PHRASES = [
+    "open brave",
+    "can you open brave",
+    "open chrome",
+    "open file explorer",
+    "open calculator",
+    "open the typewriter folder",
+    "open newtab in antigravity",
+    "set volume to 40",
+    "take a screenshot",
+    "what did I do today",
+]
+
+
+@voice_app.command("bench")
+def voice_bench(
+    phrase: Annotated[
+        list[str] | None, typer.Argument(help="Phrases to test (default: a standard set).")
+    ] = None,
+) -> None:
+    """Measure the voice pipeline offline: each phrase is spoken by Piper, recognised with
+    your name hints and routed (nothing is run). Also times how fast speech stops."""
+    import threading
+
+    import numpy as np
+    from scipy.signal import resample_poly
+
+    from personal_os.voice import router
+    from personal_os.voice.index import LiveIndex
+    from personal_os.voice.main import Voice
+    from personal_os.voice.speech import Speaker
+
+    cfg = _config()
+    speaker = Speaker(cfg.voice, cfg.data_dir)
+    voice_model = speaker.piper()
+    if voice_model is None:
+        typer.echo("No Piper voice installed: run `personal-os voice setup` first.")
+        raise typer.Exit(1)
+    voice = Voice(cfg)
+    t = time.monotonic()
+    live = LiveIndex(cfg, cfg.db_path)
+    live.refresh(wait=True)
+    voice.index = live
+    index = live.current()
+    typer.echo(f"index        {len(index.entries)} names in {time.monotonic() - t:.1f} s")
+    t = time.monotonic()
+    voice.stt.warm()
+    typer.echo(f"stt load     {time.monotonic() - t:.1f} s ({cfg.voice.stt_model})\n")
+    for text in phrase or BENCH_PHRASES:
+        chunks = list(voice_model.synthesize(text))
+        audio = np.concatenate([c.audio_float_array for c in chunks]).astype(np.float32)
+        audio16 = resample_poly(audio, 16000, chunks[0].sample_rate).astype(np.float32)
+        audio16 *= 0.05 / max(1e-6, float(np.max(np.abs(audio16))))  # as quiet as your mic
+        th = cfg.voice.router_threshold
+        voice.last_audio, voice._accurate = audio16, None
+        t1 = time.monotonic()
+        heard = voice.transcribe(audio16)
+        stt_s = time.monotonic() - t1
+        t2 = time.monotonic()
+        intent = router.route(heard, index, threshold=th)
+        route_ms = (time.monotonic() - t2) * 1000
+        steps = [f"{cfg.voice.stt_fast_model or cfg.voice.stt_model} {stt_s:.2f} s"]
+        if intent is None or not intent.sure:
+            t3 = time.monotonic()
+            better = voice.accurate_text()
+            if better is not None:
+                steps.append(f"{cfg.voice.stt_model} {time.monotonic() - t3:.2f} s")
+                again = router.route(better, index, threshold=th)
+                if again is not None and (again.sure or intent is None):
+                    intent, heard = again, better
+        if intent is not None and not intent.sure:
+            t4 = time.monotonic()
+            rechecked = voice.stt.recheck(audio16, [intent.phrase(g.entry) for g in intent.guesses])
+            steps.append(f"recheck {time.monotonic() - t4:.2f} s")
+            second = router.route(rechecked, index, threshold=th)
+            if second is not None and router.confirms(second, intent):
+                intent, heard = second, rechecked
+        if intent is None:
+            what = "-> LLM (not a fast-path command)"
+        elif intent.sure:
+            what = f"-> {intent.calls[0] if intent.calls else intent.reply}"
+        else:
+            what = f"-> would ask: {intent.question}"
+        typer.echo(
+            f"said  {text!r}\nheard {heard!r}  ({', '.join(steps)}; route {route_ms:.1f} ms)"
+        )
+        typer.echo(f"      {what}\n")
+    t = time.monotonic()
+    first = next(iter(voice_model.synthesize("Opening Brave.")))
+    typer.echo(f"tts first audio  {(time.monotonic() - t) * 1000:.0f} ms (Piper, one sentence)")
+    stop = threading.Event()
+    long_text = "This is a long reply that will be cut off part of the way through. " * 3
+    started = time.monotonic()
+    threading.Timer(1.0, stop.set).start()
+    speaker.say(long_text, interrupt=stop)
+    typer.echo(
+        f"barge-in stop    {(time.monotonic() - started - 1.0) * 1000:.0f} ms after interrupt"
+    )
+    del first
 
 
 @voice_app.command("voices")
@@ -307,14 +428,14 @@ def voice_demo(
         resampled: np.ndarray = resample_poly(audio, 16000, rate).astype(np.float32)
         return resampled
 
-    def listen() -> str:  # instead of the microphone: the next queued phrase ("yes" for confirms)
+    def listen(_preroll: object = None) -> str:  # instead of the mic: the next queued phrase
         text = queued.pop(0) if queued else "yes"
         t0 = time.monotonic()
         heard_text = voice.stt.transcribe(heard(text), vocabulary=voice.vocabulary())
         typer.echo(f"  heard ({time.monotonic() - t0:.1f} s): {heard_text}")
         return heard_text
 
-    voice.listen = listen  # type: ignore[method-assign]
+    voice.listen = listen  # type: ignore[method-assign,assignment]
     for phrase in phrases:
         typer.echo(f"\nyou: {phrase}")
         queued.append(phrase)

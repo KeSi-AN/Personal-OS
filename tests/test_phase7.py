@@ -326,8 +326,9 @@ class Heard:
 def voice_for(env: Env, *phrases: str, provider: Any = None) -> tuple[Voice, Heard]:
     v = Voice(env.config)
     h = Heard(*phrases)
-    v.listen = h.listen  # type: ignore[method-assign]
+    v.listen = h.listen  # type: ignore[method-assign,assignment]
     v.say = h.say  # type: ignore[method-assign]
+    v.speaker.earcon = lambda *_a: None  # type: ignore[method-assign]  # no sound in tests
     v.provider = lambda: provider  # type: ignore[method-assign]
     return v, h
 

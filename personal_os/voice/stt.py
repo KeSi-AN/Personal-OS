@@ -51,8 +51,16 @@ class Transcriber:
             )
         return WhisperModel(str(self.path), device="cpu", compute_type="int8", cpu_threads=6)
 
-    def transcribe(self, audio: np.ndarray, *, vocabulary: str = "") -> str:
-        """Mono float32 audio at 16 kHz -> text. `vocabulary` biases towards known names."""
+    def transcribe(
+        self,
+        audio: np.ndarray,
+        *,
+        vocabulary: str = "",
+        hotwords: str = "",
+        beam_size: int = 1,
+    ) -> str:
+        """Mono float32 audio at 16 kHz -> text. `vocabulary` (a prompt) and `hotwords` bias
+        recognition towards names that exist here: "open brave", not "open brat"."""
         with self._lock:
             if self._model is None:
                 self._model = self._load()
@@ -60,12 +68,29 @@ class Transcriber:
             segments, _info = self._model.transcribe(
                 normalize(audio),
                 language="en",
-                beam_size=1,
-                vad_filter=True,
+                beam_size=beam_size,
+                vad_filter=False,  # the turn was already cut by Silero VAD
                 initial_prompt=vocabulary or None,
+                hotwords=hotwords or None,
                 condition_on_previous_text=False,
+                without_timestamps=True,
             )
             return " ".join(s.text.strip() for s in segments).strip()
+
+    def recheck(self, audio: np.ndarray, phrases: list[str]) -> str:
+        """The same audio decoded again, biased hard towards a few candidate phrases
+        ("open Brave", "open Brat..."): for a near miss, before asking the user."""
+        prompt = " ".join(f"{p}." for p in phrases)
+        return self.transcribe(audio, vocabulary=prompt, hotwords=", ".join(phrases), beam_size=5)
+
+    def warm(self) -> None:
+        """Load the model now, so the first command isn't slow (no-op without the model)."""
+        if not self.available:
+            return
+        with self._lock:
+            if self._model is None:
+                self._model = self._load()
+            self._last_used = time.monotonic()
 
     def unload_if_idle(self) -> bool:
         with self._lock:

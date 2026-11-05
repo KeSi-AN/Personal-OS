@@ -110,11 +110,21 @@ class LLMConfig(_Section):
 class VoiceConfig(_Section):
     enabled: bool = False
     stt_model: str = "small.en"
+    # Heard first (about 0.6 s on this CPU); stt_model re-hears only what the fast path can't
+    # place. "" uses stt_model alone.
+    stt_fast_model: str = "base.en"
     wake_word_enabled: bool = False  # needs a trained model in voice/wakewords/ (docs/VOICE.md)
     wake_threshold: float = Field(0.5, gt=0, lt=1)
     # Quietest sound level (RMS) that counts as speech; `personal-os voice mic` shows yours.
     mic_floor: float = Field(0.002, gt=0, lt=0.5)
-    tts: Literal["windows", "piper", "speechify"] = "windows"
+    vad_silence_ms: int = Field(600, ge=200, le=3000)  # quiet this long ends your turn
+    router_threshold: float = Field(0.85, gt=0.5, le=1.0)  # name match needed to act at once
+    # hotkey: Ctrl+Alt+Shift+V stops a reply. voice: talking over it does too (best with
+    # headphones; off while other apps play sound).
+    barge_in: Literal["voice", "hotkey"] = "hotkey"
+    piper_voice: str = "en_US-lessac-medium"
+    piper_length_scale: float = Field(0.95, gt=0.5, lt=2.0)  # under 1 speaks faster
+    tts: Literal["windows", "piper", "speechify"] = "piper"
     windows_voice: str = "Microsoft Zira Desktop"  # female, US English; or Hazel (UK)
     speechify_voice: str = "geffen_32"
     speechify_model: str = "simba-3.5"

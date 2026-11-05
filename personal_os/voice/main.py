@@ -1,10 +1,15 @@
 """The voice process (DESIGN.md §6.5): push-to-talk, optional wake word, spoken replies.
 
 Started by the daemon when `voice.enabled` is on. One request at a time:
-beep → record until a pause → transcribe → route (briefing / remember / do / ask / stop) →
-speak the reply. Anything that needs confirming is read out and needs a spoken yes.
-The last exchange is written to runtime/voice_last.json for the dashboard; nothing else said
-is kept.
+
+    earcon -> record (Silero VAD ends the turn) -> transcribe, biased to known names
+      -> fast path: rules + fuzzy names (voice/router.py) -> tool, no LLM
+           near miss: decode again biased to the candidates, else "Did you mean Brave?"
+      -> otherwise: briefing / remember / ask / do (the LLM, loaded on demand)
+      -> short reply, spoken sentence by sentence (Piper); speaking over it stops it
+
+Anything that needs confirming is read out and needs a spoken yes. Audio is never stored.
+The last exchange is written to runtime/voice_last.json for the dashboard.
 """
 
 from __future__ import annotations
@@ -46,10 +51,22 @@ def is_yes(text: str) -> bool:
 
 class Voice:
     def __init__(self, cfg: Config) -> None:
+        from personal_os.voice.index import LiveIndex
+        from personal_os.voice.speech import Speaker
+
         self.cfg = cfg
         self.clock = SystemClock()
-        self.speaker = tts.Speaker(cfg.voice, cfg.data_dir)
+        self.speaker = Speaker(cfg.voice, cfg.data_dir)
         self.stt = Transcriber(cfg.data_dir, cfg.voice.stt_model)
+        fast = Transcriber(cfg.data_dir, cfg.voice.stt_fast_model or cfg.voice.stt_model)
+        # Heard first; the accurate model re-hears only what the fast path can't place.
+        self.stt_fast = fast if cfg.voice.stt_fast_model and fast.available else self.stt
+        self.index = LiveIndex(cfg, cfg.db_path)
+        self.last_audio: Any = None  # the last utterance, for a biased second decode
+        self._accurate: tuple[int, str] | None = None  # (id of the audio, small.en's text)
+        self.barge_frames: list[Any] = []  # what was heard while interrupting a reply
+        self.turn_trigger = ""  # what started the current turn: hotkey, wake or barge
+        self.asked: dict[str, str] = {}  # a "Did you mean ...?" and its answer, for the log
         self.triggers: queue.Queue[str] = queue.Queue()
         self.previous: Any = None
         self.wake: Any = None
@@ -135,46 +152,157 @@ class Voice:
         except Exception as exc:
             _log.warning("wake word stopped", extra={"fields": {"exc_type": type(exc).__name__}})
 
-    def listen(self) -> str:
+    def listen(self, preroll: list[Any] | None = None) -> str:
+        """Record one turn and transcribe it. If what was said is clearly unfinished ("open
+        ..."), keep listening a moment for the rest instead of acting on half a sentence."""
+        import numpy as np
+
+        from personal_os.context.route import incomplete
         from personal_os.voice.audio import record_utterance
 
+        v = self.cfg.voice
         if self.wake is not None:
             self.wake.paused.set()
         try:
-            audio = record_utterance(self.stop.is_set, floor=self.cfg.voice.mic_floor)
+            audio = record_utterance(
+                self.stop.is_set, floor=v.mic_floor, silence_ms=v.vad_silence_ms,
+                preroll=preroll or (),
+            )  # fmt: skip
+            if audio is None:
+                self.last_audio = None
+                return ""
+            text = self.transcribe(audio)
+            if incomplete(text):
+                more = record_utterance(
+                    self.stop.is_set, floor=v.mic_floor, silence_ms=v.vad_silence_ms,
+                    start_timeout_s=2.0,
+                )  # fmt: skip
+                if more is not None:
+                    audio = np.concatenate([audio, more])
+                    text = self.transcribe(audio)
         finally:
             if self.wake is not None:
                 self.wake.paused.clear()
-        if audio is None:
-            return ""
-        return self.stt.transcribe(audio, vocabulary=self.vocabulary())
+        self.last_audio = audio
+        return text
 
-    def vocabulary(self) -> str:
-        from personal_os.projects.registry import load_projects
-        from personal_os.storage.db import connect
-
-        conn = connect(self.cfg.db_path)
-        try:
-            names = [p.id for p in load_projects(conn) if p.id != "none"][:30]
-        finally:
-            conn.close()
-        # App names bias recognition too: "open brave", not "open the braid".
-        apps = [a.replace("_", " ") for a in self.cfg.actions.apps][:20]
-        return (
-            "Donna. Open "
-            + ", ".join(apps)
-            + ", YouTube, GitHub. Projects: "
-            + ", ".join(names)
-            + "."
+    def transcribe(self, audio: Any, *, accurate: bool = False) -> str:
+        names = self.index.current().names_for_hints(40)
+        model = self.stt if accurate else self.stt_fast
+        return model.transcribe(
+            audio, vocabulary=self.vocabulary(names), hotwords=", ".join(names[:25])
         )
+
+    def accurate_text(self) -> str | None:
+        """The last utterance as the accurate model hears it (once per utterance), or None
+        when there's no audio or the fast model already is the accurate one."""
+        if self.last_audio is None or self.stt_fast is self.stt:
+            return None
+        key = id(self.last_audio)
+        if self._accurate is None or self._accurate[0] != key:
+            self._accurate = (key, self.transcribe(self.last_audio, accurate=True))
+        return self._accurate[1]
+
+    def vocabulary(self, names: list[str] | None = None) -> str:
+        """A prompt of names that exist here, so "open brave" isn't heard as "open brat"."""
+        if names is None:
+            names = self.index.current().names_for_hints(40)
+        return "Donna. Open " + ", ".join(names) + "."
 
     # --- handling --------------------------------------------------------------------------------
 
     def say(self, text: str) -> None:
+        """Speak, stoppable: by the hotkey, or by talking over it (voice.barge_in = voice).
+        A reply to a turn that itself began by barge-in isn't voice-interruptible, so stray
+        sound can never keep the assistant answering itself."""
         try:
-            self.speaker.say(text, interrupt=self.interrupt)
+            if self.cfg.voice.barge_in == "voice" and self.turn_trigger != "barge":
+                from personal_os.voice.bargein import BargeIn
+
+                with BargeIn(self.speaker.player, self._barged, floor=self.cfg.voice.mic_floor):
+                    self.speaker.say(text, interrupt=self.interrupt)
+            else:
+                self.speaker.say(text, interrupt=self.interrupt)
         except tts.TTSError:
             _log.warning("no voice could speak")
+
+    def _barged(self, frames: list[Any]) -> None:
+        """You spoke over a reply: stop it and listen, starting from what was already heard."""
+        self.barge_frames = frames
+        self.interrupt.set()
+        if self.triggers.empty():
+            self.triggers.put("barge")
+
+    # --- fast path ---------------------------------------------------------------------------
+
+    def fast(self, text: str) -> str | None:
+        """A command the router can run without the LLM; the reply to say, or None."""
+        from personal_os.voice import router
+
+        threshold = self.cfg.voice.router_threshold
+        intent = router.route(text, self.index.current(), threshold=threshold)
+        if intent is None or not intent.sure:
+            # The fast model may have misheard ("follow you up"): the accurate one re-hears it.
+            better = self.accurate_text()
+            if better and better != text:
+                again = router.route(better, self.index.current(), threshold=threshold)
+                if again is not None and (again.sure or intent is None):
+                    intent = again
+        if intent is None:
+            return None
+        if not intent.sure and self.last_audio is not None:
+            # A near miss ("open brat"): decode the same audio again, biased to the candidates.
+            phrases = [intent.phrase(g.entry) for g in intent.guesses]
+            rechecked = self.stt.recheck(self.last_audio, phrases)
+            second = router.route(rechecked, self.index.current(), threshold=threshold)
+            if second is not None and router.confirms(second, intent):
+                intent = second
+        if not intent.sure:
+            # Ask, then beep, so it's clear it's now waiting for your answer.
+            self.say(intent.question)
+            self.write_status("listening", question=intent.question)
+            self.speaker.earcon("listen")
+            answer = self.listen()
+            self.asked = {"question": intent.question, "answer": answer or "(nothing)"}
+            if not answer:
+                return "I didn't hear an answer, so I left it."
+            chosen = router.choose(answer, intent, threshold=threshold)
+            if chosen is None:
+                return "Okay, never mind."
+            intent = chosen
+        return self.run_intent(intent, text)
+
+    def run_intent(self, intent: Any, text: str) -> str:
+        from personal_os.actions.base import Origin
+        from personal_os.storage.db import open_db
+
+        if not intent.calls:
+            return str(intent.reply)
+        self.speaker.earcon("ack")  # heard and understood, before the tool runs
+        conn = open_db(self.cfg.db_path)
+        try:
+            ex = self.executor(conn)
+            outcomes = [
+                ex.request(tool, args, origin=Origin.USER, request_text=text)
+                for tool, args in intent.calls
+            ]
+        finally:
+            conn.close()
+        failed = [o for o in outcomes if not o.ok]
+        if not failed:
+            return str(intent.reply)
+        why = str(failed[0].message).split(":")[-1].strip().rstrip(".")
+        return f"I couldn't. {why}."
+
+    def executor(self, conn: Any, provider: Any = None) -> Any:
+        from personal_os.actions.desktop import default_desktop
+        from personal_os.actions.executor import Executor
+        from personal_os.actions.tools import build_registry
+
+        return Executor(
+            self.cfg, conn, self.clock, build_registry(self.cfg), default_desktop(),
+            self.confirm, provider=provider,
+        )  # fmt: skip
 
     def confirm(self, prompt: str) -> bool:
         first = prompt.splitlines()[0].split(" (tier")[0]
@@ -238,23 +366,12 @@ class Voice:
             conn.close()
 
     def do(self, conn: Any, request: str) -> str:
-        from personal_os.actions.desktop import default_desktop
-        from personal_os.actions.executor import Executor
         from personal_os.actions.planner import run_request
-        from personal_os.actions.tools import build_registry
 
         provider = self.provider()
         if provider is None:
             return "The local model is turned off, so I can't plan actions."
-        ex = Executor(
-            self.cfg,
-            conn,
-            self.clock,
-            build_registry(self.cfg),
-            default_desktop(),
-            self.confirm,
-            provider=provider,
-        )
+        ex = self.executor(conn, provider)
         report = run_request(request, ex, provider)
         if report.error:
             return "I couldn't do that. " + (
@@ -294,6 +411,7 @@ class Voice:
             target=self.hotkey_loop, args=(registered,), name="pos-ptt", daemon=True
         ).start()
         registered.wait(5)  # "ready" only once the hotkey is (or failed to be) registered
+        threading.Thread(target=self.warm, name="pos-warm", daemon=True).start()
         self.sync_wake()
         self.write_status("ready")
         _log.info("voice ready", extra={"fields": {"hotkey": self.hotkey_error is None}})
@@ -309,11 +427,26 @@ class Voice:
                         break
                     self.sync_wake()
                     self.stt.unload_if_idle()
+                    self.stt_fast.unload_if_idle()
                     self.write_status("ready")
                 continue
             while not self.triggers.empty():  # presses made while busy count once
                 self.triggers.get_nowait()
             self.respond(trigger)
+
+    def warm(self) -> None:
+        """Load speech in and out and build the index now, so the first command is fast."""
+        for step in (self.index.refresh, self.stt_fast.warm, self.speaker.warm, self.stt.warm):
+            try:
+                step()
+            except Exception as exc:
+                _log.warning(
+                    "warm-up step failed", extra={"fields": {"exc_type": type(exc).__name__}}
+                )
+
+    def warm_stt(self) -> None:
+        self.stt_fast.warm()
+        self.stt.warm()
 
     def respond(self, trigger: str) -> None:
         from personal_os.context.route import incomplete, route
@@ -321,10 +454,15 @@ class Voice:
         entry: dict[str, Any] = {"at": self.clock.now().isoformat(), "trigger": trigger}
         t0 = time.monotonic()
         self.interrupt.clear()
+        self.turn_trigger = trigger
+        preroll, self.barge_frames = self.barge_frames, []
+        # If speech recognition was unloaded while idle, load it while you're still talking.
+        threading.Thread(target=self.warm_stt, name="pos-stt-warm", daemon=True).start()
         self.write_status("listening", trigger=trigger)
         try:
-            tts.beep()
-            text = self.listen()
+            if trigger != "barge":  # when you interrupted, you're already talking
+                self.speaker.earcon("listen")
+            text = self.listen(preroll) if trigger == "barge" and preroll else self.listen()
             entry["heard"] = text
             entry["listen_s"] = round(time.monotonic() - t0, 1)
             if not text:
@@ -334,10 +472,20 @@ class Voice:
                 entry["route"] = "incomplete"
                 self.say(f"Sorry, I only caught: {text.rstrip('-. ')}. Please say it again.")
                 return
-            entry["route"] = route(text)
             self.write_status("thinking", heard=text)
             t1 = time.monotonic()
-            reply = self.handle(text)
+            self.asked = {}
+            reply = self.fast(text)
+            if self.asked:
+                entry["asked"] = self.asked
+            if reply is not None:
+                entry["route"] = "fast"
+            else:
+                # Not a quick command: questions and requests get the accurate transcript.
+                text = self.accurate_text() or text
+                entry["heard"] = text
+                entry["route"] = route(text)
+                reply = self.handle(text)
             entry["reply"] = reply
             entry["handle_s"] = round(time.monotonic() - t1, 1)
             if self.interrupt.is_set():

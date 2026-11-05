@@ -17,7 +17,12 @@ from personal_os.core.logging import get_logger
 
 _log = get_logger("tray")
 
-COLORS = {"capturing": (31, 138, 76), "paused": (178, 107, 0), "killed": (192, 57, 43)}
+COLORS = {
+    "capturing": (31, 138, 76),
+    "paused": (178, 107, 0),
+    "killed": (192, 57, 43),
+    "listening": (37, 99, 235),  # the mic is open for a request (spec §11: visible indicator)
+}
 
 
 def icon_image(state: str) -> Image.Image:
@@ -28,6 +33,9 @@ def icon_image(state: str) -> Image.Image:
     if state == "paused":
         d.rectangle((26, 25, 30, 39), fill=COLORS["paused"])
         d.rectangle((34, 25, 38, 39), fill=COLORS["paused"])
+    if state == "listening":  # a small microphone
+        d.rounded_rectangle((28, 24, 36, 36), radius=4, fill=COLORS["listening"])
+        d.rectangle((31, 36, 33, 40), fill=COLORS["listening"])
     return img
 
 
@@ -110,6 +118,7 @@ class Tray:
             "capturing": "Capturing",
             "paused": "Paused",
             "killed": "Actions off (kill switch)",
+            "listening": "Listening (voice)",
         }.get(self.actions.state(), "Personal OS")
 
     def _wrap(self, fn: Callable[[], None]) -> Callable[..., None]:
@@ -125,8 +134,24 @@ class Tray:
     def start(self) -> None:
         self._thread = threading.Thread(target=self.icon.run, name="pos-tray", daemon=True)
         self._thread.start()
+        self._stopped = threading.Event()
+        threading.Thread(target=self._watch, name="pos-tray-watch", daemon=True).start()
+
+    def _watch(self) -> None:
+        """Redraw when the state changes (e.g. the mic opens), so the icon is always current."""
+        shown = None
+        while not self._stopped.wait(0.4):
+            try:
+                state = self.actions.state()
+            except Exception:
+                continue
+            if state != shown:
+                shown = state
+                self.refresh()
 
     def stop(self) -> None:
+        if hasattr(self, "_stopped"):
+            self._stopped.set()
         with contextlib.suppress(Exception):
             self.icon.stop()
 
