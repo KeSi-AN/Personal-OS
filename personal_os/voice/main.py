@@ -14,6 +14,7 @@ The last exchange is written to runtime/voice_last.json for the dashboard.
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import json
 import queue
@@ -74,6 +75,7 @@ class Voice:
         self.stop = threading.Event()
         self.hotkey_error: str | None = None  # kept, so "ready" writes don't hide it
         self.state = "starting"
+        self.turn: dict[str, Any] | None = None  # the current or last exchange, for the popup
         # Set by a hotkey press while thinking or speaking: stop talking, listen again.
         self.interrupt = threading.Event()
 
@@ -94,7 +96,19 @@ class Voice:
             **({"error": self.hotkey_error} if self.hotkey_error else {}),
             **extra,
         }
-        runtime.write_json_atomic(self.cfg.runtime_dir / STATUS, data)
+        if self.turn is not None:
+            data["turn"] = dict(self.turn)
+        try:
+            runtime.write_json_atomic(self.cfg.runtime_dir / STATUS, data)
+        except OSError as exc:  # a status that can't be written never stops a turn
+            _log.warning("voice status not written", extra={"error": type(exc).__name__})
+
+    def turn_update(self, **fields: Any) -> None:
+        """Change the current turn and publish it at once (the popup polls the status file)."""
+        if self.turn is None:
+            return
+        self.turn.update(fields)
+        self.write_status(self.state)
 
     # --- listening ------------------------------------------------------------------------------
 
@@ -260,6 +274,8 @@ class Voice:
         if not intent.sure:
             # Ask, then beep, so it's clear it's now waiting for your answer.
             self.say(intent.question)
+            if self.turn is not None:
+                self.turn.update(question=intent.question, state="listening")
             self.write_status("listening", question=intent.question)
             self.speaker.earcon("listen")
             answer = self.listen()
@@ -434,6 +450,15 @@ class Voice:
                 self.triggers.get_nowait()
             self.respond(trigger)
 
+    def launch_popup(self) -> None:
+        """Show the voice popup for this turn, off-thread: recording never waits on it, and a
+        popup that fails to start never affects voice (the error is kept for `doctor`)."""
+        if not self.cfg.voice.popup:
+            return
+        threading.Thread(
+            target=_launch_popup, args=(self.cfg,), name="pos-popup", daemon=True
+        ).start()
+
     def warm(self) -> None:
         """Load speech in and out and build the index now, so the first command is fast."""
         for step in (self.index.refresh, self.stt_fast.warm, self.speaker.warm, self.stt.warm):
@@ -458,7 +483,12 @@ class Voice:
         preroll, self.barge_frames = self.barge_frames, []
         # If speech recognition was unloaded while idle, load it while you're still talking.
         threading.Thread(target=self.warm_stt, name="pos-stt-warm", daemon=True).start()
+        self.turn = {
+            "id": f"{time.time_ns():x}", "trigger": trigger, "state": "listening",
+            "started_at": entry["at"], "heard": "", "reply": "", "question": "",
+        }  # fmt: skip
         self.write_status("listening", trigger=trigger)
+        self.launch_popup()
         try:
             if trigger != "barge":  # when you interrupted, you're already talking
                 self.speaker.earcon("listen")
@@ -472,6 +502,8 @@ class Voice:
                 entry["route"] = "incomplete"
                 self.say(f"Sorry, I only caught: {text.rstrip('-. ')}. Please say it again.")
                 return
+            self.turn["heard"] = text
+            self.turn["state"] = "thinking"
             self.write_status("thinking", heard=text)
             t1 = time.monotonic()
             self.asked = {}
@@ -484,6 +516,7 @@ class Voice:
                 # Not a quick command: questions and requests get the accurate transcript.
                 text = self.accurate_text() or text
                 entry["heard"] = text
+                self.turn_update(heard=text)
                 entry["route"] = route(text)
                 reply = self.handle(text)
             entry["reply"] = reply
@@ -492,6 +525,7 @@ class Voice:
                 entry["route"] = f"{entry['route']} (interrupted)"
                 return
             if reply:
+                self.turn.update(reply=reply, state="speaking")
                 self.write_status("speaking")
                 t2 = time.monotonic()
                 self.say(spoken(reply))
@@ -504,6 +538,13 @@ class Voice:
             self.say("Sorry, something went wrong.")
         finally:
             entry["total_s"] = round(time.monotonic() - t0, 1)
+            if self.turn is not None:
+                self.turn.update(
+                    state="done", done_at=self.clock.now().isoformat(),
+                    heard=entry.get("heard") or self.turn["heard"],
+                    reply=entry.get("reply") or self.turn["reply"],
+                    **({"error": "Something went wrong."} if "error" in entry else {}),
+                )  # fmt: skip
             record_history(self.cfg.runtime_dir, entry)
             _log.info(
                 "voice request",
@@ -516,6 +557,17 @@ class Voice:
                 },
             )
             self.write_status("ready")
+
+
+def _launch_popup(cfg: Config) -> None:
+    try:
+        from personal_os.interfaces import popup
+
+        popup.launch(cfg)
+    except Exception as exc:
+        _log.warning("voice popup not opened", extra={"error": type(exc).__name__})
+        with contextlib.suppress(Exception):  # even the import may be what failed
+            popup.record_error(cfg.runtime_dir, f"{type(exc).__name__}: {exc}")
 
 
 SPOKEN_SENTENCES = 2

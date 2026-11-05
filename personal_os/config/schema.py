@@ -126,6 +126,9 @@ class VoiceConfig(_Section):
     piper_length_scale: float = Field(0.95, gt=0.5, lt=2.0)  # under 1 speaks faster
     tts: Literal["windows", "piper", "speechify"] = "piper"
     windows_voice: str = "Microsoft Zira Desktop"  # female, US English; or Hazel (UK)
+    popup: bool = True  # show a small window with the transcript and reply for each turn
+    popup_position: Literal["bottom-right", "top-right", "bottom-left", "top-left"] = "bottom-right"
+    popup_autoclose_s: float = Field(5.0, ge=1, le=120)
     speechify_voice: str = "geffen_32"
     speechify_model: str = "simba-3.5"
     max_spoken_chars: int = Field(600, ge=100, le=2000)
