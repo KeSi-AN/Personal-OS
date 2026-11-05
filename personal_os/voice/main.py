@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 import ctypes
 import json
+import os
 import queue
 import re
 import sys
@@ -174,6 +175,7 @@ class Voice:
         ..."), keep listening a moment for the rest instead of acting on half a sentence."""
         import numpy as np
 
+        from personal_os.actions.reminder_parse import needs_more
         from personal_os.context.route import incomplete
         from personal_os.voice.audio import START_TIMEOUT_S, record_utterance
 
@@ -189,7 +191,9 @@ class Voice:
                 self.last_audio = None
                 return ""
             text = self.transcribe(audio)
-            if incomplete(text):
+            # Cut off ("open the-"), or a reminder whose message hasn't come yet ("remind me
+            # in a minute ... to stretch"): a pause isn't the end, so listen a moment more.
+            if incomplete(text) or needs_more(text):
                 more = record_utterance(
                     self.stop.is_set, floor=v.mic_floor, silence_ms=v.vad_silence_ms,
                     start_timeout_s=2.0,
@@ -256,6 +260,9 @@ class Voice:
         """A command the router can run without the LLM; the reply to say, or None."""
         from personal_os.voice import router
 
+        reminder = self.reminder(text)
+        if reminder is not None:
+            return reminder
         threshold = self.cfg.voice.router_threshold
         intent = router.route(text, self.index.current(), threshold=threshold)
         if intent is None or not intent.sure:
@@ -372,12 +379,53 @@ class Voice:
         self.say("Okay." if verdict == "yes" else "Not doing it.")
         return verdict == "yes"
 
+    def reminder(self, text: str) -> str | None:
+        """Set, change or cancel a reminder by rules (actions/reminder_parse.py), asking for
+        a missing message or time instead of guessing. None if this isn't about reminders."""
+        from personal_os.actions import reminder_parse
+
+        recent = any(
+            "remind" in x.heard.lower() or "remind" in x.reply.lower()
+            for x in self.convo.recent()[-2:]
+        )
+        r = reminder_parse.parse(text, allow_pronoun=recent)
+        if r is None:
+            return None
+        if r.missing == "what":
+            answer = self.ask_aloud("What should I remind you about?")
+            r.text = reminder_parse.message_from(answer)
+            if not r.text:
+                return "Okay, no reminder."
+        if r.missing == "when":
+            answer = self.ask_aloud(f"When should I remind you to {r.text}?")
+            r.minutes, r.at = reminder_parse.time_from(answer)
+            if r.missing:
+                return "I didn't catch a time, so I didn't set it."
+        return self.run_tool(r.tool, r.args(), text)
+
+    def run_tool(self, tool: str, args: dict[str, Any], text: str) -> str:
+        """One tool you asked for directly, through the executor (policy, audit log, undo);
+        the reply is what it did, in its own words."""
+        from personal_os.actions.base import Origin
+        from personal_os.storage.db import open_db
+
+        self.speaker.earcon("ack")
+        conn = open_db(self.cfg.db_path)
+        try:
+            out = self.executor(conn).request(tool, args, origin=Origin.USER, request_text=text)
+        finally:
+            conn.close()
+        if out.ok:
+            return str(out.message).rstrip(".") + "."
+        why = str(out.message).split(":")[-1].strip().rstrip(".?")
+        return f"I couldn't: {why}."
+
     def handle(self, text: str) -> str:
-        from personal_os.context.route import chat_reply, evening, route, strip_polite, strip_wake
+        from personal_os.context.route import chat_reply, evening, normalize, route, strip_polite
         from personal_os.storage.db import open_db
 
         kind = route(text)
-        request = strip_wake(text)
+        request = normalize(text)
         if kind == "stop":
             tts.stop()
             return ""
@@ -430,7 +478,10 @@ class Voice:
         if provider is None:
             return "The local model is turned off, so I can't plan actions."
         ex = self.executor(conn, provider)
-        report = run_request(request, ex, provider, context=self.convo.for_planner())
+        # The conversation only when this request points back at it ("it", "instead"): a
+        # self-contained request is planned on its own words alone.
+        context = self.convo.for_planner() if dialogue.refers_back(request) else ""
+        report = run_request(request, ex, provider, context=context)
         if report.error:
             return "I couldn't do that. " + (
                 "The kill switch is on." if "kill" in report.error else ""
@@ -693,6 +744,7 @@ def record_history(runtime_dir: Path, entry: dict[str, Any]) -> None:
 
 
 SAY_DIR = "say"
+_said = 0
 
 
 def queue_speech(runtime_dir: Path, text: str) -> bool:
@@ -702,7 +754,12 @@ def queue_speech(runtime_dir: Path, text: str) -> bool:
         return False
     d = runtime_dir / SAY_DIR
     d.mkdir(parents=True, exist_ok=True)
-    runtime.write_json_atomic(d / f"{time.time_ns():020d}.json", {"text": text[:2000]})
+    # Time first (they're said in order), then a counter: Windows' clock is coarse, and two
+    # reminders due together must not share a name and overwrite each other.
+    global _said
+    _said += 1
+    name = f"{time.time_ns():020d}-{os.getpid()}-{_said:06d}.json"
+    runtime.write_json_atomic(d / name, {"text": text[:2000]})
     return True
 
 
@@ -718,7 +775,7 @@ def take_speech(runtime_dir: Path, max_age_s: float = 600) -> list[str]:
         data = runtime.read_json(f)
         f.unlink(missing_ok=True)
         try:
-            age_s = (now_ns - int(f.stem)) / 1e9
+            age_s = (now_ns - int(f.stem.split("-")[0])) / 1e9
         except ValueError:
             continue
         if data and isinstance(data.get("text"), str) and age_s <= max_age_s:

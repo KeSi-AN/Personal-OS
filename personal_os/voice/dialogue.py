@@ -239,6 +239,18 @@ def closing(text: str) -> bool:
     return bool(_CLOSING.match(text.strip()))
 
 
+_REFERS = re.compile(
+    r"\b(it|its|that|this|these|those|them|they|instead|again|same|one|other|another|there|"
+    r"then|earlier|before|previous|last|also|too)\b",
+    re.I,
+)
+
+
+def refers_back(request: str) -> bool:
+    """Does the request lean on what was said before ("make it 5 pm", "open that one too")?"""
+    return bool(_REFERS.search(request))
+
+
 # --- the last few exchanges ----------------------------------------------------------------
 
 CONTEXT_TTL_S = 300.0
