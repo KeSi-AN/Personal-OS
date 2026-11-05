@@ -140,10 +140,14 @@ class PiperVoice:
 
     name = "piper"
 
-    def __init__(self, voice_dir: Path) -> None:
+    def __init__(self, voice_dir: Path, wanted: str = "") -> None:
         self.voice_dir = voice_dir
+        self.wanted = wanted
 
     def model(self) -> Path | None:
+        """The configured voice (`piper_voice`), else any installed one."""
+        if self.wanted and (self.voice_dir / f"{self.wanted}.onnx").exists():
+            return self.voice_dir / f"{self.wanted}.onnx"
         found = sorted(self.voice_dir.glob("*.onnx")) if self.voice_dir.is_dir() else []
         return found[0] if found else None
 
@@ -166,7 +170,7 @@ def voices(cfg: VoiceConfig, data_dir: Path) -> list[Voice]:
     if cfg.tts == "speechify":
         chain.append(SpeechifyVoice(cfg))
     if cfg.tts in ("speechify", "piper"):
-        chain.append(PiperVoice(data_dir / "voice" / "piper"))
+        chain.append(PiperVoice(data_dir / "voice" / "piper", cfg.piper_voice))
     chain.append(WindowsVoice(cfg.windows_voice))
     return chain
 

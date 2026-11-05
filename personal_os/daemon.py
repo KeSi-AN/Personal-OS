@@ -526,15 +526,19 @@ class Daemon:
         finally:
             conn.close()
         _log.info("briefing delivered", extra={"fields": {"kind": kind}})
+        from personal_os.interfaces import alerts
         from personal_os.interfaces.notify import toast
 
+        # The popup gets only the title (its rule: nothing from captured activity); the toast,
+        # in the notification centre, and the dashboard card have the lines.
+        alerts.show(
+            cfg, f"briefing-{kind}-{self.clock.now():%Y%m%d}", b.title,
+            "Ready on the dashboard (Today).", self.clock.now(),
+        )  # fmt: skip
         if not toast(b.title, " ".join(b.lines)) and self.tray is not None:
             self.tray.notify(" ".join(b.lines)[:240], b.title)
         if cfg.voice.enabled and cfg.briefings.speak:
-            from personal_os.voice.tts import Speaker, TTSError
-
-            with contextlib.suppress(TTSError):
-                Speaker(cfg.voice, cfg.data_dir).say(f"{b.title}. " + " ".join(b.lines))
+            self._speak(cfg, f"{b.title}. " + " ".join(b.lines))
 
     def _fire_reminders(self) -> None:
         from personal_os.actions import reminders
@@ -544,20 +548,34 @@ class Daemon:
             threading.Thread(target=self._announce_reminders, args=(due,), daemon=True).start()
 
     def _announce_reminders(self, due: list[Any]) -> None:
-        """A Windows notification for each (tray balloon if that fails); spoken if voice is on."""
+        """Each in the popup, which stays on top until dismissed (Windows hides toast banners
+        during full-screen apps and Do Not Disturb). A Windows notification if the popup can't
+        open, the tray balloon if that fails too. Spoken if voice is on."""
+        from personal_os.interfaces import alerts
         from personal_os.interfaces.notify import toast
 
         cfg = self._fresh_config()
         for r in due:
-            shown = toast("Reminder", r.text, reminder=True)
-            if not shown and self.tray is not None:
-                self.tray.notify(r.text, "Reminder")
-            _log.info("reminder fired", extra={"fields": {"shown": shown}})
+            shown_by = "popup"
+            if not alerts.show(cfg, r.id, "Reminder", r.text, self.clock.now()):
+                shown_by = "toast" if toast("Reminder", r.text, reminder=True) else "none"
+                if shown_by == "none" and self.tray is not None:
+                    self.tray.notify(r.text, "Reminder")
+                    shown_by = "tray"
+            _log.info("reminder fired", extra={"fields": {"shown": shown_by}})
             if cfg.voice.enabled:
-                from personal_os.voice.tts import Speaker, TTSError
+                self._speak(cfg, f"Reminder: {r.text}")
 
-                with contextlib.suppress(TTSError):
-                    Speaker(cfg.voice, cfg.data_dir).say(f"Reminder: {r.text}")
+    def _speak(self, cfg: Any, text: str) -> None:
+        """Through the voice process when it runs (one voice, never over a conversation, no
+        speech model in the daemon); spoken here only when it doesn't."""
+        from personal_os.voice.main import queue_speech
+        from personal_os.voice.tts import Speaker, TTSError
+
+        if queue_speech(cfg.runtime_dir, text):
+            return
+        with contextlib.suppress(TTSError):
+            Speaker(cfg.voice, cfg.data_dir).say(text)
 
     def engage_kill_switch(self) -> None:
         """Global hotkey (Ctrl+Alt+Shift+K): actions go observe-only and running ones stop."""

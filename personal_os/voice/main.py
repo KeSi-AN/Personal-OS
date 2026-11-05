@@ -478,6 +478,7 @@ class Voice:
             try:
                 trigger = self.triggers.get(timeout=1.0)
             except queue.Empty:
+                self.speak_queued()
                 if time.monotonic() - last_reload > 10:
                     last_reload = time.monotonic()
                     self.cfg = load_config()
@@ -491,6 +492,13 @@ class Voice:
             while not self.triggers.empty():  # presses made while busy count once
                 self.triggers.get_nowait()
             self.converse(trigger)
+
+    def speak_queued(self) -> None:
+        """Say what the daemon queued (a reminder, a briefing), while nothing else is going on."""
+        for text in take_speech(self.cfg.runtime_dir):
+            self.write_status("speaking")
+            self.say(text)
+            self.write_status("ready")
 
     def converse(self, trigger: str) -> None:
         """One turn, then any follow-ups: a request it was told to make next ("no, at 5 pm
@@ -682,6 +690,50 @@ def record_history(runtime_dir: Path, entry: dict[str, Any]) -> None:
     lines = path.read_text("utf-8").splitlines() if path.exists() else []
     lines = [*lines, json.dumps(entry, ensure_ascii=False)][-HISTORY_KEEP:]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+SAY_DIR = "say"
+
+
+def queue_speech(runtime_dir: Path, text: str) -> bool:
+    """Ask the running voice process to say `text` when it's free (False if voice isn't
+    running: then the caller speaks it). Spoken between conversations, never over one."""
+    if not text.strip() or not status(runtime_dir).get("running"):
+        return False
+    d = runtime_dir / SAY_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    runtime.write_json_atomic(d / f"{time.time_ns():020d}.json", {"text": text[:2000]})
+    return True
+
+
+def take_speech(runtime_dir: Path, max_age_s: float = 600) -> list[str]:
+    """Queued announcements, oldest first; each file is removed once read. Old ones (voice
+    was busy or stopped for ten minutes) are dropped rather than spoken late."""
+    d = runtime_dir / SAY_DIR
+    if not d.is_dir():
+        return []
+    out = []
+    now_ns = time.time_ns()
+    for f in sorted(d.glob("*.json")):
+        data = runtime.read_json(f)
+        f.unlink(missing_ok=True)
+        try:
+            age_s = (now_ns - int(f.stem)) / 1e9
+        except ValueError:
+            continue
+        if data and isinstance(data.get("text"), str) and age_s <= max_age_s:
+            out.append(data["text"])
+    return out
+
+
+def local_time(iso: str, fmt: str = "%H:%M:%S") -> str:
+    """A stored UTC timestamp as your local clock time, for display."""
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(iso).astimezone().strftime(fmt)
+    except (TypeError, ValueError):
+        return ""
 
 
 def history(runtime_dir: Path, last: int = 10) -> list[dict[str, Any]]:
