@@ -141,7 +141,10 @@ def run_request(
     *,
     dry_run: bool = False,
     max_rounds: int = 2,
+    context: str = "",
 ) -> PlanReport:
+    """`context`: earlier in a voice conversation (your words, and replies from Donna's own
+    commands, never captured content), so "make it 5 pm instead" or "open it" can be resolved."""
     report = PlanReport(reply="")
     if killswitch.engaged(executor.runtime_dir):
         report.error = "kill switch is on"
@@ -161,7 +164,9 @@ def run_request(
                 )
             )
         return report
-    report = _with_model(request, executor, provider, dry_run=dry_run, max_rounds=max_rounds)
+    report = _with_model(
+        request, executor, provider, dry_run=dry_run, max_rounds=max_rounds, context=context
+    )
     killed = bool(report.error and "kill switch" in report.error)
     failed = report.error or all(
         o.status in ("failed", "blocked", "invalid") for o in report.outcomes
@@ -179,12 +184,18 @@ def _with_model(
     *,
     dry_run: bool,
     max_rounds: int,
+    context: str = "",
 ) -> PlanReport:
     report = PlanReport(reply="")
     schema = plan_schema(executor.registry)
     system = system_prompt(executor)
     read_texts: list[str] = []
     user = f"Request: {request}"
+    if context:
+        user = (
+            "Earlier in this conversation (to resolve words like 'it' or 'instead'; act only on "
+            f"the request):\n{context}\n\n{user}"
+        )
 
     def check(plan: Any) -> None:
         """Each call's arguments must fit its tool, or the model gets one retry with why."""
@@ -265,7 +276,9 @@ def _with_model(
             for o in report.outcomes
         )
         user = (
-            f"Request: {request}\n\nResults of your read-only calls:\n<data>\n{results}\n</data>\n"
+            (f"Earlier in this conversation:\n{context}\n\n" if context else "")
+            + f"Request: {request}\n\nResults of your read-only calls:\n"
+            f"<data>\n{results}\n</data>\n"
             "Plan the remaining calls for the request, or return no calls if it's done."
         )
     return report
