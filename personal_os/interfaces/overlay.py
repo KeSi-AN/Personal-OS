@@ -13,6 +13,7 @@ from __future__ import annotations
 import sys
 import threading
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import messagebox
 from typing import Any
 
@@ -105,8 +106,36 @@ class Overlay:
         from personal_os.context.route import route
 
         # The same router as voice: "do I have ...?" is a question, "actually, cancel it" isn't.
-        target = self._do if route(text) == "do" else self._ask
+        target: Callable[[str], None] = self._do if route(text) == "do" else self._ask
+        if self.cfg.agent.enabled and self._provider() is not None:
+            target = self._agent  # Donna decides: answer, look something up, or act
         threading.Thread(target=target, args=(text,), daemon=True).start()
+
+    def _agent(self, text: str) -> None:
+        from personal_os.actions import agent
+        from personal_os.actions.desktop import default_desktop
+        from personal_os.actions.executor import Executor
+        from personal_os.actions.tools import build_registry
+        from personal_os.storage.db import open_db
+
+        provider = self._provider()
+        conn = open_db(self.cfg.db_path)
+        try:
+            ex = Executor(
+                self.cfg, conn, self.clock, build_registry(self.cfg), default_desktop(),
+                self._confirm, provider=provider,
+            )  # fmt: skip
+            assert provider is not None
+            r = agent.respond(text, ex, provider)
+            lines = [r.reply]
+            if r.outcomes:
+                lines += ["", *(f"{o.tool}: {o.status} · {o.message}" for o in r.outcomes)]
+            shown = "\n".join(lines)
+        except Exception as exc:
+            shown = f"Something went wrong: {exc}"
+        finally:
+            conn.close()
+        self.root.after(0, lambda: self.show(shown))
 
     def _remember(self, fact: str) -> None:
         from personal_os.context import memory

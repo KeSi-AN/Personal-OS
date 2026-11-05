@@ -636,3 +636,35 @@ def plugins_example() -> None:
 
 
 _ = runtime
+
+
+@app.command("chat")
+def chat(
+    message: Annotated[list[str], typer.Argument(help="What to say to Donna.")],
+) -> None:
+    """Talk to Donna in the terminal: she answers, looks things up or acts (docs/AGENT.md).
+    Anything that needs confirming asks here."""
+    from personal_os.actions import agent
+    from personal_os.actions.desktop import default_desktop
+    from personal_os.actions.executor import Executor
+    from personal_os.actions.tools import build_registry
+    from personal_os.llm import make_provider
+
+    cfg = _config()
+    if not cfg.llm.enabled:
+        typer.echo("The local model is turned off (llm.enabled).")
+        raise typer.Exit(1)
+    provider = make_provider(cfg.llm)
+    conn, _ = _open(cfg, None)
+
+    def confirm(prompt: str) -> bool:
+        typer.echo(prompt)
+        return typer.confirm("Go ahead?", default=False)
+
+    ex = Executor(
+        cfg, conn, SystemClock(), build_registry(cfg), default_desktop(), confirm, provider=provider
+    )
+    r = agent.respond(" ".join(message), ex, provider)
+    typer.echo(r.reply)
+    for o in r.outcomes:
+        typer.echo(f"  {o.tool}: {o.status} - {o.message}")

@@ -24,7 +24,7 @@ from personal_os.projects.sessions import rebuild_sessions
 from personal_os.voice.main import Voice, is_yes
 from personal_os.voice.tts import speakable
 from tests.conftest import T0
-from tests.test_actions import Env, plan
+from tests.test_actions import Env
 from tests.test_context import auth_session
 from tests.test_projects import World
 
@@ -345,6 +345,21 @@ def test_voice_remember_needs_a_spoken_yes(home: Path, config: Config):
     assert [(f.text, f.source) for f in facts] == [("standup moved to 10:30", "voice")]
 
 
+def agent_fake(*calls: tuple[str, dict[str, Any]], answer: str = "Done.") -> FakeProvider:
+    """A model that, as Donna's agent, makes these calls once, then answers."""
+
+    def responder(system: str, user: str, schema: Any) -> Any:
+        if schema.__name__ == "FinalAnswer" or "Results so far" in user:
+            return {"decide": "answer", "calls": [], "reply": answer}
+        return {
+            "decide": "use_tools",
+            "calls": [{"tool": t, "args": a} for t, a in calls],
+            "reply": "",
+        }
+
+    return FakeProvider(responder)
+
+
 def test_voice_actions_confirm_by_voice(
     home: Path, config: Config, monkeypatch: pytest.MonkeyPatch
 ):
@@ -353,20 +368,24 @@ def test_voice_actions_confirm_by_voice(
     env = Env(home, config)
     monkeypatch.setattr(desktop_mod, "default_desktop", lambda: env.desktop)
     target = env.work / "voice.md"
-    fake = FakeProvider(
-        lambda s, u, schema: plan(("create_file", {"path": str(target), "content": "hi"}))
-    )
+    fake = agent_fake(("create_file", {"path": str(target), "content": "hi"}))
     v, h = voice_for(env, "no", provider=fake)
-    assert "0 of 1" in v.handle("create a file voice.md") and not target.exists()
+    v.handle("create a file voice.md")
+    assert not target.exists()  # said no
     assert "Say yes or no" in h.said[0]
     v, h = voice_for(env, "yes", provider=fake)
-    assert "created" in v.handle("create a file voice.md").lower() and target.exists()
-    fake2 = FakeProvider(
-        lambda s, u, schema: plan(("set_reminder", {"text": "stretch", "minutes": 2}))
-    )
+    v.handle("create a file voice.md")
+    assert target.exists()
+    fake2 = agent_fake(("set_reminder", {"text": "stretch", "minutes": 2}))
     v, h = voice_for(env, provider=fake2)
-    assert v.handle("remind me in 2 minutes to stretch").startswith("I'll remind you at")
+    v.handle("please set something to remind me to stretch")
     assert h.said == []  # tier 1, asked directly: no confirmation needed
+    from personal_os.actions import reminders
+    from personal_os.storage.db import open_db
+
+    conn = open_db(env.config.db_path)
+    assert [r.text for r in reminders.pending(conn)] == ["stretch"]
+    conn.close()
 
 
 def test_voice_briefing_and_stop(home: Path, config: Config):

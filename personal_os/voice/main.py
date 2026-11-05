@@ -458,6 +458,8 @@ class Voice:
                     self.next_request = change
                     return ""
                 return "I won't remember it."
+            if self.cfg.agent.enabled and self.provider() is not None:
+                return self.agent(conn, request)  # conversation, questions and actions alike
             if kind == "do":
                 return self.do(conn, request)
             from personal_os.context.ask import ask
@@ -470,6 +472,17 @@ class Voice:
             return " ".join(s for s, _ in answer.sentences)
         finally:
             conn.close()
+
+    def agent(self, conn: Any, request: str) -> str:
+        """Donna as one assistant (docs/AGENT.md): she decides whether to answer, look
+        something up or act, using the same tools and policy as everything else."""
+        from personal_os.actions import agent
+
+        provider = self.provider()
+        ex = self.executor(conn, provider)
+        context = self.convo.for_planner() if dialogue.refers_back(request) else ""
+        result = agent.respond(request, ex, provider, context=context)
+        return result.reply
 
     def do(self, conn: Any, request: str) -> str:
         from personal_os.actions.planner import run_request
