@@ -34,6 +34,16 @@ def no_real_app_list(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(apps, "installed", lambda *_a, **_k: [])
 
 
+@pytest.fixture(autouse=True)
+def no_real_popup(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """Tests never open the voice popup window; launches are recorded here instead."""
+    from personal_os.interfaces import popup
+
+    launched: list[bool] = []
+    monkeypatch.setattr(popup, "_spawn", launched.append)
+    return launched
+
+
 @pytest.fixture
 def config(home: Path) -> Config:
     from personal_os.config.loader import load_config

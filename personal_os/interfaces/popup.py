@@ -40,6 +40,7 @@ def last_state(runtime_dir: Path) -> dict[str, Any]:
 
 
 def _update_state(runtime_dir: Path, **fields: Any) -> None:
+    runtime_dir.mkdir(parents=True, exist_ok=True)
     data = last_state(runtime_dir)
     data.update(fields)
     runtime.write_json_atomic(runtime_dir / STATE, data)
@@ -120,23 +121,19 @@ def launch(cfg: Config, *, demo: bool = False) -> str:
     if reason:
         record_error(cfg.runtime_dir, reason)
         return f"unavailable: {reason}"
-    from personal_os.interfaces.tray import spawn_module
-
-    if demo:
-        _spawn_demo()
-    else:
-        spawn_module("personal_os.interfaces.popup")
+    _spawn(demo)
     _update_state(cfg.runtime_dir, launched_at=_now())
     return "opened"
 
 
-def _spawn_demo() -> None:
+def _spawn(demo: bool) -> None:
+    """Start the popup process windowless and detached (tests replace this)."""
     import subprocess
 
     from personal_os.core import spawn
 
     subprocess.Popen(
-        spawn.module_command("personal_os.interfaces.popup", "--demo"),
+        spawn.module_command("personal_os.interfaces.popup", *(["--demo"] if demo else [])),
         env=spawn.child_env(),
         creationflags=spawn.creation_flags(detached=True),
         stdin=subprocess.DEVNULL,
