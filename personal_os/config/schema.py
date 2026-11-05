@@ -189,6 +189,15 @@ class ActionsConfig(_Section):
         return v
 
 
+class AgentConfig(_Section):
+    """Donna as one agent over general tools (docs/AGENT.md)."""
+
+    enabled: bool = True  # false: the older ask / do lanes
+    max_steps: int = Field(4, ge=1, le=8)  # model calls per request
+    name: str = "Donna"
+    user_name: str = ""  # how she addresses you; empty: she doesn't use a name
+
+
 class Config(_Section):
     data_dir: Path
     watched_roots: list[Path] = []
@@ -200,6 +209,7 @@ class Config(_Section):
     actions: ActionsConfig = ActionsConfig()
     voice: VoiceConfig = VoiceConfig()
     briefings: BriefingsConfig = BriefingsConfig()
+    agent: AgentConfig = AgentConfig()
 
     @property
     def db_path(self) -> Path:

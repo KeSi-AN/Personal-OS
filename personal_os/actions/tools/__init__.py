@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from personal_os.actions.base import Registry, Tool
-from personal_os.actions.tools import commands, desktop, files, google_tools, notify, read
+from personal_os.actions.tools import agent, commands, desktop, files, google_tools, notify, read
 from personal_os.config.schema import Config
 
 
 def build_registry(config: Config | None = None) -> Registry:
     """The built-in tools, plus plugins when `actions.plugins_enabled` (needs the config)."""
     tools: list[Tool] = [
+        agent.Now(),
+        agent.Recall(),
+        agent.ListReminders(),
+        agent.Memory(),
         read.SearchContext(),
         read.ReadFile(),
         read.ListFolder(),

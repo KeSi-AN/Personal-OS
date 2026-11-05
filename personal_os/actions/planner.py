@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -217,6 +218,48 @@ def borrowed(args: dict[str, Any], request: str, context: str) -> bool:
     return False
 
 
+def plan_checker(
+    executor: Executor, request: str, *, strict_steps: bool = True
+) -> Callable[[Any], None]:
+    """Each call's arguments must fit its tool, or the model gets one retry with why.
+    `strict_steps`: tools named in `steps` must be called (the planner's one-shot plans; the
+    agent's final answers may mention tools it already used)."""
+
+    def check(plan: Any) -> None:
+        problems = []
+        for call in plan.calls:
+            tool = executor.registry.get(call.tool)
+            if tool is None:
+                continue
+            if any(
+                _CONTROL.search(v)
+                for k, v in call.args.items()
+                if k in PATH_ARGS and isinstance(v, str)
+            ):  # "C:\Users\me\notes" written into JSON unescaped turns \n into a newline
+                problems.append(f"{call.tool}: a path got mangled; write it with forward slashes")
+                continue
+            if tool.cues and not any(c in request.lower() for c in tool.cues):
+                problems.append(
+                    f"{tool.name} is only for requests about {'/'.join(tool.cues)}, and this "
+                    "request isn't: pick the tool that matches what was asked"
+                )
+                continue
+            try:
+                tool.args_model.model_validate(call.args)
+            except ValidationError as exc:
+                err = exc.errors()[0]
+                where = ".".join(map(str, err["loc"])) or "args"
+                problems.append(f"{tool.signature(choices=True)}: {where}: {err['msg']}")
+        steps_text = getattr(plan, "steps", "")
+        named = [t.name for t in executor.registry.for_planner() if t.name in steps_text]
+        if strict_steps and not plan.calls and named:
+            problems.append(f"steps name {', '.join(named)} but calls is empty: list the calls")
+        if problems:
+            raise ValueError("; ".join(problems))
+
+    return check
+
+
 def _plan_reminder(request: str, executor: Executor, *, dry_run: bool) -> PlanReport | None:
     """Reminders by rules, not the model: set, change, cancel. A missing message or time is
     asked about, never filled in."""
@@ -256,37 +299,7 @@ def _with_model(
             f"the request):\n{context}\n\n{user}"
         )
 
-    def check(plan: Any) -> None:
-        """Each call's arguments must fit its tool, or the model gets one retry with why."""
-        problems = []
-        for call in plan.calls:
-            tool = executor.registry.get(call.tool)
-            if tool is None:
-                continue
-            if any(
-                _CONTROL.search(v)
-                for k, v in call.args.items()
-                if k in PATH_ARGS and isinstance(v, str)
-            ):  # "C:\Users\me\notes" written into JSON unescaped turns \n into a newline
-                problems.append(f"{call.tool}: a path got mangled; write it with forward slashes")
-                continue
-            if tool.cues and not any(c in request.lower() for c in tool.cues):
-                problems.append(
-                    f"{tool.name} is only for requests about {'/'.join(tool.cues)}, and this "
-                    "request isn't: pick the tool that matches what was asked"
-                )
-                continue
-            try:
-                tool.args_model.model_validate(call.args)
-            except ValidationError as exc:
-                err = exc.errors()[0]
-                where = ".".join(map(str, err["loc"])) or "args"
-                problems.append(f"{tool.signature(choices=True)}: {where}: {err['msg']}")
-        named = [t.name for t in executor.registry.for_planner() if t.name in plan.steps]
-        if not plan.calls and named:
-            problems.append(f"steps name {', '.join(named)} but calls is empty: list the calls")
-        if problems:
-            raise ValueError("; ".join(problems))
+    check = plan_checker(executor, request)
 
     for round_no in range(1, max_rounds + 1):
         if killswitch.engaged(executor.runtime_dir):

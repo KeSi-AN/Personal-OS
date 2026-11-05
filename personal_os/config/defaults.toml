@@ -187,3 +187,11 @@ enabled = false            # a morning briefing and an end-of-day summary, once 
 morning_after = "09:00"    # offered the first time you're active after this
 evening_after = "18:30"
 speak = true               # also read aloud when voice is on
+
+[agent]
+# Donna as one assistant over general tools: conversation, what's open now, your history,
+# reminders, files, apps (docs/AGENT.md). false: the older separate ask / do paths.
+enabled = true
+max_steps = 4              # model calls per request (each about 1-3 s)
+name = "Donna"
+user_name = ""             # how she addresses you; empty: no name

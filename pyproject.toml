@@ -79,6 +79,8 @@ known-first-party = ["personal_os", "tests"]
 "personal_os/web/html.py" = ["E501"]
 # user-facing CLI messages read better on one line
 "personal_os/interfaces/cli_phase7.py" = ["E501"]
+# the agent prompt's worked examples are one JSON object per line
+"personal_os/actions/agent.py" = ["E501"]
 # an embedded PowerShell script
 "personal_os/interfaces/notify.py" = ["E501"]
 
