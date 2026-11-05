@@ -249,6 +249,12 @@ def doctor() -> None:
         typer.echo(f"voice      {vs['state']}" + (f" ({vs['error']})" if vs.get("error") else ""))
         if not vs.get("running"):
             problems.append("voice is on but its process isn't running")
+        from personal_os.interfaces import popup
+
+        pline, pproblem = popup.doctor_line(cfg)
+        typer.echo(f"popup      {pline}")
+        if pproblem:
+            problems.append(pproblem)
     line, problem = _ollama(cfg)
     typer.echo(f"ollama     {line}")
     if problem:

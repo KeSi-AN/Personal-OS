@@ -181,6 +181,28 @@ def voice_log(last: Annotated[int, typer.Option(help="How many exchanges.")] = 1
             typer.echo(f"          ERROR: {x['error']}")
 
 
+@voice_app.command("popup")
+def voice_popup(
+    demo: Annotated[
+        bool, typer.Option("--demo", help="Cycle through the states, fake data.")
+    ] = False,
+) -> None:
+    """Open the voice popup (it also opens by itself when you talk to voice)."""
+    from personal_os.interfaces import popup
+
+    cfg = _config()
+    result = popup.launch(cfg, demo=demo)
+    if result == "opened":
+        typer.echo(
+            "Opened the voice popup (Esc closes it)." + (" Demo: fake data." if demo else "")
+        )
+    elif result == "already open":
+        typer.echo("The voice popup is already open.")
+    else:
+        typer.echo(f"The voice popup can't open: {result.removeprefix('unavailable: ')}.")
+        raise typer.Exit(1)
+
+
 @voice_app.command("mic")
 def voice_mic() -> None:
     """Test the microphone: say a sentence after the beep; shows your level and what was heard."""

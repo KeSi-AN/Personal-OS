@@ -86,6 +86,20 @@ def unavailable_reason() -> str | None:
     return None
 
 
+def doctor_line(cfg: Config) -> tuple[str, str | None]:
+    """doctor's popup line, and a problem if the popup is on but can't open."""
+    if not cfg.voice.popup:
+        return "off ([voice] popup = false)", None
+    reason = unavailable_reason()
+    version = webview2_version()
+    line = f"on, WebView2 {version}" if version else "on, WebView2 missing"
+    state = last_state(cfg.runtime_dir)
+    if state.get("error"):
+        line += f"; last error {str(state.get('error_at', ''))[:16]}: {state['error']}"
+    problem = f"the voice popup can't open: {reason}" if reason else None
+    return line, problem
+
+
 def is_open(runtime_dir: Path) -> bool:
     """Whether a popup holds the lock. (Probing takes the lock for an instant and gives it back.)"""
     lock = runtime.InstanceLock(runtime_dir / LOCK)
