@@ -32,7 +32,7 @@ from personal_os.observers.spool import SpoolStats, drain
 
 VERSION = "1.0.0"
 RETURNS_KEY = "browser.returns"
-MAX_TEXT = 3000
+MAX_TEXT = 20_000  # matches the extension; the writer stores each page's text once
 MAX_HEADINGS = 20
 _SIGNALS = {"selection", "copy", "bookmark_added"}
 _SEARCH_NS = uuid.UUID("6f1c3a52-6d1e-4c8e-9a51-2b7e0c9d4f10")

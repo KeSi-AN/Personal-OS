@@ -6,7 +6,9 @@ import { Readability } from "@mozilla/readability";
 
 import { pickMainText } from "./visit";
 
-const MAX_TEXT = 3000;
+// About 3,500 words: long answers (a search engine's AI reply, an article) fit; the stored
+// copy is deduplicated per page, and `ask` reads only the passages about the question.
+const MAX_TEXT = 20000;
 const SENSITIVE_FIELDS =
   'input[type="password"], input[autocomplete="cc-number"], input[autocomplete="cc-csc"], ' +
   'input[autocomplete="cc-exp"], input[name*="cardnumber" i], input[autocomplete="one-time-code"]';

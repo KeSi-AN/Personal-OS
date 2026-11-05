@@ -16,7 +16,7 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -358,20 +358,148 @@ def gather_search(
         end_ms=to_ms(end),
         project_id=pid,
         sources=sources,
-        limit=18,
+        limit=SEARCH_POOL,
     )
-    event_ids = [h.id for h in result.hits if h.kind == "event"]
-    summary_ids = {h.id for h in result.hits if h.kind == "summary"}
-    lines = lines_from_rows(fetch_by_ids(conn, event_ids))
+    hits = _useful_hits(conn, result.hits)[:SEARCH_HITS]
+    event_ids = [h.id for h in hits if h.kind == "event"]
+    summary_ids = {h.id for h in hits if h.kind == "summary"}
+    focus = q.terms or [w for w in topic.lower().split() if len(w) >= 3]
+    lines = lines_from_rows(fetch_by_ids(conn, _with_revisits(conn, event_ids)), focus=focus)
     if summary_ids:
         for s in load_summaries(conn, start, end, project_id=pid):
             if s.id in summary_ids:
                 lines.append(summary_line(s))
+    lines = _keep_closest(lines, focus, q.text)
     scope = f"anything about '{topic}'" + (f" in {pid}" if pid else "")
     if q.range_label:
         scope += f" ({q.range_label})"
     notes = [result.note] if result.note else []
     return Gathered(finalize(lines, 40), scope=scope, notes=notes)
+
+
+SEARCH_POOL = 80  # candidates looked at ...
+SEARCH_HITS = 18  # ... and kept, after dropping the ones that would only crowd the answer out
+
+
+def _useful_hits(conn: sqlite3.Connection, hits: list[Any]) -> list[Any]:
+    """Search hits minus what would crowd out the answer: Personal OS's own traces (asking
+    the very question: its words match best of all) and repeat visits of one page (a page
+    that updates as you read it is "visited" many times; one visit stands for all)."""
+    from personal_os.context.evidence import own_trace as _own
+
+    ids = [h.id for h in hits if h.kind == "event"]
+    info: dict[str, tuple[str, dict[str, Any]]] = {}
+    if ids:
+        marks = ",".join("?" * len(ids))
+        for eid, source, type_, payload in conn.execute(
+            f"SELECT id, source, type, payload FROM events WHERE id IN ({marks})", ids
+        ):
+            info[eid] = (f"{source}.{type_}", json.loads(payload))
+    out, pages = [], set()
+    for h in hits:
+        if h.kind == "event" and h.id in info:
+            kind, p = info[h.id]
+            if _own(kind, p):
+                continue
+            if kind == "browser.page_visit":
+                url = p.get("url")
+                if url in pages:
+                    continue
+                pages.add(url)
+        out.append(h)
+    return out
+
+
+def _strong_refs(pack: EvidencePack, q: ParsedQuestion) -> list[int]:
+    """Records containing at least two of the question's words and most of them."""
+    words = [w.lower() for w in q.terms if len(w) >= 3]
+    if len(words) < 2:
+        return []
+    need = max(2, (len(words) + 1) // 2)
+    return [x.ref for x in pack.lines if _coverage(x, words) >= need][:4]
+
+
+def _coverage(line: EvidenceLine, words: list[str]) -> int:
+    hay = f"{line.text} {line.detail}".lower()
+    return sum(1 for w in words if w in hay)
+
+
+_STOP_WORDS = """a an the to of in on for at by with from and or is are was were be what which
+who how did do does i me my you your about that this it say said"""
+_STOP = frozenset(_STOP_WORDS.split())
+
+
+def _flat(text: str) -> str:
+    """Lower case, words separated by single spaces: "Speech-to-Text" -> "speech to text"."""
+    return " " + " ".join(re.sub(r"[^a-z0-9]+", " ", text.lower()).split()) + " "
+
+
+def phrases(question: str) -> list[str]:
+    """The question's word sequences of two or three words that start and end with a real
+    word: "speech to text", "local speech", "best local". Same words in another order ("text
+    to speech") are something else, which counting words can't tell apart."""
+    words = _flat(question).split()
+    out = []
+    for n in (3, 2):
+        for i in range(len(words) - n + 1):
+            seq = words[i : i + n]
+            if seq[0] not in _STOP and seq[-1] not in _STOP:
+                out.append(" ".join(seq))
+    return list(dict.fromkeys(out))
+
+
+def _phrase_hits(line: EvidenceLine, wanted: list[str]) -> int:
+    hay = _flat(f"{line.text} {line.detail}")
+    return sum(1 for p in wanted if f" {p} " in hay)
+
+
+def _keep_closest(
+    lines: list[EvidenceLine], focus: list[str], question: str = ""
+) -> list[EvidenceLine]:
+    """The exact words you asked about beat look-alikes: when some lines contain more of them
+    ("stt"), lines that only resemble the question ("tts", found by vector similarity) go.
+    Between lines with the same words, the ones with your phrasing in order win ("speech to
+    text" over "text to speech"). Applied only when the best lines cover at least two of your
+    words, and never empties the pack."""
+    words = [w.lower() for w in focus if len(w) >= 3]
+    if len(words) < 2 or not lines:
+        return lines
+    wanted = phrases(question)
+    rank = {id(x): (_coverage(x, words), _phrase_hits(x, wanted)) for x in lines}
+    best = max(rank.values())
+    if best[0] < 2:
+        return lines
+    kept = [x for x in lines if rank[id(x)] >= best]
+    return kept or lines
+
+
+def _with_revisits(conn: sqlite3.Connection, event_ids: list[str]) -> list[str]:
+    """The ids plus other visits of the same pages: a page that updates as you read it (a
+    search engine's AI answer) is captured more fully on a later visit than the one search
+    happened to find."""
+    if not event_ids:
+        return event_ids
+    marks = ",".join("?" * len(event_ids))
+    urls = [
+        u
+        for (u,) in conn.execute(
+            f"SELECT DISTINCT json_extract(payload, '$.url') FROM events WHERE id IN ({marks}) "
+            "AND source = 'browser' AND type = 'page_visit'",
+            event_ids,
+        )
+        if u
+    ]
+    out = list(event_ids)
+    for url in urls[:10]:
+        for (eid,) in conn.execute(
+            "SELECT e.id FROM events e JOIN page_extracts x ON x.event_id = e.id "
+            "WHERE e.source = 'browser' AND e.type = 'page_visit' "
+            "AND json_extract(e.payload, '$.url') = ? ORDER BY length(x.main_text) DESC LIMIT 3",
+            (url,),
+        ):
+            if eid not in out:
+                out.append(eid)
+    return out
 
 
 def gather(
@@ -446,6 +574,11 @@ HINTS = {
     "failed, say so and cite the commands listed.",
     "activity": "Cover every project in the time-by-project fact.",
     "weekly": "Cover every project in the time-by-project fact.",
+    "search": "A page's text is what it showed the user, including search engines' AI answers: "
+    "'what was suggested to me' or 'recommended' is what such a page said. Name the specific "
+    "things it lists.",
+    "research": "A page's text is what it showed the user, including search engines' AI "
+    "answers. Name the specific things it says.",
 }
 
 
@@ -553,10 +686,20 @@ def ask(
         if a.answered and not _grounded(a, valid):
             raise ValueError(f"every sentence needs refs to records 1..{max(valid)}")
 
+    prompt = _prompt(q, g, now)
     try:
-        model_answer = provider.chat_json(
-            SYSTEM, _prompt(q, g, now), ModelAnswer, think=think, validate=check
-        )
+        model_answer = provider.chat_json(SYSTEM, prompt, ModelAnswer, think=think, validate=check)
+        strong = _strong_refs(g.pack, q)
+        if not model_answer.answered and strong:
+            # A second look: records that contain most of what was asked about are rarely
+            # irrelevant; a small model sometimes passes over them.
+            nudge = (
+                f"\nNote: records {', '.join(f'[{r}]' for r in strong)} contain the words of the "
+                "question. Read them again; if they answer it, answer from them."
+            )
+            model_answer = provider.chat_json(
+                SYSTEM, prompt + nudge, ModelAnswer, think=think, validate=check, temperature=0
+            )
     except LLMError as exc:
         return _facts_answer(q, g, f"the model wasn't usable ({str(exc)[:100]})")
     if not model_answer.answered:

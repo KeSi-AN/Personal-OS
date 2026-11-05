@@ -170,15 +170,34 @@ def fetch_by_ids(conn: sqlite3.Connection, ids: Sequence[str]) -> list[sqlite3.R
     ).fetchall()
 
 
-def lines_from_rows(rows: Iterable[sqlite3.Row], *, git_state: bool = True) -> list[EvidenceLine]:
-    """Fold events into lines. Rows must come from EVENT_SQL."""
+def lines_from_rows(
+    rows: Iterable[sqlite3.Row], *, git_state: bool = True, focus: Sequence[str] = ()
+) -> list[EvidenceLine]:
+    """Fold events into lines. Rows must come from EVENT_SQL.
+
+    `focus`: the question's words. A page then carries the passages of its text that are about
+    them (from the fullest capture of that page), not just its opening lines: an answer is
+    rarely in the first 200 characters ("which STT model was suggested?" is in the middle of
+    a search engine's AI answer).
+    """
     windows: dict[tuple[str, str], EvidenceLine] = {}
     files: dict[str, tuple[EvidenceLine, dict[str, int]]] = {}
     commands: dict[tuple[str, str], tuple[EvidenceLine, dict[str, int]]] = {}
     pages: dict[str, EvidenceLine] = {}
+    page_rows: dict[str, tuple[sqlite3.Row, dict[str, Any]]] = {}  # the fullest capture per page
+    searches: dict[tuple[str, str], EvidenceLine] = {}
     editors: dict[str, EvidenceLine] = {}
     states: dict[str, EvidenceLine] = {}
     out: list[EvidenceLine] = []
+
+    rows = list(rows)
+    for r in rows:  # first pass: which visit of each page captured the most text
+        if r["source"] == "browser" and r["type"] == "page_visit" and r["x_text"]:
+            p = json.loads(r["payload"])
+            key = p.get("url") or r["id"]
+            have = page_rows.get(key)
+            if have is None or len(r["x_text"]) > len(have[0]["x_text"] or ""):
+                page_rows[key] = (r, p)
 
     for r in rows:
         p = json.loads(r["payload"])
@@ -187,6 +206,8 @@ def lines_from_rows(rows: Iterable[sqlite3.Row], *, git_state: bool = True) -> l
         sensitive = r["privacy_class"] != "normal"
         eid, pid = r["id"], r["project_id"]
         kind = f"{r['source']}.{r['type']}"
+        if _own(kind, p):
+            continue  # Personal OS's own questions and dashboard aren't things you did
 
         if kind == "window.focus":
             app = clean(p.get("app") or p.get("exe") or "?", 40)
@@ -211,7 +232,8 @@ def lines_from_rows(rows: Iterable[sqlite3.Row], *, git_state: bool = True) -> l
             if line is None:
                 title = "" if hidden else clean(p.get("title"), 140)
                 text = f"'{title}' ({domain})" if title else f"visited {domain} (content hidden)"
-                detail = "" if hidden else _page_detail(r, p)
+                fullest = page_rows.get(key, (r, p))
+                detail = "" if hidden else _page_detail(fullest[0], fullest[1], focus)
                 line = pages[key] = EvidenceLine(ts, "page", text, [], detail, pid)
                 out.append(line)
             line.weight += active
@@ -221,7 +243,13 @@ def lines_from_rows(rows: Iterable[sqlite3.Row], *, git_state: bool = True) -> l
             text = clean(p.get("text"), 160)
             site = clean(p.get("engine") or p.get("domain"), 40)
             if r["type"] == "search" and text:
-                out.append(EvidenceLine(ts, "search", f"'{text}' on {site}", [eid], project_id=pid))
+                done = searches.get((text.lower(), site))
+                if done is not None:  # the same search, re-sent as the page updates
+                    done.event_ids.append(eid)
+                    continue
+                line = EvidenceLine(ts, "search", f"'{text}' on {site}", [eid], project_id=pid)
+                searches[(text.lower(), site)] = line
+                out.append(line)
             elif r["type"] in ("selection", "copy") and text:
                 out.append(
                     EvidenceLine(ts, "selection", f"'{text}' from {site}", [eid], project_id=pid)
@@ -386,8 +414,63 @@ def _fold_files(
     return [x for x in out if id(x) not in folded]
 
 
-def _page_detail(r: sqlite3.Row, p: dict[str, Any]) -> str:
+_OWN_COMMAND = re.compile(r"\bpersonal-os\s+(?:ask|do|search|briefing|voice|sessions|inbox)\b")
+_OWN_PAGES = re.compile(r"^https?://(?:127\.0\.0\.1|localhost):4782\d", re.I)
+
+
+def own_trace(kind: str, p: dict[str, Any]) -> bool:
+    return _own(kind, p)
+
+
+def _own(kind: str, p: dict[str, Any]) -> bool:
+    """Personal OS's own traces: asking it a question, its dashboard. Evidence about what you
+    did must not include you asking about it ("You asked about the STT model ...")."""
+    if kind == "terminal.command":
+        return bool(_OWN_COMMAND.search(str(p.get("command") or "")))
+    if kind.startswith("browser."):
+        return bool(_OWN_PAGES.match(str(p.get("url") or "")))
+    return False
+
+
+PASSAGE_CHARS = 320
+PASSAGES = 3
+
+
+def relevant_passages(text: str, focus: Sequence[str], limit: int = PASSAGES) -> str:
+    """The parts of a page's text that mention the question's words, in page order, joined
+    with " … ". Windows of ~320 characters, scored by how many different focus words they
+    contain (then how often). The opening is used when nothing matches."""
+    words = [w.lower() for w in focus if len(w) >= 3]
+    if not words or not text:
+        return text[: PASSAGE_CHARS * 2]
+    low = text.lower()
+    step = PASSAGE_CHARS // 2
+    scored = []
+    for start in range(0, max(1, len(text) - step), step):
+        window = low[start : start + PASSAGE_CHARS]
+        distinct = sum(1 for w in words if w in window)
+        if distinct:
+            scored.append((distinct, sum(window.count(w) for w in words), start))
+    if not scored:
+        return text[: PASSAGE_CHARS * 2]
+    chosen: list[int] = []
+    for _d, _n, start in sorted(scored, key=lambda s: (-s[0], -s[1], s[2])):
+        if all(abs(start - c) >= PASSAGE_CHARS for c in chosen):
+            chosen.append(start)
+        if len(chosen) == limit:
+            break
+    return " … ".join(text[s : s + PASSAGE_CHARS].strip() for s in sorted(chosen))
+
+
+def _page_detail(r: sqlite3.Row, p: dict[str, Any], focus: Sequence[str] = ()) -> str:
     bits = []
+    if focus and r["x_text"]:
+        # Asked about something: what the page says about it.
+        bits.append(relevant_passages(r["x_text"], focus))
+        enrichment = p.get("enrichment") or {}
+        if enrichment.get("repo"):
+            bits.append(f"repo {enrichment['repo']}")
+        return clean(" | ".join(bits), PASSAGE_CHARS * PASSAGES + 40)
     if r["x_meta"]:
         bits.append(r["x_meta"])
     elif r["x_text"]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from collections.abc import Sequence
@@ -52,6 +53,20 @@ ON CONFLICT (id) DO UPDATE SET
     updated_at = excluded.updated_at
 WHERE events.source = excluded.source AND events.type = excluded.type
 """
+
+
+def _already_stored(conn: sqlite3.Connection, content_hash: str, url: str, event_id: str) -> bool:
+    """Is this exact text already stored for this page (by another visit)?"""
+    if not content_hash:
+        return False
+    row = conn.execute(
+        "SELECT 1 FROM page_extracts x JOIN events e ON e.id = x.event_id "
+        "WHERE x.content_hash = ? AND x.main_text != '' AND x.event_id != ? "
+        "AND json_extract(e.payload, '$.url') = ? LIMIT 1",
+        (content_hash, event_id, url),
+    ).fetchone()
+    return row is not None
+
 
 _UPSERT_EXTRACT = """
 INSERT INTO page_extracts (
@@ -154,17 +169,25 @@ class EventWriter:
                 conn.execute("DELETE FROM page_extracts WHERE event_id = ?", (str(event.id),))
             return
         ex = payload.extract
+        main_text = ex.main_text
+        content_hash = ex.content_hash or (
+            hashlib.sha256(main_text.encode()).hexdigest()[:32] if main_text else ""
+        )
+        if main_text and _already_stored(conn, content_hash, payload.url, str(event.id)):
+            # The same page with the same text (a revisit, a re-extract): keep one copy. The
+            # extract row stays, with its hash, so the visit still counts as read.
+            main_text = ""
         conn.execute(
             _UPSERT_EXTRACT,
             {
                 "id": str(uuid7(event.ts_start)),
                 "event_id": str(event.id),
                 "ts": to_ms(event.ts_start),
-                "content_hash": ex.content_hash,
+                "content_hash": content_hash,
                 "title": ex.title,
                 "meta_description": ex.meta_description,
                 "headings": json.dumps(ex.headings),
-                "main_text": ex.main_text,
+                "main_text": main_text,
                 "word_count": ex.word_count,
                 "lang": ex.lang,
                 "expires_at": self.retention.extract_expiry(event),

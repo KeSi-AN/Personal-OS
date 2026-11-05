@@ -249,7 +249,7 @@ Every event passes it, including events from the extensions and from replay. Sta
 **Captured per visit**
 
 - `browser/page_visit` (interval = the visit): `{url, url_normalized, domain, title, tab_id, window_id, transition ("link"|"typed"|"search"|"bookmark"|"reload"|"form_submit"|"back_forward"|…), referrer, opener_visit_id, chain_id, active_dwell_ms, scroll_max_pct, video_watched_s, returned_count_7d, bookmarked, search_query?, content_type, lang, extract_id?}`
-- `browser/page_extract` (stored in a separate table, 90-day retention): `{title, meta_description, headings[≤20], main_text[≤3000 chars], word_count, content_hash, site_enrichment{…}}`
+- `browser/page_extract` (stored in a separate table, 90-day retention): `{title, meta_description, headings[≤20], main_text[≤20000 chars, stored once per page and text], word_count, content_hash, site_enrichment{…}}`
 - Intent signals: `browser/search {engine, query}`, `browser/selection {text≤500}`, `browser/copy {text≤500}` (selection captured at copy time; **the clipboard itself is never read**), `browser/bookmark_added`.
 
 **Mechanisms**
