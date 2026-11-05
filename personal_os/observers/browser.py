@@ -250,13 +250,38 @@ def parse_record(
     return events or None
 
 
+TABS_DIR = "now"
+
+
+def keep_tabs(now_dir: Path, rec: dict[str, Any]) -> None:
+    """The latest list of open tabs for one browser, replacing the last (live state, never
+    history: not stored in the database). Filtered and redacted when it's read (context/now)."""
+    from personal_os.core import runtime
+
+    browser = "".join(c for c in str(rec.get("browser", "chrome")) if c.isalnum())[:20] or "chrome"
+    tabs = [t for t in rec.get("tabs") or [] if isinstance(t, dict)][:100]
+    now_dir.mkdir(parents=True, exist_ok=True)
+    runtime.write_json_atomic(
+        now_dir / f"tabs-{browser}.json",
+        {"browser": browser, "at": str(rec.get("at", "")), "tabs": tabs},
+    )
+
+
 def ingest(
     spool: Path,
     stats: SpoolStats,
     returns: Returns | None = None,
     foreground: ForegroundFn | None = None,
+    now_dir: Path | None = None,
 ) -> list[Event]:
-    batches = drain(spool, lambda r: parse_record(r, returns, foreground), stats)
+    def parse(rec: dict[str, Any]) -> list[Event] | None:
+        if rec.get("type") == "tabs":
+            if now_dir is not None:
+                keep_tabs(now_dir, rec)
+            return []
+        return parse_record(rec, returns, foreground)
+
+    batches = drain(spool, parse, stats)
     return [e for batch in batches for e in batch]
 
 
@@ -265,10 +290,16 @@ class BrowserObserver(BaseObserver):
     version = VERSION
 
     def __init__(
-        self, spool_dir: Path, *, poll_s: float = 1.0, foreground: ForegroundFn | None = None
+        self,
+        spool_dir: Path,
+        *,
+        poll_s: float = 1.0,
+        foreground: ForegroundFn | None = None,
+        now_dir: Path | None = None,
     ) -> None:
         super().__init__()
         self.spool_dir = spool_dir
+        self.now_dir = now_dir
         self.foreground = foreground
         self.poll_s = poll_s
         self.stats = SpoolStats()
@@ -282,7 +313,9 @@ class BrowserObserver(BaseObserver):
             if not ctx.paused.is_set():
                 # Not in a worker thread: the foreground lookup reads the window observer's
                 # in-memory history, which only the event loop touches. Spool files are small.
-                events = ingest(self.spool_dir, self.stats, self.returns, self.foreground)
+                events = ingest(
+                    self.spool_dir, self.stats, self.returns, self.foreground, self.now_dir
+                )
                 if events:
                     self.last_record_at = time.time()
                     self.returns.save()

@@ -251,7 +251,45 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     const now = Date.now();
     for (const v of Object.values(st.visits)) send(toRecord(v, now, null, BROWSER));
   });
+  void sendTabs();
 });
+
+// --- open tabs: what's open right now, for "what tabs do I have open?" ----------------------
+// Sent when tabs change (debounced) and once a minute. The host keeps only the latest list,
+// never history. Incognito tabs and non-web pages are never sent.
+const TABS_MAX = 100;
+let tabsTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleTabs(): void {
+  if (tabsTimer !== null) clearTimeout(tabsTimer);
+  tabsTimer = setTimeout(() => void sendTabs(), 1500);
+}
+
+async function sendTabs(): Promise<void> {
+  tabsTimer = null;
+  const tabs = await chrome.tabs.query({});
+  const list = tabs
+    .filter((t) => !t.incognito && isTrackable(t.url))
+    .slice(0, TABS_MAX)
+    .map((t) => ({
+      title: (t.title ?? "").slice(0, 200),
+      url: t.url,
+      active: t.active,
+      audible: t.audible === true,
+      window: t.windowId,
+    }));
+  await withState((st) => {
+    if (!st.paused) send({ v: 1, type: "tabs", at: new Date().toISOString(), tabs: list });
+  });
+}
+
+chrome.tabs.onCreated.addListener(() => scheduleTabs());
+chrome.tabs.onRemoved.addListener(() => scheduleTabs());
+chrome.tabs.onActivated.addListener(() => scheduleTabs());
+chrome.tabs.onUpdated.addListener((_id, change) => {
+  if (change.title !== undefined || change.url !== undefined || change.audible !== undefined) scheduleTabs();
+});
+chrome.windows.onRemoved.addListener(() => scheduleTabs());
 
 async function initFocus(): Promise<void> {
   // The worker may start long after the browser: read the real focus state, don't assume it.
@@ -273,6 +311,7 @@ function boot(): void {
   void chrome.alarms.create(CHECKPOINT_ALARM, { periodInMinutes: 1 });
   connect();
   void initFocus();
+  scheduleTabs();
 }
 
 chrome.runtime.onStartup.addListener(boot);

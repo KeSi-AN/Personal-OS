@@ -265,6 +265,7 @@ class Daemon:
             BrowserObserver(
                 cfg.spool_dir / "browser",
                 foreground=window.foreground_ms if window and oc.window.enabled else None,
+                now_dir=cfg.runtime_dir / "now",
             ),
             enabled=oc.browser.enabled,
             reason=None

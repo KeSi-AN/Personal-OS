@@ -23,7 +23,7 @@ from personal_os.config.loader import default_home
 HOST_NAME = "com.personalos.host"
 HOST_VERSION = "1.0.0"
 MAX_MESSAGE_BYTES = 1_000_000  # we never accept huge messages, whatever the protocol allows
-_ACCEPTED_TYPES = {"visit", "signal"}
+_ACCEPTED_TYPES = {"visit", "signal", "tabs"}
 
 
 def read_message(stream: IO[bytes]) -> dict[str, Any] | None:
@@ -53,6 +53,7 @@ class Host:
         self.spool = home / "spool" / "browser"
         self.marker = home / "runtime" / "paused"
         safe = "".join(c for c in browser if c.isalnum())[:20] or "chromium"
+        self.browser = safe
         self.file = self.spool / f"{safe}-{os.getpid()}.jsonl"
 
     def paused(self) -> bool:
@@ -68,6 +69,8 @@ class Host:
             return {"ok": True, "paused": True, "dropped": True}
         if msg.get("incognito"):
             return {"ok": True, "paused": False, "dropped": True}  # never written, not even once
+        if kind == "tabs":
+            msg = {**msg, "browser": self.browser}  # Brave reports itself as Chrome
         self.spool.mkdir(parents=True, exist_ok=True)
         with self.file.open("a", encoding="utf-8", newline="\n") as fh:
             fh.write(json.dumps(msg, separators=(",", ":"), ensure_ascii=False) + "\n")
