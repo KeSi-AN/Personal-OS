@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any
@@ -71,10 +73,31 @@ class InstanceLock:
         self.release()
 
 
+REPLACE_TRIES = 20
+
+
 def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
-    tmp = path.with_name(path.name + ".tmp")
+    """Readers see the old file or the new one, never half of one. On Windows a reader holding
+    the file open (the popup polls voice.json) makes the swap fail for a moment, so retry."""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(json.dumps(data, default=str, indent=1), encoding="utf-8")
-    os.replace(tmp, path)
+    for attempt in range(REPLACE_TRIES):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == REPLACE_TRIES - 1:
+                tmp.unlink(missing_ok=True)
+                raise
+            time.sleep(0.005)
+
+
+def read_json(path: Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def read_health(runtime_dir: Path) -> dict[str, Any] | None:
