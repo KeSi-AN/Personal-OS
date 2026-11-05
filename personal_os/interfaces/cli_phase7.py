@@ -158,14 +158,14 @@ def voice_status() -> None:
 @voice_app.command("log")
 def voice_log(last: Annotated[int, typer.Option(help="How many exchanges.")] = 10) -> None:
     """What voice heard, what it did, and how long each step took (kept on this laptop)."""
-    from personal_os.voice.main import history
+    from personal_os.voice.main import history, local_time
 
     cfg = _config()
     entries = history(cfg.runtime_dir, last)
     if not entries:
         typer.echo("Nothing yet. Press Ctrl+Alt+Shift+V, wait for the beep, and speak.")
     for x in entries:
-        when = x.get("at", "")[11:19]
+        when = local_time(x.get("at", ""))
         times = ", ".join(
             f"{k[:-2]} {x[k]} s" for k in ("listen_s", "handle_s", "speak_s", "total_s") if k in x
         )

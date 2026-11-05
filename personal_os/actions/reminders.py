@@ -20,11 +20,21 @@ class Reminder:
     due: datetime
 
 
+def _spoken_time(at: str) -> str:
+    """Times the way speech recognition writes them: "2.10" is 2:10, "5 p.m." is 5pm,
+    "5 o'clock" is 5."""
+    t = at.strip().lower()
+    t = re.sub(r"\b([ap])\.?\s*m\.?", r"\1m", t)  # p.m. / p. m. / pm
+    t = re.sub(r"(\d)\.(\d{2})\b", r"\1:\2", t)  # 2.10 -> 2:10
+    t = re.sub(r"\s*o'?\s*clock\b", "", t)
+    return t.strip()
+
+
 def due_time(now: datetime, minutes: int | None, at: str | None) -> datetime:
     """`minutes` from now, or the next occurrence of a clock time like '17:30' or '5pm'."""
     if minutes is not None:
         return now + timedelta(minutes=minutes)
-    m = _AT.match((at or "").strip())
+    m = _AT.match(_spoken_time(at or ""))
     if not m:
         raise ValueError("give minutes, or a time like 17:30 or 5pm")
     hour, minute, ampm = int(m[1]), int(m[2] or 0), (m[3] or "").lower()
@@ -79,3 +89,55 @@ def take_due(conn: sqlite3.Connection, clock: Clock) -> list[Reminder]:
     for r in due:
         conn.execute("UPDATE reminders SET fired_at = ? WHERE id = ?", (now, r.id))
     return due
+
+
+# Questions about reminders ("what reminders do I have?", "what did I ask you to remind me?")
+# are answered from this table: they aren't in your captured activity, so `ask` would never
+# find them there.
+REMINDER_Q = re.compile(r"\b(reminders?|remind(?:ed|ing)? me|remind you)\b", re.I)
+QUESTION = re.compile(
+    r"^\s*(?:hey\s+)?(?:donna\W*\s*)?(?:what|which|when|did|do|does|have|has|any|list|show|tell|"
+    r"how many|is there|are there|was there|what's|whats)\b",
+    re.I,
+)
+RECENT = timedelta(hours=24)
+
+
+def is_question(text: str) -> bool:
+    return bool(REMINDER_Q.search(text) and QUESTION.match(text))
+
+
+def _when(due: datetime, now: datetime) -> str:
+    d, n = due.astimezone(), now.astimezone()
+    if d.date() == n.date():
+        return f"at {d:%H:%M} today"
+    if (d.date() - n.date()).days == 1:
+        return f"at {d:%H:%M} tomorrow"
+    if (n.date() - d.date()).days == 1:
+        return f"at {d:%H:%M} yesterday"
+    return f"on {d:%a %d %b} at {d:%H:%M}"
+
+
+def answer(conn: sqlite3.Connection, now: datetime) -> list[str]:
+    """What's coming up, and what went off in the last day, in plain sentences."""
+    upcoming = pending(conn)[:5]
+    since = to_ms(now - RECENT)
+    fired = [
+        (r[0], from_ms(r[1]))
+        for r in conn.execute(
+            "SELECT text, due_at FROM reminders WHERE fired_at IS NOT NULL AND fired_at >= ? "
+            "AND cancelled = 0 ORDER BY due_at DESC LIMIT 3",
+            (since,),
+        )
+    ]
+    out = []
+    if upcoming:
+        items = "; ".join(f'"{r.text}" {_when(r.due, now)}' for r in upcoming)
+        n = len(upcoming)
+        out.append(f"You have {n} reminder{'s' if n > 1 else ''} coming up: {items}.")
+    else:
+        out.append("You have no reminders coming up.")
+    if fired:
+        items = "; ".join(f'"{text}" {_when(due, now)}' for text, due in fired)
+        out.append(f"In the last day: {items}.")
+    return out

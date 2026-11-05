@@ -663,6 +663,12 @@ def ask(
     previous: ParsedQuestion | None = None,
 ) -> Answer:
     q = parse_question(question, load_projects(conn), now)
+    from personal_os.actions import reminders
+
+    if reminders.is_question(question):
+        lines = reminders.answer(conn, now)
+        g = Gathered(EvidencePack([]), scope="your reminders")
+        return Answer(q, "facts", [(line, []) for line in lines], "high", g)
     if previous is not None:
         q = follow_up(q, previous)
     q = usage.classify(conn, q, now)

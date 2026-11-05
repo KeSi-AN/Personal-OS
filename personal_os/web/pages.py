@@ -722,7 +722,7 @@ def _assistant_section(state: WebState) -> str:
 
 def _voice_card(state: WebState) -> str:
     """Voice at a glance: is it running, and the last few things it heard and did."""
-    from personal_os.voice.main import history
+    from personal_os.voice.main import history, local_time
     from personal_os.voice.main import status as voice_status
 
     if not state.config.voice.enabled:
@@ -730,7 +730,7 @@ def _voice_card(state: WebState) -> str:
     vs = voice_status(state.config.runtime_dir)
     cls = "ok" if vs.get("running") else "bad"
     rows = "".join(
-        f"<div class='small'><b>{e(x.get('at', '')[11:16])}</b> {e(x.get('heard') or '(nothing heard)')} "
+        f"<div class='small'><b>{e(local_time(x.get('at', ''), '%H:%M'))}</b> {e(x.get('heard') or '(nothing heard)')} "
         f"<span class='pill'>{e(x.get('route', '?'))}</span> <span class='muted'>{e(x.get('total_s', '?'))} s</span>"
         + (f"<div class='muted'>{e((x.get('reply') or '')[:160])}</div>" if x.get("reply") else "")
         + (f"<div class='bad'>{e(x['error'])}</div>" if x.get("error") else "")
