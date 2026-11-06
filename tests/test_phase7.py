@@ -89,8 +89,7 @@ def test_spoken_replies_are_short():
     assert spoken("Just one.") == "Just one."
     listing = "You watched 5 videos:\n- 18:47 'A' (15m)\n- 19:18 'B'\n- 19:21 'C'\n- 19:28 'D'"
     assert spoken(listing) == (
-        "You watched 5 videos: 18:47 'A' (15m); 19:18 'B'; 19:21 'C'. "
-        "The rest is on screen."
+        "You watched 5 videos: 18:47 'A' (15m); 19:18 'B'; 19:21 'C'. The rest is on screen."
     )
 
 
