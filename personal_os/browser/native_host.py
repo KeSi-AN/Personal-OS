@@ -7,23 +7,35 @@ daemon ingests exactly like the terminal spool. No network port is opened anywhe
 
 The host answers every message with {"ok": bool, "paused": bool}, so the extension can stop
 sending while capture is paused (the daemon would drop those events anyway).
+
+Browser control (ADR-076) goes the other way over the same connection: Donna writes a command
+file to runtime/browser/cmd/, this host (the only process the extension listens to) claims it
+and passes it to the extension, and the extension's result comes back as a message that is
+written to runtime/browser/res/. Web pages can't reach this channel; nothing listens on a port.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import struct
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import IO, Any
 
 from personal_os.config.loader import default_home
 
 HOST_NAME = "com.personalos.host"
-HOST_VERSION = "1.0.0"
+HOST_VERSION = "1.1.0"
 MAX_MESSAGE_BYTES = 1_000_000  # we never accept huge messages, whatever the protocol allows
-_ACCEPTED_TYPES = {"visit", "signal", "tabs"}
+_ACCEPTED_TYPES = {"visit", "signal", "tabs", "result"}
+_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+_BROWSERS = {"brave.exe": "brave", "chrome.exe": "chrome", "msedge.exe": "edge"}
+CMD_POLL_S = 0.15
+CMD_MAX_AGE_S = 30  # a command nobody picked up in time is stale: dropped, never run late
 
 
 def read_message(stream: IO[bytes]) -> dict[str, Any] | None:
@@ -48,13 +60,36 @@ def write_message(stream: IO[bytes], msg: dict[str, Any]) -> None:
     stream.flush()
 
 
+def detect_browser(fallback: str) -> str:
+    """Which browser started us, from the process tree. Brave also reads Chrome's registration,
+    so the launcher's --browser argument can say "chrome" when it's really Brave."""
+    try:
+        import psutil
+
+        proc = psutil.Process(os.getpid()).parent()
+        for _ in range(4):
+            if proc is None:
+                break
+            name = proc.name().lower()
+            if name in _BROWSERS:
+                return _BROWSERS[name]
+            proc = proc.parent()
+    except Exception:
+        pass
+    return fallback
+
+
 class Host:
     def __init__(self, home: Path, browser: str = "chromium") -> None:
         self.spool = home / "spool" / "browser"
-        self.marker = home / "runtime" / "paused"
+        self.runtime = home / "runtime"
+        self.marker = self.runtime / "paused"
         safe = "".join(c for c in browser if c.isalnum())[:20] or "chromium"
         self.browser = safe
         self.file = self.spool / f"{safe}-{os.getpid()}.jsonl"
+        self.cmd_dir = self.runtime / "browser" / "cmd"
+        self.res_dir = self.runtime / "browser" / "res"
+        self.hosts_dir = self.runtime / "browser" / "hosts"
 
     def paused(self) -> bool:
         return self.marker.exists()
@@ -65,6 +100,9 @@ class Host:
             return {"ok": True, "paused": self.paused(), "host_version": HOST_VERSION}
         if kind not in _ACCEPTED_TYPES:
             return {"ok": False, "error": "unsupported message", "paused": self.paused()}
+        if kind == "result":
+            self.write_result(msg)  # an answer to a command Donna sent: not capture
+            return {"ok": True, "paused": self.paused()}
         if self.paused():
             return {"ok": True, "paused": True, "dropped": True}
         if msg.get("incognito"):
@@ -75,6 +113,49 @@ class Host:
         with self.file.open("a", encoding="utf-8", newline="\n") as fh:
             fh.write(json.dumps(msg, separators=(",", ":"), ensure_ascii=False) + "\n")
         return {"ok": True, "paused": False}
+
+    # --- browser control ------------------------------------------------------------------
+
+    def write_result(self, msg: dict[str, Any]) -> None:
+        rid = str(msg.get("id", ""))
+        if not _ID.match(rid):
+            return
+        self.res_dir.mkdir(parents=True, exist_ok=True)
+        tmp = self.res_dir / f"{rid}.{os.getpid()}.tmp"
+        tmp.write_text(json.dumps(msg, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, self.res_dir / f"{rid}.json")
+
+    def take_commands(self, now: float | None = None) -> list[dict[str, Any]]:
+        """Commands for this browser (or any), claimed so no other host runs them too."""
+        if not self.cmd_dir.is_dir():
+            return []
+        now = time.time() if now is None else now
+        out = []
+        for f in sorted(self.cmd_dir.glob("*.json")):
+            try:
+                cmd = json.loads(f.read_text("utf-8"))
+            except (OSError, ValueError):
+                continue
+            target = str(cmd.get("browser") or "any")
+            if target not in ("any", self.browser):
+                continue
+            claimed = f.with_name(f"{f.stem}.taken-{os.getpid()}")
+            try:
+                os.replace(f, claimed)  # atomic: only one host wins
+            except OSError:
+                continue
+            claimed.unlink(missing_ok=True)
+            if now - float(cmd.get("at", 0)) > CMD_MAX_AGE_S or not _ID.match(str(cmd.get("id"))):
+                continue
+            out.append(cmd)
+        return out
+
+    def register(self) -> Path:
+        """Say this browser can take commands (removed when the browser closes the port)."""
+        self.hosts_dir.mkdir(parents=True, exist_ok=True)
+        f = self.hosts_dir / f"{self.browser}-{os.getpid()}.json"
+        f.write_text(json.dumps({"browser": self.browser, "pid": os.getpid()}), encoding="utf-8")
+        return f
 
 
 def _binary_stdio() -> tuple[IO[bytes], IO[bytes]]:
@@ -100,17 +181,46 @@ def main(argv: list[str] | None = None) -> int:
     for arg in argv:
         if arg.startswith("--home="):
             home = Path(arg.split("=", 1)[1])
-    host = Host(home, _browser_from_args(argv))
+    host = Host(home, detect_browser(_browser_from_args(argv)))
     stdin, stdout = _binary_stdio()
-    while True:
-        msg = read_message(stdin)
-        if msg is None:
-            return 0
-        try:
-            reply = host.handle(msg)
-        except Exception as exc:  # never crash the port; report and continue
-            reply = {"ok": False, "error": type(exc).__name__, "paused": host.paused()}
-        write_message(stdout, reply)
+    lock = threading.Lock()  # replies and commands share stdout
+    done = threading.Event()
+
+    def send(msg: dict[str, Any]) -> None:
+        with lock:
+            write_message(stdout, msg)
+
+    def relay() -> None:
+        while not done.is_set():
+            try:
+                for cmd in host.take_commands():
+                    send(
+                        {
+                            "type": "cmd",
+                            "id": cmd["id"],
+                            "op": cmd.get("op"),
+                            "args": cmd.get("args") or {},
+                        }
+                    )
+            except Exception:
+                pass  # a bad command file never takes the connection down
+            done.wait(CMD_POLL_S)
+
+    marker = host.register()
+    threading.Thread(target=relay, name="pos-browser-cmd", daemon=True).start()
+    try:
+        while True:
+            msg = read_message(stdin)
+            if msg is None:
+                return 0
+            try:
+                reply = host.handle(msg)
+            except Exception as exc:  # never crash the port; report and continue
+                reply = {"ok": False, "error": type(exc).__name__, "paused": host.paused()}
+            send(reply)
+    finally:
+        done.set()
+        marker.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

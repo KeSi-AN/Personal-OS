@@ -12,6 +12,7 @@ import {
   syncActive,
   toRecord,
 } from "./visit";
+import { runCommand } from "./control";
 
 const HOST = "com.personalos.host";
 const BROWSER = navigator.userAgent.includes("Edg/") ? "edge" : "chrome"; // Brave reports as Chrome
@@ -55,7 +56,13 @@ function connect(): chrome.runtime.Port | null {
   if (port) return port;
   try {
     const p = chrome.runtime.connectNative(HOST);
-    p.onMessage.addListener((msg: { paused?: boolean }) => {
+    p.onMessage.addListener((msg: { paused?: boolean; type?: string; id?: string; op?: string; args?: Record<string, unknown> }) => {
+      if (msg?.type === "cmd" && typeof msg.id === "string") {
+        // Donna asked for something (through the native host only: pages can't send these).
+        const id = msg.id;
+        void runCommand(String(msg.op), msg.args ?? {}).then((res) => port?.postMessage({ type: "result", id, ...res }));
+        return;
+      }
       if (typeof msg?.paused === "boolean") {
         setBadge(msg.paused ? "II" : "");
         void withState((st) => {
