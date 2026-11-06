@@ -465,8 +465,12 @@ def _system(low: str, now: datetime | None) -> Intent | None:
         r"(?:take\s+(?:a\s+)?)?screenshot|screen\s*shot|capture\s+(?:the\s+)?screen", low
     ):
         return Intent([("screenshot", {})], "Screenshot saved.")
-    if re.fullmatch(r"(?:play|pause|resume)(?:\s+(?:the\s+)?(?:music|song|video))?", low):
-        return Intent([("media", {"action": "play_pause"})], "Okay.")
+    m = re.fullmatch(r"(play|pause|resume|stop)(?:\s+(?:the\s+)?(?:music|song|video))?", low)
+    if m:
+        # "play_pause" for the media keys; voice sends it to the browser tab when it can.
+        intent = Intent([("media", {"action": "play_pause"})], "Okay.")
+        intent.verb = "pause" if m[1] in ("pause", "stop") else "play"
+        return intent
     if re.fullmatch(r"(?:next|skip)(?:\s+(?:song|track))?", low):
         return Intent([("media", {"action": "next"})], "Next.")
     if re.fullmatch(r"previous(?:\s+(?:song|track))?|go back a (?:song|track)", low):

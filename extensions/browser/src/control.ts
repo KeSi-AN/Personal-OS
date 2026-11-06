@@ -204,7 +204,7 @@ export async function runCommand(op: string, args: Args): Promise<CmdResult> {
         return {
           ok: true,
           data: tabs.filter((t) => !t.incognito && web(t.url)).map((t) => ({
-            id: t.id, title: t.title, url: t.url, active: t.active, audible: !!t.audible,
+            id: t.id, index: t.index, group: t.groupId, title: t.title, url: t.url, active: t.active, audible: !!t.audible,
             muted: !!t.mutedInfo?.muted, pinned: t.pinned, window: t.windowId,
             lastAccessed: (t as chrome.tabs.Tab & { lastAccessed?: number }).lastAccessed ?? null,
           })),
@@ -230,6 +230,14 @@ export async function runCommand(op: string, args: Args): Promise<CmdResult> {
         const ids = (args.tabIds as number[] | undefined) ?? [(await targetTab(args)).id!];
         await chrome.tabs.remove(ids);
         return { ok: true, data: { closed: ids.length } };
+      }
+      case "tabs.group": {
+        const ids = (args.tabIds as number[] | undefined) ?? [];
+        if (!ids.length) throw new Error("no tabs to group");
+        const groupId = await chrome.tabs.group({ tabIds: ids as [number, ...number[]] });
+        const title = String(args.title ?? "").slice(0, 40);
+        if (title) await chrome.tabGroups.update(groupId, { title });
+        return { ok: true, data: { group: groupId, tabs: ids.length, title } };
       }
       case "tabs.nav": {
         const tab = await targetTab(args);
@@ -268,7 +276,15 @@ export async function runCommand(op: string, args: Args): Promise<CmdResult> {
         // A site recipe: open a search page, take the first result matching `selector`, open it.
         const url = String(args.url ?? "");
         if (!web(url)) throw new Error("only http(s) addresses");
-        const tab = await chrome.tabs.create({ url, active: true });
+        // Reuse a tab already on this site (the one playing first) instead of opening another.
+        let tab: chrome.tabs.Tab | undefined;
+        const reuse = typeof args.reuse === "string" ? args.reuse : "";
+        if (reuse) {
+          const onSite = (await chrome.tabs.query({ url: `*://${reuse}/*` })).filter((t) => !t.incognito);
+          tab = onSite.find((t) => t.audible) ?? onSite.find((t) => t.active) ?? onSite[0];
+        }
+        if (tab?.id !== undefined) tab = (await chrome.tabs.update(tab.id, { url, active: true })) ?? tab;
+        else tab = await chrome.tabs.create({ url, active: true });
         await focus(tab);
         await waitComplete(tab.id!, 10000);
         const href = await inject(tab.id!, firstMatch as never, [String(args.selector), 8000]);

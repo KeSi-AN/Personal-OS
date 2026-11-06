@@ -92,8 +92,16 @@ class PlayMedia(Tool):
     def run(self, args: PlayArgs, ctx: ToolContext) -> Result:
         site = recipes.find(args.site)
         assert site is not None and site.first
+        from urllib.parse import urlparse
+
         data = _send(
-            ctx, "open_first", {"url": recipes.search_url(site, args.query), "selector": site.first}
+            ctx,
+            "open_first",
+            {
+                "url": recipes.search_url(site, args.query),
+                "selector": site.first,
+                "reuse": urlparse(site.search).netloc,  # play in the tab you already have
+            },
         )
         title = str((data or {}).get("title") or args.query).replace(" - YouTube Music", "")
         title = title.replace(" - YouTube", "")
@@ -101,21 +109,39 @@ class PlayMedia(Tool):
 
 
 class TabArgs(Args):
-    action: Literal["switch", "close", "back", "forward", "reload", "mute", "unmute"]
+    action: Literal["switch", "close", "group", "back", "forward", "reload", "mute", "unmute"]
     which: str = Field(
         "", max_length=80, description="words from the tab's title or site; empty = the current tab"
     )
-    all: bool = Field(False, description="close: every tab matching `which`")
+    positions: list[int] = Field(
+        default_factory=list,
+        max_length=30,
+        description="positions, 1 = leftmost in the current window (first three = [1, 2, 3])",
+    )
+    all: bool = Field(False, description="close or group: every tab matching `which`")
+    name: str = Field("", max_length=40, description="group: the group's name")
 
 
 class BrowserTab(Tool):
     name = "browser_tab"
-    summary = "switch to, close, go back/forward in, reload, mute or unmute a browser tab"
+    summary = (
+        "switch to, close, group (with a name), go back/forward in, reload, mute or unmute "
+        "browser tabs, chosen by words from their title or by position"
+    )
     tier = Tier.LOW
     args_model = TabArgs
 
-    def _matches(self, ctx: ToolContext, which: str) -> list[dict[str, Any]]:
+    def _matches(
+        self, ctx: ToolContext, which: str, positions: list[int] | None = None
+    ) -> list[dict[str, Any]]:
         tabs = _send(ctx, "tabs.list") or []
+        if positions:
+            current = next((t for t in tabs if t.get("active")), tabs[0] if tabs else None)
+            window = current.get("window") if current else None
+            ordered = sorted(
+                (t for t in tabs if t.get("window") == window), key=lambda t: t.get("index", 0)
+            )
+            return [ordered[p - 1] for p in positions if 1 <= p <= len(ordered)]
         if not which.strip():
             return [t for t in tabs if t.get("active")][:1]
         w = which.lower().strip()
@@ -126,23 +152,35 @@ class BrowserTab(Tool):
         ]
 
     def preview(self, args: TabArgs, ctx: ToolContext) -> str:
-        scope = "all tabs matching" if args.all else "tab"
-        return f"{args.action} {scope} {args.which or '(current)'}"
+        if args.positions:
+            scope = "tabs " + ", ".join(map(str, args.positions))
+        else:
+            scope = ("all tabs matching " if args.all else "tab ") + (args.which or "(current)")
+        named = f' as "{args.name}"' if args.action == "group" and args.name else ""
+        return f"{args.action} {scope}{named}"
 
     def run(self, args: TabArgs, ctx: ToolContext) -> Result:
-        found = self._matches(ctx, args.which)
+        found = self._matches(ctx, args.which, args.positions)
         if not found:
+            if args.positions:
+                raise ActionError("there aren't that many tabs in this window")
             raise ActionError(
                 f'no open tab matches "{args.which}"' if args.which else "no current tab"
             )
         first = found[0]
+        several = found if (args.all or args.positions) else found[:1]
         if args.action == "switch":
             _send(ctx, "tabs.activate", {"tabId": first["id"]})
             return Result(f'Switched to "{first.get("title", "")}"')
         if args.action == "close":
-            ids = [t["id"] for t in (found if args.all else found[:1])]
+            ids = [t["id"] for t in several]
             _send(ctx, "tabs.close", {"tabIds": ids})
             return Result(f"Closed {len(ids)} tab{'s' if len(ids) != 1 else ''}")
+        if args.action == "group":
+            ids = [t["id"] for t in (several if len(several) > 1 else found)]
+            _send(ctx, "tabs.group", {"tabIds": ids, "title": args.name})
+            named = f' as "{args.name}"' if args.name else ""
+            return Result(f"Grouped {len(ids)} tab{'s' if len(ids) != 1 else ''}{named}")
         if args.action in ("mute", "unmute"):
             _send(ctx, "tabs.mute", {"tabId": first["id"], "muted": args.action == "mute"})
             return Result(f'{args.action.capitalize()}d "{first.get("title", "")}"')

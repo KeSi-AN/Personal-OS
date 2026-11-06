@@ -262,3 +262,52 @@ def test_without_the_extension_the_tools_say_so(home: Path, config: Config):
     env = Env(home, config)
     o = env.ex.request("play_media", {"query": "x"}, origin=Origin.USER)
     assert not o.ok and "isn't connected" in o.message
+
+
+def test_play_media_reuses_the_site_tab(home: Path, config: Config, browser):
+    b = browser(lambda op, args: ok({"title": "Circles - YouTube Music"}))
+    env = Env(home, config)
+    env.ex.request("play_media", {"query": "Circles Post Malone"}, origin=Origin.USER)
+    assert b.seen[0][1]["reuse"] == "music.youtube.com"  # the extension plays it in that tab
+
+
+def test_group_the_first_three_tabs(home: Path, config: Config, browser):
+    tabs = [
+        {"id": 10 + i, "index": i, "window": 1, "title": f"Tab {i}", "url": f"https://x{i}.example/",
+         "active": i == 0}
+        for i in range(5)
+    ] + [{"id": 99, "index": 0, "window": 2, "title": "Other window", "url": "https://o.example/"}]  # fmt: skip
+
+    def handler(op: str, args: dict[str, Any]) -> dict[str, Any]:
+        return ok(tabs) if op == "tabs.list" else ok()
+
+    b = browser(handler)
+    env = Env(home, config)
+    o = env.ex.request(
+        "browser_tab",
+        {"action": "group", "positions": [1, 2, 3], "name": "Entertainment"},
+        origin=Origin.USER,
+    )
+    assert o.ok and o.message == 'Grouped 3 tabs as "Entertainment"'
+    assert ("tabs.group", {"tabIds": [10, 11, 12], "title": "Entertainment"}) in b.seen
+    o = env.ex.request("browser_tab", {"action": "group", "positions": [9]}, origin=Origin.USER)
+    assert not o.ok and "aren't that many tabs" in o.message
+
+
+def test_voice_pause_goes_to_the_browser_tab(home: Path, config: Config, browser, monkeypatch):
+    import winsound
+
+    from tests.test_phase7 import voice_for
+    from tests.test_voice_fastpath import INDEX
+
+    monkeypatch.setattr(winsound, "Beep", lambda *_a: None)
+    b = browser(
+        lambda op, args: ok({"title": "Circles", "artist": "Post Malone", "playing": False})
+    )
+    env = Env(home, config)
+    v, _h = voice_for(env)
+    v.index._index = INDEX
+    v.last_audio = None
+    reply = v.fast("pause music")
+    assert ("media", {"action": "pause", "seconds": 0}) in b.seen
+    assert reply == "Pause: Circles - Post Malone is now paused."
