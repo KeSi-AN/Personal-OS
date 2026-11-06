@@ -74,6 +74,7 @@ It's a tool like any other: its output is captured content, so it taints what fo
 | 9e **Seeing any app** | Windows UI Automation reads the visible text of the app in front ("what does this error say?"), read-only, as captured content | "What's on my screen" for any app, not only browsers |
 | 9f **Voice that feels live** | Speak the first sentence while the rest is still being written; a "thinking" sound if a step takes more than a second; and an end-of-turn detector instead of a fixed pause | A proper voice companion |
 | 9g **A bigger brain when it fits** | Model routing: `qwen3:4b` for steps, a larger model with thinking for hard multi-step requests when the GPU is free (games closed), and a check of free VRAM | Better reasoning without leaving the laptop |
+| 9h **Browser and website control** (built; see below) | Through the extension: open pages and searches, play a song or video by name, switch, close or mute tabs, control what's playing, read the page, and click or type on it (always confirmed) | Most things you do happen in the browser; one general set of tools instead of one tool per site |
 
 ## Risks and limits
 
@@ -85,3 +86,35 @@ It's a tool like any other: its output is captured content, so it taints what fo
 - **Prompt injection.** Text from tools (pages, files, window titles) is data. After it is read, every action in that request needs your yes (ADR-050), and tier 3 stays blocked.
 - **Latency.** Each step is a model call (about 1–3 s warm). The fast paths stay for the common commands, `recall` answers pass straight through, and phase 9f makes waiting audible.
 - **Autonomy is bounded on purpose.** Donna proposes and you approve, except for low-risk things you asked for directly. "Fully autonomous" here means she can chain steps, look things up and come to you first. It doesn't mean she acts on your accounts unasked.
+
+## Browser control (phase 9h)
+
+```
+Donna --> browser tool --> runtime/browser/cmd/<id>.json
+                                 |  the native host (inside the browser) claims it
+                                 v
+                 extension: open / read / click / media ...  --> result: runtime/browser/res/<id>.json
+```
+
+There's no port, and web pages can't reach this channel. Each connected browser leaves a marker in `runtime/browser/hosts/`, and `doctor` shows it on its `control` line. A command nobody picks up within 30 s is dropped, never run late.
+
+| Tool | Does | Risk |
+|---|---|---|
+| `browser_open` | open a URL, or search a site (Google, YouTube, YouTube Music, GitHub, Wikipedia, Maps, Stack Overflow, Amazon) | tier 1 |
+| `play_media` | play a song or video by name: search YouTube Music or YouTube, then open the first result, which plays | tier 1 |
+| `browser_tab` | switch, close, back, forward, reload, mute or unmute, by words from a tab's title | tier 1 |
+| `browser_media` | play, pause, next, previous or seek whatever's playing (it can't choose a song) | tier 1 |
+| `whats_playing` | the song or video playing now, from the page's media info | tier 0, captured |
+| `browser_read` | the page's text and its numbered buttons, links and fields | tier 0, captured |
+| `browser_act` | click, type, press a key or scroll | tier 2: always asks |
+
+**Sites are data.** `personal_os/browser/recipes.py` holds a search URL and, where it applies, a "first result" selector for each site. Adding a site means adding a line there, not writing a tool.
+
+**Limits, enforced by the extension:**
+- http(s) pages only;
+- never incognito;
+- never reads or types into password fields, and won't act at all on a page that shows one.
+
+Reading a page counts as captured content, so a later action needs your yes, and page text can't be sent out by a later network call. Browser pages (`brave://`, the Web Store, the PDF viewer) are out of reach for any extension.
+
+The host learns which browser it's in from its process tree. Brave also reads Chrome's registration, so the launcher's argument alone said "chrome".
