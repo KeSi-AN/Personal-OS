@@ -11,6 +11,7 @@ from personal_os.actions.tools import (
     files,
     google_tools,
     notify,
+    projects,
     read,
 )
 from personal_os.config.schema import Config
@@ -25,6 +26,15 @@ def build_registry(config: Config | None = None) -> Registry:
         agent.Memory(),
         agent.AboutMe(),
         agent.Conversation(),
+        projects.ProjectCreate(),
+        projects.ProjectAddSource(),
+        projects.ProjectNote(),
+        projects.TodoAdd(),
+        projects.TodoDone(),
+        projects.TodoReopen(),
+        projects.ProjectItems(),
+        projects.ProjectFileInbox(),
+        projects.ProjectResume(),
         browser.BrowserOpen(),
         browser.PlayMedia(),
         browser.BrowserTab(),

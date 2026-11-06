@@ -14,7 +14,7 @@ from personal_os.core.clock import from_ms
 
 TABLES = (
     "events", "page_extracts", "projects", "assignment_rules", "sessions", "summaries",
-    "rollups", "memory_facts", "reminders", "action_audit",
+    "rollups", "memory_facts", "reminders", "action_audit", "project_items",
 )  # fmt: skip
 # Never exported: embeddings (derived numbers), devices (token hashes), counters, settings.
 
@@ -144,7 +144,14 @@ def delete_project_data(conn: sqlite3.Connection, project: str) -> dict[str, int
             (project,),
         ).rowcount
         counts = {"page_extracts": extracts}
-        for table in ("events", "sessions", "summaries", "rollups", "assignment_rules"):
+        for table in (
+            "events",
+            "sessions",
+            "summaries",
+            "rollups",
+            "assignment_rules",
+            "project_items",
+        ):
             counts[table] = conn.execute(
                 f"DELETE FROM {table} WHERE project_id = ?", (project,)
             ).rowcount

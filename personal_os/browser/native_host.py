@@ -31,7 +31,7 @@ from personal_os.config.loader import default_home
 HOST_NAME = "com.personalos.host"
 HOST_VERSION = "1.1.0"
 MAX_MESSAGE_BYTES = 1_000_000  # we never accept huge messages, whatever the protocol allows
-_ACCEPTED_TYPES = {"visit", "signal", "tabs", "result"}
+_ACCEPTED_TYPES = {"visit", "signal", "tabs", "result", "inbox"}
 _ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 _BROWSERS = {"brave.exe": "brave", "chrome.exe": "chrome", "msedge.exe": "edge"}
 CMD_POLL_S = 0.15
@@ -107,6 +107,14 @@ class Host:
             return {"ok": True, "paused": True, "dropped": True}
         if msg.get("incognito"):
             return {"ok": True, "paused": False, "dropped": True}  # never written, not even once
+        if kind == "inbox":  # "Add to Personal OS project": for the daemon to file
+            url = str(msg.get("url", ""))
+            if url.startswith(("http://", "https://")):
+                d = self.runtime / "browser" / "inbox"
+                d.mkdir(parents=True, exist_ok=True)
+                rec = {"url": url[:2000], "title": str(msg.get("title", ""))[:200]}
+                (d / f"{time.time_ns()}-{os.getpid()}.json").write_text(json.dumps(rec), "utf-8")
+            return {"ok": True, "paused": False}
         if kind == "tabs":
             msg = {**msg, "browser": self.browser}  # Brave reports itself as Chrome
         self.spool.mkdir(parents=True, exist_ok=True)

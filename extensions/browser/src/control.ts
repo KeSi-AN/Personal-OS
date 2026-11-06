@@ -194,6 +194,12 @@ function firstMatch(selector: string, timeoutMs: number): Promise<string | null>
   });
 }
 
+export async function groupTitles(): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  for (const g of await chrome.tabGroups.query({})) out.set(g.id, g.title ?? "");
+  return out;
+}
+
 // --- commands ------------------------------------------------------------------------------
 
 export async function runCommand(op: string, args: Args): Promise<CmdResult> {
@@ -201,10 +207,12 @@ export async function runCommand(op: string, args: Args): Promise<CmdResult> {
     switch (op) {
       case "tabs.list": {
         const tabs = await chrome.tabs.query({});
+        const groups = await groupTitles();
         return {
           ok: true,
           data: tabs.filter((t) => !t.incognito && web(t.url)).map((t) => ({
-            id: t.id, index: t.index, group: t.groupId, title: t.title, url: t.url, active: t.active, audible: !!t.audible,
+            id: t.id, index: t.index, group: t.groupId, groupTitle: groups.get(t.groupId) ?? "",
+            title: t.title, url: t.url, active: t.active, audible: !!t.audible,
             muted: !!t.mutedInfo?.muted, pinned: t.pinned, window: t.windowId,
             lastAccessed: (t as chrome.tabs.Tab & { lastAccessed?: number }).lastAccessed ?? null,
           })),
@@ -238,6 +246,22 @@ export async function runCommand(op: string, args: Args): Promise<CmdResult> {
         const title = String(args.title ?? "").slice(0, 40);
         if (title) await chrome.tabGroups.update(groupId, { title });
         return { ok: true, data: { group: groupId, tabs: ids.length, title } };
+      }
+      case "tabs.open_group": {
+        // "Resume a project": open its sources together, as one named tab group.
+        const urls = ((args.urls as string[] | undefined) ?? []).filter(web).slice(0, 20);
+        if (!urls.length) throw new Error("no web addresses to open");
+        const ids: number[] = [];
+        for (const [i, url] of urls.entries()) {
+          const t = await chrome.tabs.create({ url, active: i === 0 });
+          if (t.id !== undefined) ids.push(t.id);
+        }
+        const groupId = await chrome.tabs.group({ tabIds: ids as [number, ...number[]] });
+        const title = String(args.title ?? "").slice(0, 40);
+        if (title) await chrome.tabGroups.update(groupId, { title });
+        const first = await chrome.tabs.get(ids[0]);
+        await focus(first);
+        return { ok: true, data: { opened: ids.length, title } };
       }
       case "tabs.nav": {
         const tab = await targetTab(args);

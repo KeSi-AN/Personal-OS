@@ -12,7 +12,7 @@ import {
   syncActive,
   toRecord,
 } from "./visit";
-import { runCommand } from "./control";
+import { groupTitles, runCommand } from "./control";
 
 const HOST = "com.personalos.host";
 const BROWSER = navigator.userAgent.includes("Edg/") ? "edge" : "chrome"; // Brave reports as Chrome
@@ -275,6 +275,7 @@ function scheduleTabs(): void {
 async function sendTabs(): Promise<void> {
   tabsTimer = null;
   const tabs = await chrome.tabs.query({});
+  const groups = await groupTitles();
   const list = tabs
     .filter((t) => !t.incognito && isTrackable(t.url))
     .slice(0, TABS_MAX)
@@ -284,6 +285,7 @@ async function sendTabs(): Promise<void> {
       active: t.active,
       audible: t.audible === true,
       window: t.windowId,
+      groupTitle: groups.get(t.groupId) ?? "", // a group named like a project syncs to it
     }));
   await withState((st) => {
     if (!st.paused) send({ v: 1, type: "tabs", at: new Date().toISOString(), tabs: list });
@@ -297,6 +299,25 @@ chrome.tabs.onUpdated.addListener((_id, change) => {
   if (change.title !== undefined || change.url !== undefined || change.audible !== undefined) scheduleTabs();
 });
 chrome.windows.onRemoved.addListener(() => scheduleTabs());
+chrome.tabGroups.onUpdated.addListener(() => scheduleTabs());
+
+// --- "Add to Personal OS project": right-click a page or a link -----------------------------
+// It goes to the project inbox; you file it (or Donna does) from there.
+const ADD_MENU = "pos-add-to-project";
+
+function addMenu(): void {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({ id: ADD_MENU, title: "Add to Personal OS project", contexts: ["page", "link"] });
+  });
+}
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== ADD_MENU || tab?.incognito) return;
+  const url = info.linkUrl ?? info.pageUrl ?? tab?.url;
+  if (!isTrackable(url)) return;
+  const title = info.linkUrl ? (info.selectionText ?? info.linkUrl) : (tab?.title ?? "");
+  send({ v: 1, type: "inbox", url, title: String(title).slice(0, 200), at: new Date().toISOString() });
+});
 
 async function initFocus(): Promise<void> {
   // The worker may start long after the browser: read the real focus state, don't assume it.
@@ -319,6 +340,7 @@ function boot(): void {
   connect();
   void initFocus();
   scheduleTabs();
+  addMenu();
 }
 
 chrome.runtime.onStartup.addListener(boot);

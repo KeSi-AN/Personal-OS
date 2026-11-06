@@ -69,6 +69,9 @@ def forget(
             "DELETE FROM memory_facts WHERE created_at >= :start AND created_at < :end", params
         )
         conn.execute(
+            "DELETE FROM project_items WHERE created_at >= :start AND created_at < :end", params
+        )
+        conn.execute(
             "DELETE FROM reminders WHERE created_at >= :start AND created_at < :end", params
         )
         if marker:
@@ -202,6 +205,7 @@ def inspect(conn: sqlite3.Connection, db_path: Path | None) -> Inspection:
             "action_audit",
             "memory_facts",
             "reminders",
+            "project_items",
             "rollups",
             "devices",
             "counters",
