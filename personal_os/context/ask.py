@@ -473,6 +473,51 @@ def _keep_closest(
     return kept or lines
 
 
+_LEAVE_OFF = "leave left off pick back resume last thing time worked working was where"
+_LEAVE_OFF_WORDS = frozenset(_LEAVE_OFF.split())
+TOPIC_RECENT = 14  # the most recent lines about a topic
+
+
+def _topic_words(q: ParsedQuestion) -> list[str]:
+    """What a "where did I leave off on X?" is about, when X isn't a project: "infosys"."""
+    return [t for t in q.terms if t.lower() not in _LEAVE_OFF_WORDS and len(t) >= 2]
+
+
+def gather_leave_off_topic(
+    conn: sqlite3.Connection, provider: LLMProvider | None, q: ParsedQuestion, now: datetime
+) -> Gathered:
+    """ "Where did I leave off on infosys?": the topic's latest activity (pages, searches,
+    files, commands about it), newest last, and when it was. Not the last work session,
+    which may be about something else entirely."""
+    words = _topic_words(q)
+    topic = " ".join(words)
+    start = q.start or now - DEFAULT_LOOKBACK
+    end = q.end or now
+    result = hybrid_search(
+        conn, provider, topic, start_ms=to_ms(start), end_ms=to_ms(end), limit=SEARCH_POOL
+    )
+    hits = _useful_hits(conn, result.hits)
+    event_ids = [h.id for h in hits if h.kind == "event"]
+    lines = lines_from_rows(fetch_by_ids(conn, _with_revisits(conn, event_ids)), focus=words)
+    if not lines:
+        return Gathered(EvidencePack(), scope=f"anything about '{topic}'")
+    lines = _keep_closest(lines, words, q.text) if len(words) >= 2 else lines
+    # About the topic itself: a line must mention one of its words.
+    about = [x for x in lines if _coverage(x, words) >= 1] or lines
+    about.sort(key=lambda x: x.ts)
+    recent = about[-TOPIC_RECENT:]
+    first, last = about[0].ts.astimezone(), about[-1].ts.astimezone()
+    facts = [
+        f"The last time you were on '{topic}': {last:%a %d %b %H:%M} "
+        f"({about[-1].kind}: {about[-1].text[:120]}).",
+        f"'{topic}' came up {len(about)} times between {first:%a %d %b} and {last:%a %d %b}.",
+    ]
+    notes = [result.note] if result.note else []
+    return Gathered(
+        finalize(recent, TOPIC_RECENT), facts, scope=f"your activity about '{topic}'", notes=notes
+    )
+
+
 def _with_revisits(conn: sqlite3.Connection, event_ids: list[str]) -> list[str]:
     """The ids plus other visits of the same pages: a page that updates as you read it (a
     search engine's AI answer) is captured more fully on a later visit than the one search
@@ -515,6 +560,8 @@ def gather(
             "`personal-os projects` lists them all",
         )
     if q.intent == "leave_off":
+        if q.project is None and _topic_words(q):
+            return gather_leave_off_topic(conn, provider, q, now)  # "... on infosys"
         return gather_leave_off(conn, q, now)
     if q.intent == "changed_since":
         return gather_changed_since(conn, q, now)

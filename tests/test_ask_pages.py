@@ -70,6 +70,23 @@ def test_own_questions_and_repeated_searches_are_not_evidence(w: World):
     assert sum(1 for x in lines if x.kind == "search") == 1
 
 
+def test_leave_off_on_a_topic_that_is_not_a_project(w: World):
+    """ "Where did I leave off on infosys?" was answered with the last work session (on
+    another project) because "infosys" isn't a project."""
+    from tests.test_context import auth_session
+
+    visit(w, 0, 5, "https://www.youtube.com/watch?v=a", "Infosys SP coding questions - YouTube",
+          "Infosys specialist programmer coding questions, solved.")  # fmt: skip
+    visit(w, 10, 14, "https://www.youtube.com/watch?v=b", "Infosys DSE test pattern - YouTube",
+          "The Infosys digital specialist engineer test pattern.")  # fmt: skip
+    auth_session(w)  # later: unrelated work on a project
+    q = ask_mod.parse_question("where did I leave off on infosys?", [], w.clock.now())
+    g = ask_mod.gather(w.conn, None, q, w.clock.now())
+    texts = [x.text for x in g.pack.lines]
+    assert texts and all("Infosys" in t for t in texts)
+    assert "Infosys DSE test pattern" in g.facts[0]  # the latest one
+
+
 def test_word_order_tells_speech_to_text_from_text_to_speech(w: World):
     visit(w, 0, 3, "https://www.google.com/search?q=stt", "best local speech to text",
           "The best local speech-to-text models: Canary-Qwen 2.5B and Moonshine. " * 3)  # fmt: skip
