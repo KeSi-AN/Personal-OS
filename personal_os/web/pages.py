@@ -649,7 +649,7 @@ def _assistant_section(state: WebState) -> str:
     """Voice, wake word, voice output, daily briefings and Google: what each does, on/off."""
 
     from personal_os.integrations import google
-    from personal_os.voice.wake import wake_models
+    from personal_os.voice import wake
 
     cfg = state.config
     v, br = cfg.voice, cfg.briefings
@@ -669,13 +669,14 @@ def _assistant_section(state: WebState) -> str:
     voice_extra = (
         f"<div class='small'>voice process: {e(running['state'])}</div>" if running else ""
     )
-    has_model = bool(wake_models(cfg.data_dir))
+    has_model = wake.available(cfg.data_dir)
     wake_text = (
-        "Listens for “hey Donna”, locally; nothing is recorded or transcribed until it hears it."
+        "Listens for “Donna” (also “hey Donna”, “hello Donna”) with Vosk, on this laptop; "
+        "nothing is stored, and say “stop talking” to stop a reply."
         + (
             ""
             if has_model
-            else " <b>No wake-word model yet</b>: train one (docs/VOICE.md) and put the .onnx in voice/wakewords/."
+            else " <b>Model not downloaded yet</b>: run <code>personal-os voice setup</code>."
         )
     )
     voices = "".join(

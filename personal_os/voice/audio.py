@@ -181,6 +181,41 @@ def record_utterance(
     return ep.audio()
 
 
+def record_from_engine(
+    engine: object,
+    should_stop: Callable[[], bool] = lambda: False,
+    *,
+    floor: float = MIC_FLOOR,
+    silence_ms: int = SILENCE_MS,
+    start_timeout_s: float = START_TIMEOUT_S,
+    preroll: Iterable[np.ndarray] = (),
+    levels: list[float] | None = None,
+) -> np.ndarray | None:
+    """record_utterance on the audio engine's echo-cancelled frames (voice/engine.py): the
+    speakers (a reply still fading, a video) are out of what's recorded."""
+    vad = shared_vad()
+    if vad is None:
+        return None
+    vad.reset()
+    first = list(preroll)
+    ep = Endpointer(
+        vad, floor=floor, silence_ms=silence_ms, start_timeout_s=start_timeout_s,
+        started=bool(first),
+    )  # fmt: skip
+    ep.frames.extend(first)
+    with engine.subscribe() as q:  # type: ignore[attr-defined]
+        while not should_stop():
+            try:
+                frame = q.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            if levels is not None:
+                levels.append(rms(frame.audio))
+            if ep.feed(frame.audio) in ("done", "timeout"):
+                break
+    return ep.audio()
+
+
 def _record_energy(
     should_stop: Callable[[], bool],
     *,

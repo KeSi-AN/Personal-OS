@@ -33,7 +33,7 @@ from personal_os.core import runtime
 from personal_os.core.clock import SystemClock
 from personal_os.core.logging import get_logger, setup_logging
 from personal_os.voice import dialogue, tts
-from personal_os.voice.stt import Transcriber
+from personal_os.voice.stt import make_transcriber
 
 _log = get_logger("voice")
 LOCK = "voice.lock"
@@ -59,10 +59,12 @@ class Voice:
         self.cfg = cfg
         self.clock = SystemClock()
         self.speaker = Speaker(cfg.voice, cfg.data_dir)
-        self.stt = Transcriber(cfg.data_dir, cfg.voice.stt_model)
-        fast = Transcriber(cfg.data_dir, cfg.voice.stt_fast_model or cfg.voice.stt_model)
+        self.stt = make_transcriber(cfg.data_dir, cfg.voice.stt_model)
+        fast = make_transcriber(cfg.data_dir, cfg.voice.stt_fast_model or cfg.voice.stt_model)
         # Heard first; the accurate model re-hears only what the fast path can't place.
         self.stt_fast = fast if cfg.voice.stt_fast_model and fast.available else self.stt
+        self.engine: Any = None  # the always-on, echo-cancelled mic (voice/engine.py)
+        self.recording = threading.Event()  # set while a turn is being recorded
         self.index = LiveIndex(cfg, cfg.db_path)
         self.last_audio: Any = None  # the last utterance, for a biased second decode
         self._accurate: tuple[int, str] | None = None  # (id of the audio, small.en's text)
@@ -71,8 +73,7 @@ class Voice:
         self.asked: dict[str, str] = {}  # a "Did you mean ...?" and its answer, for the log
         self.triggers: queue.Queue[str] = queue.Queue()
         self.previous: Any = None
-        self.wake: Any = None
-        self.wake_thread: threading.Thread | None = None
+        self.wake: Any = None  # the wake word (Vosk, as in JARVIS: voice/wake.py)
         self.stop = threading.Event()
         self.hotkey_error: str | None = None  # kept, so "ready" writes don't hide it
         self.state = "starting"
@@ -86,17 +87,21 @@ class Voice:
     # --- status ---------------------------------------------------------------------------
 
     def write_status(self, state: str, **extra: Any) -> None:
-        from personal_os.voice.wake import wake_models
+        from personal_os.voice import wake
 
         self.state = state
         data = {
             "state": state,
             "pid": __import__("os").getpid(),
             "wake_enabled": self.cfg.voice.wake_word_enabled,
-            "wake_model": bool(wake_models(self.cfg.data_dir)),
+            "wake_model": wake.available(self.cfg.data_dir),
             "tts": self.cfg.voice.tts,
             "last_voice": self.speaker.last_voice,
             "stt_ready": self.stt.available,
+            "stt_first": self.stt_fast.name,
+            "wake_listening": self.wake is not None,
+            **({"audio": self.engine.describe()} if self.engine is not None else {}),
+            **({"wake_last": self.wake.last} if self.wake is not None and self.wake.last else {}),
             **({"error": self.hotkey_error} if self.hotkey_error else {}),
             **extra,
         }
@@ -146,29 +151,50 @@ class Voice:
         if self.triggers.empty():
             self.triggers.put(trigger)
 
-    def sync_wake(self) -> None:
-        """Start or stop the wake-word listener to match the (re-read) config."""
-        from personal_os.voice.wake import WakeListener, wake_models
+    def start_engine(self) -> None:
+        """The always-on mic with echo cancelling, for the wake word, barge-in and recording.
+        If it can't start (no microphone), voice falls back to opening the mic per turn."""
+        from personal_os.voice.engine import AudioEngine
 
-        want = self.cfg.voice.wake_word_enabled and bool(wake_models(self.cfg.data_dir))
-        running = self.wake_thread is not None and self.wake_thread.is_alive()
-        if want and not running:
-            self.wake = WakeListener(
-                wake_models(self.cfg.data_dir),
-                self.cfg.voice.wake_threshold,
-                lambda: self.pressed("wake"),
-            )
-            self.wake_thread = threading.Thread(target=self._run_wake, name="pos-wake", daemon=True)
-            self.wake_thread.start()
-        elif not want and running and self.wake is not None:
-            self.wake.stop.set()
-
-    def _run_wake(self) -> None:
         try:
-            assert self.wake is not None
-            self.wake.run()
+            engine = AudioEngine(echo_cancel=self.cfg.voice.echo_cancel)
+            engine.start()
+            self.engine = engine
+            _log.info("audio engine", extra={"fields": engine.describe()})
         except Exception as exc:
-            _log.warning("wake word stopped", extra={"fields": {"exc_type": type(exc).__name__}})
+            self.engine = None
+            _log.warning("audio engine not started", extra={"fields": {"error": str(exc)[:200]}})
+
+    def _woke(self, preroll: list[Any]) -> None:
+        """The wake word was heard: listen, starting from the beginning of that sentence, so
+        "Donna, open Brave" in one breath keeps "open Brave". Mid-reply, it stops the reply."""
+        self.barge_frames = preroll
+        self.pressed("wake")
+
+    def _stop_talking(self) -> None:
+        """ "Stop talking" / "be quiet" while a reply plays: stop it, don't listen (JARVIS)."""
+        self.interrupt.set()
+
+    def sync_wake(self) -> None:
+        """Start or stop the wake word (Vosk, as in JARVIS) to match the (re-read) config."""
+        from personal_os.voice import wake
+
+        v = self.cfg.voice
+        want = v.wake_word_enabled and wake.available(self.cfg.data_dir)
+        if want and self.wake is None:
+            try:
+                self.wake = wake.VoskWake(
+                    self.cfg.data_dir, list(v.wake_words), on_wake=self._woke,
+                    on_stop=self._stop_talking, busy=self.recording.is_set,
+                    speaking=lambda: self.state == "speaking", engine=self.engine,
+                )  # fmt: skip
+                self.wake.start()
+            except Exception as exc:
+                self.wake = None
+                _log.warning("wake word not started", extra={"fields": {"error": str(exc)[:200]}})
+        elif not want and self.wake is not None:
+            self.wake.close()
+            self.wake = None
 
     def listen(self, preroll: list[Any] | None = None, start_timeout_s: float | None = None) -> str:
         """Record one turn and transcribe it. If what was said is clearly unfinished ("open
@@ -177,16 +203,24 @@ class Voice:
 
         from personal_os.actions.reminder_parse import needs_more
         from personal_os.context.route import incomplete
-        from personal_os.voice.audio import START_TIMEOUT_S, record_utterance
+        from personal_os.voice.audio import START_TIMEOUT_S, record_from_engine, record_utterance
 
         v = self.cfg.voice
-        if self.wake is not None:
-            self.wake.paused.set()
-        try:
-            audio = record_utterance(
+
+        def record(first: Any, timeout: float) -> Any:
+            if self.engine is not None:  # echo-cancelled: a reply still fading isn't you
+                return record_from_engine(
+                    self.engine, self.stop.is_set, floor=v.mic_floor,
+                    silence_ms=v.vad_silence_ms, preroll=first or (), start_timeout_s=timeout,
+                )  # fmt: skip
+            return record_utterance(
                 self.stop.is_set, floor=v.mic_floor, silence_ms=v.vad_silence_ms,
-                preroll=preroll or (), start_timeout_s=start_timeout_s or START_TIMEOUT_S,
+                preroll=first or (), start_timeout_s=timeout,
             )  # fmt: skip
+
+        self.recording.set()  # the wake word rests while a request is recorded
+        try:
+            audio = record(preroll, start_timeout_s or START_TIMEOUT_S)
             if audio is None:
                 self.last_audio = None
                 return ""
@@ -194,22 +228,20 @@ class Voice:
             # Cut off ("open the-"), or a reminder whose message hasn't come yet ("remind me
             # in a minute ... to stretch"): a pause isn't the end, so listen a moment more.
             if incomplete(text) or needs_more(text):
-                more = record_utterance(
-                    self.stop.is_set, floor=v.mic_floor, silence_ms=v.vad_silence_ms,
-                    start_timeout_s=2.0,
-                )  # fmt: skip
+                more = record(None, 2.0)
                 if more is not None:
                     audio = np.concatenate([audio, more])
                     text = self.transcribe(audio)
         finally:
-            if self.wake is not None:
-                self.wake.paused.clear()
+            self.recording.clear()
         self.last_audio = audio
         return text
 
     def transcribe(self, audio: Any, *, accurate: bool = False) -> str:
-        names = self.index.current().names_for_hints(40)
         model = self.stt if accurate else self.stt_fast
+        if not self.cfg.voice.stt_hints:  # as in JARVIS: no prompt, just English
+            return model.transcribe(audio)
+        names = self.index.current().names_for_hints(40)
         return model.transcribe(
             audio, vocabulary=self.vocabulary(names), hotwords=", ".join(names[:25])
         )
@@ -237,7 +269,15 @@ class Voice:
         A reply to a turn that itself began by barge-in isn't voice-interruptible, so stray
         sound can never keep the assistant answering itself."""
         try:
-            if self.cfg.voice.barge_in == "voice" and self.turn_trigger != "barge":
+            clean = self.engine is not None and self.engine.aec_active
+            if self.cfg.voice.barge_in == "voice" and clean:
+                # The speakers are out of the mic, other apps too: what's left is you, so a
+                # reply to an interruption can be interrupted again.
+                from personal_os.voice.bargein import CleanBargeIn
+
+                with CleanBargeIn(self.engine, self._barged, floor=self.cfg.voice.mic_floor):
+                    self.speaker.say(text, interrupt=self.interrupt)
+            elif self.cfg.voice.barge_in == "voice" and self.turn_trigger != "barge":
                 from personal_os.voice.bargein import BargeIn
 
                 with BargeIn(self.speaker.player, self._barged, floor=self.cfg.voice.mic_floor):
@@ -533,6 +573,7 @@ class Voice:
             target=self.hotkey_loop, args=(registered,), name="pos-ptt", daemon=True
         ).start()
         registered.wait(5)  # "ready" only once the hotkey is (or failed to be) registered
+        self.start_engine()
         threading.Thread(target=self.warm, name="pos-warm", daemon=True).start()
         self.sync_wake()
         self.write_status("ready")
@@ -548,6 +589,8 @@ class Voice:
                     self.cfg = load_config()
                     if not self.cfg.voice.enabled or runtime.stop_requested(self.cfg.runtime_dir):
                         break
+                    if self.engine is not None and self.engine.output_changed():
+                        self.restart_audio()  # TV to headphones: cancel the new device
                     self.sync_wake()
                     self.stt.unload_if_idle()
                     self.stt_fast.unload_if_idle()
@@ -556,6 +599,24 @@ class Voice:
             while not self.triggers.empty():  # presses made while busy count once
                 self.triggers.get_nowait()
             self.converse(trigger)
+        self.shutdown()
+
+    def restart_audio(self) -> None:
+        """The default output changed: start the engine (and the wake word on it) again."""
+        _log.info("output device changed: restarting the audio engine")
+        self.shutdown()
+        self.start_engine()
+        self.sync_wake()
+
+    def shutdown(self) -> None:
+        if self.wake is not None:
+            with contextlib.suppress(Exception):
+                self.wake.close()
+            self.wake = None
+        if self.engine is not None:
+            with contextlib.suppress(Exception):
+                self.engine.stop()
+            self.engine = None
 
     def speak_queued(self) -> None:
         """Say what the daemon queued (a reminder, a briefing), while nothing else is going on."""
@@ -631,8 +692,11 @@ class Voice:
                 text = self.listen(start_timeout_s=self.cfg.voice.followup_s)
             else:
                 if trigger != "barge":  # when you interrupted, you're already talking
-                    self.speaker.earcon("listen")
-                text = self.listen(preroll) if trigger == "barge" and preroll else self.listen()
+                    self.speaker.earcon("listen")  # the canceller keeps it out of the mic
+                carry = trigger in ("barge", "wake") and bool(preroll)
+                text = self.listen(preroll) if carry else self.listen()
+                if trigger == "wake" and text and not _without_wake(text):
+                    text = self.listen()  # just "Donna": now the request itself
             assert text is not None
             entry["heard"] = text
             entry["listen_s"] = round(time.monotonic() - t0, 1)
@@ -660,6 +724,11 @@ class Voice:
                 entry["asked"] = self.asked
             if reply is not None:
                 entry["route"] = "fast"
+            elif not given and trigger in ("barge", "followup") and _fragment(text):
+                # One stray word while talking over a reply or after one ("Not."): not a
+                # request, so it isn't sent to the model to be answered.
+                entry["route"] = "ignored (one word)"
+                return False
             else:
                 # Not a quick command: questions and requests get the accurate transcript.
                 if not given:
@@ -712,6 +781,28 @@ class Voice:
             )
             self.write_status("ready")
         return spoke
+
+
+_WAKE_ONLY = re.compile(
+    r"^\W*(?:(?:hey|hi|hello|ok|okay|oh)\W+)?(?:donna|dona|donnah|donah|dawna|danna)\W*", re.I
+)
+
+
+def _fragment(text: str) -> bool:
+    """A single word that isn't something on its own ("Not.", "Big."), unlike "stop",
+    "thanks" or "yes", which the router or the conversation handle."""
+    words = re.findall(r"[a-z']+", text.lower())
+    return len(words) <= 1 and (not words or words[0] not in _ONE_WORD_REQUESTS)
+
+
+_ONE_WORDS = """stop cancel thanks thank yes no okay ok mute unmute louder quieter screenshot
+lock pause play next previous hello hi bye goodbye help"""
+_ONE_WORD_REQUESTS = frozenset(_ONE_WORDS.split())
+
+
+def _without_wake(text: str) -> str:
+    """What was said besides the wake word: "Hey Donna, open Brave" -> "open Brave"."""
+    return _WAKE_ONLY.sub("", text, count=1).strip(" ,.!?")
 
 
 def _launch_popup(cfg: Config) -> None:

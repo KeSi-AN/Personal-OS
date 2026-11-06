@@ -1,4 +1,14 @@
-"""Speech in: faster-whisper on the CPU (int8), loaded on first use, freed when idle."""
+"""Speech in: Whisper on the CPU (faster-whisper, int8), loaded on first use, freed when idle.
+
+As in JARVIS (github.com/Namish-Dev/JARVIS): the multilingual Whisper "small" model, told the
+language is English, with no prompt. The multilingual model was trained on far more accents
+than the English-only ones (small.en, base.en), which heard "breathe" or "a break" for "Brave".
+faster-whisper runs the same model weights as JARVIS's openai-whisper, without PyTorch and
+several times faster.
+
+A prompt of the names that exist here (`voice.stt_hints`) is off by default, as in JARVIS;
+a biased second decode is still used for a near miss on a name ("Did you mean ...?").
+"""
 
 from __future__ import annotations
 
@@ -57,10 +67,10 @@ class Transcriber:
         *,
         vocabulary: str = "",
         hotwords: str = "",
-        beam_size: int = 1,
+        beam_size: int = 5,
     ) -> str:
-        """Mono float32 audio at 16 kHz -> text. `vocabulary` (a prompt) and `hotwords` bias
-        recognition towards names that exist here: "open brave", not "open brat"."""
+        """Mono float32 audio at 16 kHz -> text. `vocabulary` (a prompt) and `hotwords`, when
+        given, bias recognition towards names that exist here."""
         with self._lock:
             if self._model is None:
                 self._model = self._load()
@@ -98,3 +108,8 @@ class Transcriber:
                 self._model = None
                 return True
         return False
+
+
+def make_transcriber(data_dir: Path, name: str) -> Transcriber:
+    """The recogniser for a configured model name (a Whisper size: "small", "small.en"...)."""
+    return Transcriber(data_dir, name)

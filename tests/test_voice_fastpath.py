@@ -312,7 +312,9 @@ def test_barge_in_is_never_armed_for_a_reply_to_a_barge_in(home: Path, config: C
     v.turn_trigger = "barge"
     v.say("hello again")
     assert armed == ["armed"]  # not armed: a stray sound can't chain replies
-    hotkey_only = Voice(config)  # the default
+    hotkey_only = Voice(
+        config.model_copy(update={"voice": config.voice.model_copy(update={"barge_in": "hotkey"})})
+    )
     hotkey_only.speaker.say = lambda *_a, **_k: True  # type: ignore[method-assign]
     hotkey_only.turn_trigger = "hotkey"
     hotkey_only.say("hi")

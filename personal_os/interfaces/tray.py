@@ -92,9 +92,9 @@ class Tray:
                 ),
                 item(
                     lambda _i: (
-                        "Wake word “hey Donna”: on"
+                        "Wake word “Donna”: on"
                         if actions.voice_state()[1]
-                        else "Wake word “hey Donna”: off"
+                        else "Wake word “Donna”: off"
                     ),
                     self._wrap(actions.toggle_wake),
                 ),

@@ -616,7 +616,7 @@ Do-not-disturb has no public Windows API, so it stays out.
 
 - **Listening.**
   - **Push-to-talk:** press **Ctrl+Alt+Shift+V**; a beep, then it records until you stop speaking (at most 15 s).
-  - **Wake word (optional, toggled from the tray, the dashboard or config):** "hey Donna" through openWakeWord. openWakeWord has no ready-made model for that phrase, so you train one once (docs/VOICE.md has the steps; about 1.5 hours on Colab) and drop the `.onnx` file into `voice/wakewords/`. Without a model the toggle explains why it's unavailable.
+  - **Wake word (toggled from the tray, the dashboard or config):** "Donna" ("hey/hello/hi Donna"), as in JARVIS: Vosk (`vosk-model-small-en-us-0.15`) transcribes the echo-cancelled microphone continuously on the laptop, and a wake word as a whole word wakes it; "stop talking" stops a reply. No training. The always-on audio engine (`voice/engine.py`) takes the speakers out of the mic with the WebRTC echo canceller, using Windows' loopback of the default output as the reference, so neither Donna nor another app wakes it, and talking over a reply interrupts it.
   - The microphone stream stays in memory. Nothing you say is stored except the recognised command text, which goes to the action log when it triggers an action.
 - **Speech to text:** faster-whisper `small.en` on the CPU (int8), so the GPU stays free for `qwen3:4b`. It's loaded on first use and freed after 10 idle minutes.
 - **Speech to voice**, in order of what's set up:

@@ -149,6 +149,11 @@ def _clean(text: str) -> str:
     text = re.sub(r"\b((?i:open|launch|start|show|close))(?=[A-Z])", r"\1 ", text.strip())
     t = strip_polite(strip_wake(text)).strip()
     t = re.sub(r"[.!?,]+$", "", t)
+    # Courtesies after the request: "open brave for me", "lock the screen please".
+    t = re.sub(
+        r"(?:[\s,]+(?:for me|please|now|right now|quickly|real quick|thanks|thank you))+$",
+        "", t, flags=re.I,
+    )  # fmt: skip
     # Punctuation said out loud: "agentic underscore EDA", "macos dash rag dash finder".
     t = re.sub(r"\s+(?:underscore|under score)\s+", "_", t, flags=re.I)
     t = re.sub(r"\s+(?:dash|hyphen|minus)\s+", "-", t, flags=re.I)

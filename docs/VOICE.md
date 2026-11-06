@@ -104,21 +104,32 @@ popup_autoclose_s = 5.0           # seconds after the reply, unless pinned
 
 It needs the WebView2 runtime, which Windows 11 includes. Without it, voice works as before with no popup, and `doctor` says why on its `popup` line.
 
-## Wake word: "hey Donna"
+## Wake word: "Donna"
 
-openWakeWord has no ready-made model for "hey Donna", so you train one once. It takes about 1.5 hours on Google Colab, mostly waiting. A two-word phrase with "hey" is more reliable than "Donna" alone.
+Say **"Donna"**, **"Hey Donna"**, **"Hello Donna"** or **"Hi Donna"**, then your request. You can say both in one breath ("Donna, open Brave") or pause after "Donna" and then speak. While she's answering, saying "Donna" stops the reply and listens, and **"stop talking"**, **"stop speaking"**, **"be quiet"** or **"shut up"** just stop it.
 
-1. Open the community notebook [openwakeword-colab-2026](https://github.com/alfiedennen/openwakeword-colab-2026). It's the maintained one; the original openWakeWord notebook no longer runs.
-2. In its settings cell, set the target phrase to `hey donna` and the model name to `hey_donna`. If you like, add `hey dona` as a second spelling, which helps the synthetic voices.
-3. **Runtime → Run all.** At the end, download `hey_donna.onnx`.
-4. Put it in `%LOCALAPPDATA%\PersonalOS\voice\wakewords\`, then:
+This is the wake word from [JARVIS](https://github.com/Namish-Dev/JARVIS): **Vosk** (`vosk-model-small-en-us-0.15`) transcribes what it hears, on this laptop, and voice wakes when a word in `voice.wake_words` (default `["donna"]`) is in it as a whole word, so "Madonna" and "gonna" don't count. It reacts mid-sentence and hands the whole sentence to speech recognition, so nothing you said after "Donna" is lost. Nothing is stored.
 
 ```powershell
-uv run personal-os voice wake on     # or: tray → Wake word "hey Donna"; or dashboard → Privacy
-uv run personal-os voice wake off
+uv run personal-os voice setup        # once: downloads the models (speech in, wake word, voice)
+uv run personal-os voice wake on      # or off
+uv run personal-os voice status       # "wake word ... listening", and what it last heard
 ```
 
-With the wake word on, the microphone is read continuously and scored on this laptop, 80 ms at a time. Nothing is recorded or transcribed until it hears the phrase. If it triggers too often or too rarely, adjust `voice.wake_threshold` (default 0.5; higher means fewer false starts).
+### Talking over a reply, and the speakers
+
+Voice keeps the microphone open and takes **what the speakers are playing out of it**, with the WebRTC echo canceller (Windows' loopback of your default output is the reference). That covers Donna's own voice and any video, music or call on the PC. It measures your speakers' delay by itself (an HDMI TV: about 240 ms). So with `voice.barge_in = "voice"` (the default):
+
+- just start talking while she answers, and the reply stops and she listens;
+- the wake word doesn't trigger on her own voice or on a video saying "Donna".
+
+`voice status` shows `echo cancel on`, the reference device and the delay. If you switch the default output (TV to headphones), voice notices within 10 s and cancels the new device. If echo cancelling can't start (no loopback device), barge-in falls back to the older echo gate, which is off while other apps play sound, and the hotkey always works.
+
+### Speech recognition
+
+As in JARVIS: **Whisper "small"**, the multilingual model, told the language is English, with no prompt. It was trained on many more accents than the English-only models: here it heard "Can you open Brave for me?" where `small.en` heard "open pray for me". It runs through faster-whisper (the same model weights as JARVIS's openai-whisper, without PyTorch), about 1.7 s a phrase on this laptop. `voice.stt_model` chooses it; `voice.stt_hints = true` adds a prompt of your app and folder names.
+
+After a reply, voice keeps listening for 10 seconds (`voice.followup_s`), as JARVIS does, so a follow-up needs no wake word.
 
 ## The voice that answers
 

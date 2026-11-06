@@ -109,19 +109,25 @@ class LLMConfig(_Section):
 
 class VoiceConfig(_Section):
     enabled: bool = False
-    stt_model: str = "small.en"
-    # Heard first (about 0.6 s on this CPU); stt_model re-hears only what the fast path can't
-    # place. "" uses stt_model alone.
-    stt_fast_model: str = "base.en"
-    wake_word_enabled: bool = False  # needs a trained model in voice/wakewords/ (docs/VOICE.md)
-    wake_threshold: float = Field(0.5, gt=0, lt=1)
+    # Whisper "small" (multilingual, told it's English), as in JARVIS.
+    stt_model: str = "small"
+    # Heard first, if set (a smaller Whisper size); "" uses stt_model alone, as in JARVIS.
+    stt_fast_model: str = ""
+    # A prompt of your app and folder names for recognition. Off, as in JARVIS.
+    stt_hints: bool = False
+    # The wake word, always listening (Vosk, as in JARVIS): any of these as a word.
+    wake_word_enabled: bool = True
+    wake_words: list[str] = Field(default_factory=lambda: ["donna"])
+    # Take the speakers out of the mic (the assistant and other apps), so the wake word and
+    # talking over a reply work without headphones.
+    echo_cancel: bool = True
     # Quietest sound level (RMS) that counts as speech; `personal-os voice mic` shows yours.
     mic_floor: float = Field(0.002, gt=0, lt=0.5)
     vad_silence_ms: int = Field(600, ge=200, le=3000)  # quiet this long ends your turn
     router_threshold: float = Field(0.85, gt=0.5, le=1.0)  # name match needed to act at once
-    # hotkey: Ctrl+Alt+Shift+V stops a reply. voice: talking over it does too (best with
-    # headphones; off while other apps play sound).
-    barge_in: Literal["voice", "hotkey"] = "hotkey"
+    # voice: talking over a reply (or saying "Donna") stops it and listens; the hotkey always
+    # does. Needs echo cancelling, else it acts like "hotkey" with speakers playing.
+    barge_in: Literal["voice", "hotkey"] = "voice"
     piper_voice: str = "en_US-lessac-medium"
     piper_length_scale: float = Field(0.95, gt=0.5, lt=2.0)  # under 1 speaks faster
     tts: Literal["windows", "piper", "speechify"] = "piper"
@@ -129,7 +135,7 @@ class VoiceConfig(_Section):
     popup: bool = True  # show a small window with the transcript and reply for each turn
     popup_position: Literal["bottom-right", "top-right", "bottom-left", "top-left"] = "bottom-right"
     popup_autoclose_s: float = Field(5.0, ge=1, le=120)
-    followup_s: float = Field(6.0, ge=0, le=20)  # listen this long after a reply; 0: off
+    followup_s: float = Field(10.0, ge=0, le=20)  # listen this long after a reply (JARVIS: 10)
     speechify_voice: str = "geffen_32"
     speechify_model: str = "simba-3.5"
     max_spoken_chars: int = Field(600, ge=100, le=2000)

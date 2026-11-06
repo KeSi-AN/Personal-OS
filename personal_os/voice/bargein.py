@@ -21,7 +21,13 @@ the video's speech "interrupted" each reply, was answered, and so on):
 - No chains: the voice loop doesn't arm barge-in for a reply to a turn that itself started
   by barge-in.
 
-`voice.barge_in = "hotkey"` (the default) leaves only the key; "voice" turns this on.
+`voice.barge_in = "hotkey"` leaves only the key; "voice" turns this on.
+
+With the audio engine's echo canceller (voice/engine.py) there's a better way, `CleanBargeIn`:
+the speakers are taken out of the mic (the assistant and any other app), so what's left is you.
+A frame is you when the VAD hears speech in the clean audio and the clean audio is a large
+share of the raw mic (leftover echo is a few percent of it; your voice is most of it). The
+two guards above aren't needed then: other apps' sound is cancelled too.
 """
 
 from __future__ import annotations
@@ -168,3 +174,74 @@ class BargeIn:
                         return
         except Exception:
             return
+
+
+YOU_SHARE = 0.4  # clean / raw level above this: most of what the mic hears is not the speakers
+CLEAN_SPEECH_PROB = 0.6
+CLEAN_TRIGGER_FRAMES = 7  # ~220 ms
+
+
+class YouGate:
+    """Frame by frame on echo-cancelled audio: is that you talking? (Testable without audio.)"""
+
+    def __init__(self, vad: StreamingVAD, floor: float) -> None:
+        self.vad = vad
+        self.floor = floor
+        self.run = 0
+        self.peaks: deque[float] = deque(maxlen=31)
+        self.recent: deque[np.ndarray] = deque(maxlen=KEEP_FRAMES)
+
+    def feed(self, clean: np.ndarray, raw_rms: float) -> bool:
+        self.recent.append(clean)
+        self.peaks.append(float(np.max(np.abs(clean))) if clean.size else 0.0)
+        prob = self.vad.speech_prob(clean, gain=auto_gain(max(self.peaks)))
+        level = _rms(clean)
+        you = (
+            prob >= CLEAN_SPEECH_PROB
+            and level >= self.floor / 2
+            and level >= YOU_SHARE * max(raw_rms, 1e-9)
+        )
+        self.run = self.run + 1 if you else 0
+        return self.run >= CLEAN_TRIGGER_FRAMES
+
+
+class CleanBargeIn:
+    """Barge-in on the audio engine's echo-cancelled frames: talk over a reply to stop it."""
+
+    def __init__(
+        self,
+        engine: object,
+        on_speech: Callable[[list[np.ndarray]], None],
+        *,
+        floor: float,
+    ) -> None:
+        self.engine = engine
+        self.on_speech = on_speech
+        self.floor = floor
+        self.done = threading.Event()
+        self.thread: threading.Thread | None = None
+
+    def __enter__(self) -> CleanBargeIn:
+        self.thread = threading.Thread(target=self._run, name="pos-barge", daemon=True)
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.done.set()
+        if self.thread is not None:
+            self.thread.join(1.0)
+
+    def _run(self) -> None:
+        try:
+            gate = YouGate(StreamingVAD(), self.floor)
+        except Exception:
+            return
+        with self.engine.subscribe() as q:  # type: ignore[attr-defined]
+            while not self.done.is_set():
+                try:
+                    frame = q.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+                if gate.feed(frame.audio, frame.raw_rms):
+                    self.on_speech(list(gate.recent))
+                    return

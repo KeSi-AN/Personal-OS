@@ -32,10 +32,11 @@ app.add_typer(plugins_app, name="plugins")
 def voice_on() -> None:
     """Turn voice on (push-to-talk Ctrl+Alt+Shift+V); the daemon starts it within 30 s."""
     from personal_os.voice.main import status as voice_proc_status
-    from personal_os.voice.stt import Transcriber
+    from personal_os.voice.stt import make_transcriber
 
     cfg = set_value("voice.enabled", True, _state.home)
-    if not Transcriber(cfg.data_dir, cfg.voice.stt_model).available:
+    first = cfg.voice.stt_fast_model or cfg.voice.stt_model
+    if not make_transcriber(cfg.data_dir, first).available:
         typer.echo("Note: the speech model isn't downloaded yet; run `personal-os voice setup`.")
     if not runtime.daemon_info(cfg.runtime_dir).running:
         typer.echo("Voice on, but the daemon isn't running: `personal-os daemon start` starts it.")
@@ -53,7 +54,8 @@ def voice_on() -> None:
     if state.get("error"):
         typer.echo(f"Problem: {state['error']}.")
     elif state.get("running"):
-        typer.echo("Ready. Press Ctrl+Alt+Shift+V, wait for the beep, and speak.")
+        wake = ' or say "Donna"' if state.get("wake_listening") else ""
+        typer.echo(f"Ready. Press Ctrl+Alt+Shift+V{wake}, and speak after the beep.")
     else:
         typer.echo("It hasn't started yet. Check `personal-os voice status` in a minute.")
 
@@ -66,33 +68,39 @@ def voice_off() -> None:
 
 @voice_app.command("wake")
 def voice_wake(state: Annotated[str, typer.Argument(help="on or off")]) -> None:
-    """Turn the wake word ("hey Donna") on or off."""
-    from personal_os.voice.wake import wake_models
+    """Turn the wake word ("Donna", "hey Donna", ...) on or off."""
+    from personal_os.voice import wake
 
     on = state.lower() in ("on", "true", "yes", "1")
     cfg = set_value("voice.wake_word_enabled", on, _state.home)
-    if on and not wake_models(cfg.data_dir):
-        folder = cfg.data_dir / "voice" / "wakewords"
+    if on and not wake.available(cfg.data_dir):
         typer.echo(
-            f"Wake word on, but there's no model yet: train one (docs/VOICE.md) and put the .onnx in {folder}."
+            "Wake word on, but its Vosk model isn't downloaded yet: run `personal-os voice setup`."
         )
         return
-    typer.echo(f"Wake word {'on' if on else 'off'}.")
+    words = ", ".join(f'"{w}"' for w in cfg.voice.wake_words)
+    typer.echo(f"Wake word {'on: ' + words if on else 'off'}. Voice picks this up within 10 s.")
 
 
 @voice_app.command("setup")
 def voice_setup() -> None:
-    """Download what voice needs, if missing: speech in (faster-whisper small.en ~480 MB and
-    base.en ~145 MB) and the Piper voice (~63 MB). All run locally."""
+    """Download what voice needs, if missing: speech in (Whisper small ~480 MB), the wake word
+    (Vosk small English ~68 MB) and the Piper voice (~63 MB). All run locally."""
     import subprocess
 
     from faster_whisper import download_model
 
-    from personal_os.voice.stt import model_dir
+    from personal_os.voice import stt, wake
 
     cfg = _config()
+    vosk_dir = wake.model_path(cfg.data_dir)
+    if wake.available(cfg.data_dir):
+        typer.echo(f"Already there: {vosk_dir}")
+    else:
+        typer.echo(f"Downloading the wake word model {wake.VOSK_DIR} ...")
+        _fetch_zip(wake.VOSK_URL, vosk_dir.parent)
     for name in dict.fromkeys(m for m in (cfg.voice.stt_fast_model, cfg.voice.stt_model) if m):
-        target = model_dir(cfg.data_dir, name)
+        target = stt.model_dir(cfg.data_dir, name)
         if (target / "model.bin").exists():
             typer.echo(f"Already there: {target}")
             continue
@@ -112,11 +120,31 @@ def voice_setup() -> None:
     typer.echo("Done.")
 
 
+def _fetch_zip(url: str, dest: Path) -> None:
+    """Download a model .zip (Vosk's official site) and unpack it into `dest`. Entries that
+    would land outside `dest` (absolute paths, "..") are refused."""
+    import tempfile
+    import urllib.request
+    import zipfile
+
+    dest.mkdir(parents=True, exist_ok=True)
+    root = dest.resolve()
+    with tempfile.TemporaryDirectory() as tmp:
+        archive = Path(tmp) / "model.zip"
+        urllib.request.urlretrieve(url, archive)
+        with zipfile.ZipFile(archive) as z:
+            for name in z.namelist():
+                target = (root / name).resolve()
+                if root != target and root not in target.parents:
+                    raise typer.BadParameter(f"refusing an archive entry outside {root}: {name}")
+            z.extractall(root)
+
+
 @voice_app.command("status")
 def voice_status() -> None:
-    from personal_os.voice.stt import Transcriber
+    from personal_os.voice import wake
+    from personal_os.voice.stt import make_transcriber
     from personal_os.voice.tts import SpeechifyVoice
-    from personal_os.voice.wake import wake_models
 
     cfg = _config()
     v = cfg.voice
@@ -127,13 +155,42 @@ def voice_status() -> None:
         f"voice        {'on' if v.enabled else 'off'}"
         + (f", process {running['state']}" if running else "")
     )
-    for label, name in (("speech in", v.stt_fast_model), ("accurate", v.stt_model)):
+    names = [
+        ("speech in", v.stt_fast_model),
+        ("speech in" if not v.stt_fast_model else "accurate", v.stt_model),
+    ]
+    for label, name in names:
         if name:
-            ready = Transcriber(cfg.data_dir, name).available
-            typer.echo(f"{label:<12} {name} ({'ready' if ready else 'not downloaded'})")
-    models = wake_models(cfg.data_dir)
+            ready = make_transcriber(cfg.data_dir, name).available
+            typer.echo(
+                f"{label:<12} Whisper {name} ({'ready' if ready else 'not downloaded: voice setup'})"
+            )
+    have_vosk = wake.available(cfg.data_dir)
+    listening = running.get("wake_listening")
     typer.echo(
-        f"wake word    {'on' if v.wake_word_enabled else 'off'}; model: {', '.join(m.name for m in models) or 'none yet (docs/VOICE.md)'}"
+        f"wake word    {'on' if v.wake_word_enabled else 'off'} (Vosk: {', '.join(v.wake_words)})"
+        + ("" if have_vosk else "; model not downloaded: voice setup")
+        + ("; listening" if listening else "")
+    )
+    if running.get("wake_last"):
+        w = running["wake_last"]
+        typer.echo(f"last heard   '{w.get('heard', '')}': {w.get('did', '')}")
+    audio = running.get("audio") or {}
+    if audio:
+        aec = "on" if audio.get("echo_cancel") else "off"
+        typer.echo(
+            f"echo cancel  {aec}"
+            + (
+                f" (reference: {audio.get('loopback')}; speaker delay {audio.get('speaker_delay_ms')} ms)"
+                if audio.get("echo_cancel")
+                else ""
+            )
+        )
+        if audio.get("error"):
+            typer.echo(f"             {audio['error']}")
+    typer.echo(
+        f"barge-in     {v.barge_in}"
+        + (" (talk over a reply, or say Donna)" if v.barge_in == "voice" else "")
     )
     key = "key stored" if SpeechifyVoice.key() else "no key"
     typer.echo(
@@ -210,7 +267,7 @@ def voice_mic() -> None:
     import sounddevice as sd
 
     from personal_os.voice.audio import CALIBRATE_BLOCKS, record_utterance, threshold
-    from personal_os.voice.stt import Transcriber
+    from personal_os.voice.stt import make_transcriber
     from personal_os.voice.tts import beep
 
     cfg = _config()
@@ -244,7 +301,7 @@ def voice_mic() -> None:
         else:
             typer.echo("The level barely moved: is the right mic the default input, and unmuted?")
         return
-    stt = Transcriber(cfg.data_dir, cfg.voice.stt_model)
+    stt = make_transcriber(cfg.data_dir, cfg.voice.stt_fast_model or cfg.voice.stt_model)
     if not stt.available:
         typer.echo("Speech was detected, but the speech model isn't downloaded: voice setup.")
         return

@@ -23,7 +23,14 @@ Transitive packages pulled in by the ones below (for example `rich`, `click` and
 | `cryptography` | 6 | Generating the self-signed certificate for phone access (HTTPS on the LAN, ADR-056). The standard library can't create certificates. |
 | `faster-whisper` | 7 | Local speech recognition (CTranslate2, int8 on the CPU). Brings `numpy` and `tokenizers`. |
 | `sounddevice` | 7 | Microphone input through PortAudio (wheel includes the DLL). Playback uses the stdlib `winsound`. |
-| `openwakeword` | 7 | The optional "hey Donna" wake word (ONNX on Windows). Brings `onnxruntime` and `scipy`. |
+| ~~`openwakeword`~~ | - | Replaced by Vosk: it needed a wake-word model trained per phrase. |
+| `vosk` | 9 | The "Donna" wake word, as in JARVIS: offline Kaldi recognition (`vosk-model-small-en-us-0.15`, ~68 MB). |
+| `livekit` | 9 | Only its `AudioProcessingModule`: the WebRTC echo canceller, so the mic doesn't hear the speakers. |
+| `PyAudioWPatch` | 9 | Windows loopback capture (what the speakers play), the echo canceller's reference. |
+| `rapidfuzz` | 8 | Fuzzy matching of spoken names against apps, folders and files. |
+| `piper-tts` | 8 | Local neural voice, streamed sentence by sentence. |
+| `pycaw` | 8 | Windows' audio API: exact volume levels and per-app sound meters. |
+| `scipy` | 7 | Resampling audio (loopback 48 kHz to 16 kHz). |
 | `keyring` | 7 | Windows Credential Manager for the Google refresh token and the Speechify key. |
 | `mcp` | 7 | The official MCP SDK for the read-only `personal-os mcp` server. |
 | `pywebview` | 8 | The voice popup: a small native window drawn by WebView2 (Edge), which Windows 11 already has. Brings `pythonnet` (to reach WinForms and WebView2 from Python), `clr-loader`, `bottle` and `proxy-tools`. The page is passed as a string, so pywebview's built-in `bottle` server never starts and no port opens (ADR-071). |

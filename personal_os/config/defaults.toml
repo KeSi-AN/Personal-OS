@@ -162,14 +162,16 @@ edge = ['%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe']
 
 [voice]
 enabled = false            # push-to-talk Ctrl+Alt+Shift+V; runs in its own process
-stt_model = "small.en"     # faster-whisper, on the CPU: accurate, ~1.8 s a phrase
-stt_fast_model = "base.en" # heard first (~0.6 s); small.en re-hears what the fast path can't place
-wake_word_enabled = false  # "hey Donna": needs a trained model in voice/wakewords/ (docs/VOICE.md)
-wake_threshold = 0.5
+stt_model = "small"        # Whisper small, multilingual, told it's English: as in JARVIS
+stt_fast_model = ""        # a smaller Whisper heard first, if set; "" = stt_model only (JARVIS)
+stt_hints = false          # prompt recognition with your app/folder names (JARVIS: no prompt)
+wake_word_enabled = true   # Vosk listens for the wake word, as in JARVIS: "Donna", "hey Donna" ...
+wake_words = ["donna"]     # each counts as a whole word ("Madonna" doesn't)
+echo_cancel = true         # take the speakers out of the mic, so you can talk over a reply
 mic_floor = 0.002          # quietest level counted as speech; `personal-os voice mic` shows yours
 vad_silence_ms = 600       # quiet this long ends your turn (it waits longer after "open ...")
 router_threshold = 0.85    # how sure a name match must be to act without asking
-barge_in = "hotkey"        # hotkey: Ctrl+Alt+Shift+V stops a reply | voice: talking over it does too (headphones; off while other apps play sound)
+barge_in = "voice"         # voice: talking over a reply (or "Donna") stops it | hotkey: only Ctrl+Alt+Shift+V
 tts = "piper"              # piper (local, streams; falls back to windows) | windows | speechify (cloud)
 piper_voice = "en_US-lessac-medium"   # in voice/piper/; `personal-os voice setup` downloads it
 piper_length_scale = 0.95  # under 1 speaks a little faster
@@ -177,7 +179,7 @@ windows_voice = "Microsoft Zira Desktop"   # `personal-os voice voices` lists th
 popup = true               # a small window shows each turn live: transcript, reply, state
 popup_position = "bottom-right"   # bottom-right | top-right | bottom-left | top-left
 popup_autoclose_s = 5.0    # closes this long after the reply is spoken, unless pinned
-followup_s = 6.0           # after a reply, listen this long for a follow-up (no hotkey); 0 = off
+followup_s = 10.0          # after a reply, listen this long for a follow-up (no wake word), as in JARVIS; 0 = off
 speechify_voice = "geffen_32"
 speechify_model = "simba-3.5"
 max_spoken_chars = 600
