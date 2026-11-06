@@ -264,3 +264,17 @@ def test_typed_chat_shares_the_conversation(home: Path, config: Config):
     assert log[-1]["trigger"] == "chat" and log[-1]["heard"] == "group those tabs"
     agent.chat_turn("thanks", env.ex, FakeProvider(responder), source="chat")
     assert history(env.config.runtime_dir)[-1]["route"] == "end of conversation"
+
+
+def test_about_me_and_conversation_tools(home: Path, config: Config):
+    from personal_os.voice.main import record_history
+
+    env = Env(home, config)
+    o = env.ex.request("about_me", {}, origin=agent.Origin.USER)
+    assert o.ok and "wake word:" in str(o.result.data) and "push-to-talk" in str(o.result.data)  # type: ignore[union-attr]
+    assert not o.result.captured  # type: ignore[union-attr]  # her own settings, not your activity
+    env.config.runtime_dir.mkdir(parents=True, exist_ok=True)
+    record_history(env.config.runtime_dir, {"at": T0.isoformat(), "heard": "hi", "reply": "Hello."})
+    o = env.ex.request("conversation", {}, origin=agent.Origin.USER)
+    assert o.ok and "you: hi | Donna: Hello." in str(o.result.data)  # type: ignore[union-attr]
+    assert o.result.captured  # type: ignore[union-attr]

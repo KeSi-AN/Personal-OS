@@ -23,6 +23,8 @@ def build_registry(config: Config | None = None) -> Registry:
         agent.Recall(),
         agent.ListReminders(),
         agent.Memory(),
+        agent.AboutMe(),
+        agent.Conversation(),
         browser.BrowserOpen(),
         browser.PlayMedia(),
         browser.BrowserTab(),

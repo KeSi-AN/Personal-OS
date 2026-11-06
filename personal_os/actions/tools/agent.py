@@ -92,3 +92,91 @@ class Memory(Tool):
 
         lines = memory.prompt_lines(ctx.conn)
         return Result(f"{len(lines)} fact(s)", data="\n".join(lines) or "(nothing remembered yet)")
+
+
+class AboutMe(Tool):
+    name = "about_me"
+    summary = (
+        "Donna's own state and settings: is the wake word on and which words, push-to-talk, "
+        "her voice, the follow-up window, popup, which browser she controls, the local model, "
+        "whether capture is running or paused"
+    )
+    tier = Tier.READ
+    args_model = NoArgs
+
+    def preview(self, args: NoArgs, ctx: ToolContext) -> str:
+        return "check my own settings and status"
+
+    def run(self, args: NoArgs, ctx: ToolContext) -> Result:
+        from personal_os.browser import control
+        from personal_os.core import runtime
+
+        cfg = ctx.config
+        v = cfg.voice
+        lines = [f"name: {cfg.agent.name}"]
+        try:
+            from personal_os.voice import wake
+
+            model = wake.available(cfg.data_dir)
+        except Exception:
+            model = False
+        words = ", ".join(getattr(v, "wake_words", []) or [])
+        if v.wake_word_enabled and model:
+            lines.append(f"wake word: on ({words})")
+        elif v.wake_word_enabled:
+            lines.append(f"wake word: on in settings ({words}) but its model isn't installed")
+        else:
+            lines.append("wake word: off")
+        lines.append("push-to-talk: Ctrl+Alt+Shift+V")
+        voice = (
+            v.piper_voice if v.tts == "piper" else v.windows_voice if v.tts == "windows" else v.tts
+        )
+        lines.append(f"voice: {v.tts} ({voice}); voice {'on' if v.enabled else 'off'}")
+        lines.append(f"follow-up listening after a reply: {v.followup_s:g} s")
+        lines.append(f"popup: {'on' if v.popup else 'off'}")
+        browsers = control.connected(cfg.runtime_dir)
+        lines.append(
+            f"browser control: {', '.join(browsers)} connected" if browsers
+            else "browser control: no browser connected"
+        )  # fmt: skip
+        lines.append(f"local model: {cfg.llm.fast_model if cfg.llm.enabled else 'off'}")
+        info = runtime.daemon_info(cfg.runtime_dir)
+        paused = (cfg.runtime_dir / "paused").exists()
+        lines.append(f"capture: {'paused' if paused else 'running' if info.running else 'stopped'}")
+        keys = (info.health or {}).get("hotkeys") or {}
+        if keys:
+            lines.append(
+                "hotkeys: " + "; ".join(f"{k} {'ok' if ok else 'taken'}" for k, ok in keys.items())
+            )
+        return Result("my settings", data="\n".join(lines))
+
+
+class ConvoArgs(Args):
+    last: int = Field(10, ge=1, le=30)
+
+
+class Conversation(Tool):
+    name = "conversation"
+    summary = (
+        "your recent conversations with Donna (what you asked, what she answered, when): "
+        "for 'what did we talk about' or 'what did you say earlier' (not the user's activity)"
+    )
+    tier = Tier.READ
+    args_model = ConvoArgs
+
+    def preview(self, args: ConvoArgs, ctx: ToolContext) -> str:
+        return f"look at our last {args.last} exchanges"
+
+    def run(self, args: ConvoArgs, ctx: ToolContext) -> Result:
+        from personal_os.voice.main import history, local_time
+
+        items = [e for e in history(ctx.config.runtime_dir, 60) if e.get("heard")][-args.last :]
+        lines = [
+            f"{local_time(str(e.get('at', '')), '%d %b %H:%M')} you: {e.get('heard')}"
+            + (f" | Donna: {str(e.get('reply'))[:200]}" if e.get("reply") else "")
+            for e in items
+        ]
+        # Her replies can quote pages and tabs: captured content, like any read.
+        return Result(
+            f"{len(lines)} exchange(s)", data="\n".join(lines) or "(none yet)", captured=True
+        )
