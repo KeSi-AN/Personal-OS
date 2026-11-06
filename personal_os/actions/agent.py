@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -154,7 +155,10 @@ def respond(
     *,
     context: str = "",
     max_steps: int | None = None,
+    announce: Callable[[str], None] | None = None,
 ) -> AgentReply:
+    """`announce`: called with a short spoken line ("Playing Circles.") just before an action
+    that changes something runs, so voice says it first and then it happens."""
     out = AgentReply(reply="")
     killed = killswitch.engaged(executor.runtime_dir)
     steps = max_steps or executor.config.agent.max_steps
@@ -208,6 +212,10 @@ def respond(
             if key in seen:
                 continue  # already have it: shown again below
             from_context = bool(context) and borrowed(args, request, context)
+            if announce is not None and call.tool in ANNOUNCED:
+                line = announcement(call.tool, args)
+                if line:
+                    announce(line)
             o = executor.request(
                 call.tool, args, origin=Origin.PLANNED, tainted=out.tainted or from_context,
                 request_text=request, read_so_far=read_texts,
@@ -256,6 +264,34 @@ _CLAIM = re.compile(
     r"search(?:ed|ing)|click(?:ed|ing)|typ(?:ed|ing)|remind(?:ed)?)\b",
     re.I,
 )
+
+
+# Actions worth saying before they happen, and how to say them.
+ANNOUNCED = {"play_media", "browser_open", "browser_media", "browser_tab", "open_app", "open_path",
+             "open_url", "media", "set_volume"}  # fmt: skip
+
+
+def announcement(tool: str, args: dict[str, Any]) -> str:
+    q = str(args.get("query") or "").strip()
+    if tool == "play_media" and q:
+        return f"Playing {q}."
+    if tool == "browser_open":
+        if q:
+            return f"Searching {args.get('site') or 'Google'} for {q}."
+        return "Opening that page."
+    if tool == "browser_media":
+        return {"play": "Playing.", "pause": "Pausing.", "next": "Next.", "previous": "Previous.",
+                "seek": "Skipping."}.get(str(args.get("action")), "")  # fmt: skip
+    if tool == "browser_tab":
+        return {"switch": "Switching tabs.", "close": "Closing that.", "group": "Grouping them.",
+                "back": "Going back.", "mute": "Muting it."}.get(str(args.get("action")), "")  # fmt: skip
+    if tool == "open_app":
+        return f"Opening {args.get('app')}." if args.get("app") else ""
+    if tool in ("open_path", "open_url"):
+        return "Opening it."
+    if tool == "set_volume" and args.get("percent") is not None:
+        return f"Volume {args.get('percent')}."
+    return ""
 
 
 def grounded(reply: str, outcomes: list[Outcome], executor: Executor) -> str:

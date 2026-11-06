@@ -308,6 +308,7 @@ def test_voice_pause_goes_to_the_browser_tab(home: Path, config: Config, browser
     v, _h = voice_for(env)
     v.index._index = INDEX
     v.last_audio = None
+    v.turn = {"id": "t"}  # a turn in progress, as in real use
     reply = v.fast("pause music")
     assert ("media", {"action": "pause", "seconds": 0}) in b.seen
-    assert reply == "Pause: Circles - Post Malone is now paused."
+    assert reply == "Pausing." and _h.said == ["Pausing."]  # said first, then paused

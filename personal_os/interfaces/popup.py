@@ -12,6 +12,7 @@ voice carries on without a popup.
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import threading
 import time
@@ -24,6 +25,25 @@ from personal_os.core import runtime
 from personal_os.voice.popup_view import AutoClose, View, read_view
 
 LOCK = "popup.lock"
+SEEN = "popup_seen.json"  # the reply the popup has shown: voice speaks only after this
+
+
+def reply_key(turn_id: str, reply: str) -> str:
+    import hashlib
+
+    return f"{turn_id}:{hashlib.sha1(reply.encode('utf-8')).hexdigest()[:12]}"
+
+
+def recently_launched(runtime_dir: Path, within_s: float = 8.0) -> bool:
+    at = last_state(runtime_dir).get("launched_at")
+    if not at:
+        return False
+    try:
+        return (datetime.now(UTC) - datetime.fromisoformat(str(at))).total_seconds() < within_s
+    except ValueError:
+        return False
+
+
 STATE = "popup.json"  # last launch, last error: for doctor
 WIDTH, HEIGHT = 360, 240
 MARGIN = 20
@@ -236,6 +256,7 @@ class Api:
         self._auto = AutoClose(cfg.voice.popup_autoclose_s)
         self._auto.pin(pinned)
         self._window: Any = None
+        self._seen = ""
         self._closing = False
 
     def view(self) -> dict[str, Any]:
@@ -247,6 +268,12 @@ class Api:
         close, new_turn = self._auto.step(v, now)
         data = v.as_dict()
         data.update(pinned=self._auto.pinned, new_turn=new_turn)
+        if v.reply and v.turn_id and not self._demo:
+            key = reply_key(v.turn_id, v.reply)
+            if key != self._seen:  # the page draws this reply now: tell voice it may speak
+                self._seen = key
+                with contextlib.suppress(OSError):
+                    runtime.write_json_atomic(self._cfg.runtime_dir / SEEN, {"key": key})
         if close:
             self.close()
         return data

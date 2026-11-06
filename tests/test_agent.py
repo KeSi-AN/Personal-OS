@@ -278,3 +278,102 @@ def test_about_me_and_conversation_tools(home: Path, config: Config):
     o = env.ex.request("conversation", {}, origin=agent.Origin.USER)
     assert o.ok and "you: hi | Donna: Hello." in str(o.result.data)  # type: ignore[union-attr]
     assert o.result.captured  # type: ignore[union-attr]
+
+
+# --- 9i: show, then say; say, then do --------------------------------------------------------
+
+
+def test_actions_are_announced_before_they_run(home: Path, config: Config):
+    env = Env(home, config)
+    order: list[str] = []
+    real = env.ex.request
+
+    def spy(tool: str, *a: Any, **k: Any) -> Any:
+        order.append(f"run {tool}")
+        return real(tool, *a, **k)
+
+    env.ex.request = spy  # type: ignore[method-assign]
+    script = Script(use(("set_volume", {"percent": 30})), answer("Volume is 30."))
+    agent.respond(
+        "volume 30", env.ex, FakeProvider(script), announce=lambda t: order.append(f"say {t}")
+    )
+    assert order == ["say Volume 30.", "run set_volume"]
+
+
+def test_announcements():
+    assert (
+        agent.announcement("play_media", {"query": "Circles Post Malone"})
+        == "Playing Circles Post Malone."
+    )
+    assert (
+        agent.announcement("browser_open", {"query": "lofi", "site": "youtube"})
+        == "Searching youtube for lofi."
+    )
+    assert agent.announcement("browser_media", {"action": "pause"}) == "Pausing."
+    assert agent.announcement("now", {}) == ""
+
+
+def test_voice_waits_for_the_popup_then_speaks(home: Path, config: Config, monkeypatch):
+    import threading
+
+    from personal_os.core import runtime as rt_mod
+    from personal_os.interfaces import popup
+    from tests.test_phase7 import voice_for
+
+    env = Env(home, config)
+    v, _h = voice_for(env)
+    env.config.runtime_dir.mkdir(parents=True, exist_ok=True)
+    v.turn = {"id": "t1"}
+    monkeypatch.setattr(popup, "is_open", lambda _rt: True)
+    key = popup.reply_key("t1", "Hello there.")
+
+    def show_later() -> None:
+        time.sleep(0.2)
+        rt_mod.write_json_atomic(env.config.runtime_dir / popup.SEEN, {"key": key})
+
+    threading.Thread(target=show_later).start()
+    t = time.monotonic()
+    v.wait_for_popup("Hello there.")
+    waited = time.monotonic() - t
+    assert 0.15 <= waited < 0.6  # waited for the popup, not the full limit
+    t = time.monotonic()
+    v.wait_for_popup("Something else.")  # never shown: gives up at the limit
+    assert 0.55 <= time.monotonic() - t < 1.0
+    monkeypatch.setattr(popup, "is_open", lambda _rt: False)
+    t = time.monotonic()
+    v.wait_for_popup("No popup at all.")
+    assert time.monotonic() - t < 0.1  # no popup running: no wait
+
+
+def test_fast_actions_say_first_then_act(home: Path, config: Config, monkeypatch):
+    import winsound
+
+    import personal_os.actions.desktop as desktop_mod
+    from tests.test_phase7 import voice_for
+    from tests.test_voice_fastpath import INDEX
+
+    monkeypatch.setattr(winsound, "Beep", lambda *_a: None)
+    env = Env(home, config)
+    monkeypatch.setattr(desktop_mod, "default_desktop", lambda: env.desktop)  # never a real app
+    v, _h = voice_for(env)
+    v.index._index = INDEX
+    v.last_audio = None
+    order: list[str] = []
+    v.say = lambda text: order.append(f"say {text}")  # type: ignore[method-assign]
+    from types import SimpleNamespace
+
+    from personal_os.actions.executor import Outcome
+
+    def request(tool: str, *_a: Any, **_k: Any) -> Outcome:
+        order.append(f"run {tool}")
+        return Outcome("a1", tool, "succeeded", "done")
+
+    def executor(conn: Any, provider: Any = None) -> Any:
+        return SimpleNamespace(request=request)
+
+    v.executor = executor  # type: ignore[method-assign]
+    v.turn = {"id": "t"}
+    v.announced = ""
+    reply = v.fast("open calculator")
+    assert order[:2] == ["say Opening Calculator.", "run open_app"]
+    assert reply == v.announced  # respond() won't say it a second time

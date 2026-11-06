@@ -82,6 +82,7 @@ class Voice:
         self.convo = dialogue.Conversation.from_history(cfg.runtime_dir)
         # A request to run next, without listening: "no, at 5 pm instead" or "I wanted X".
         self.next_request: str | None = None
+        self.announced = ""  # said before an action ran: not said again after
         # Set by a hotkey press while thinking or speaking: stop talking, listen again.
         self.interrupt = threading.Event()
 
@@ -368,6 +369,39 @@ class Voice:
             provider, self.index.current(), threshold=self.cfg.voice.router_threshold
         )
 
+    def wait_for_popup(self, reply: str) -> None:
+        """Speak only once the popup shows this reply (at most a moment: a slow or missing
+        popup never holds voice up for long)."""
+        if not self.cfg.voice.popup or self.turn is None:
+            return
+        from personal_os.interfaces import popup
+
+        rt = self.cfg.runtime_dir
+        if popup.is_open(rt):
+            limit = 0.6
+        elif popup.recently_launched(rt):
+            limit = 2.0  # still starting up: worth a little wait on the first turn
+        else:
+            return
+        key = popup.reply_key(str(self.turn.get("id", "")), reply)
+        deadline = time.monotonic() + limit
+        while time.monotonic() < deadline:
+            if (runtime.read_json(rt / popup.SEEN) or {}).get("key") == key:
+                return
+            time.sleep(0.04)
+
+    def announce(self, text: str) -> None:
+        """Say what's about to happen ("Playing Circles."), shown first, before doing it."""
+        if not text or self.turn is None:
+            return
+        self.turn.update(reply=text, state="speaking")
+        self.write_status("speaking")
+        self.wait_for_popup(text)
+        self.say(text)
+        self.announced = text
+        self.turn["state"] = "thinking"
+        self.write_status("thinking")
+
     def media_in_browser(self, intent: Any, text: str) -> str | None:
         """Play, pause, stop, next, previous: the music in your browser tab when the browser
         is connected (the Windows media key toggles whichever player Windows picks). None to
@@ -383,8 +417,11 @@ class Voice:
 
         if not control.connected(self.cfg.runtime_dir):
             return None
-        reply = self.run_tool("browser_media", {"action": action}, text)
-        return None if reply.startswith("I couldn't") else reply
+        said = {"play": "Playing.", "pause": "Pausing.", "toggle": "Okay.", "next": "Next.",
+                "previous": "Previous."}[action]  # fmt: skip
+        self.announce(said)
+        reply = self.run_tool("browser_media", {"action": action}, text, ack=False)
+        return None if reply.startswith("I couldn't") else said
 
     def run_intent(self, intent: Any, text: str) -> str:
         from personal_os.actions.base import Origin
@@ -395,7 +432,10 @@ class Voice:
         tab_reply = self.media_in_browser(intent, text)
         if tab_reply is not None:
             return tab_reply
-        self.speaker.earcon("ack")  # heard and understood, before the tool runs
+        if intent.reply and intent.reply != self.announced:
+            self.announce(str(intent.reply))  # "Opening Brave." before it opens
+        else:
+            self.speaker.earcon("ack")  # heard and understood, before the tool runs
         conn = open_db(self.cfg.db_path)
         try:
             ex = self.executor(conn)
@@ -465,13 +505,14 @@ class Voice:
                 return "I didn't catch a time, so I didn't set it."
         return self.run_tool(r.tool, r.args(), text)
 
-    def run_tool(self, tool: str, args: dict[str, Any], text: str) -> str:
+    def run_tool(self, tool: str, args: dict[str, Any], text: str, *, ack: bool = True) -> str:
         """One tool you asked for directly, through the executor (policy, audit log, undo);
         the reply is what it did, in its own words."""
         from personal_os.actions.base import Origin
         from personal_os.storage.db import open_db
 
-        self.speaker.earcon("ack")
+        if ack:
+            self.speaker.earcon("ack")
         conn = open_db(self.cfg.db_path)
         try:
             out = self.executor(conn).request(tool, args, origin=Origin.USER, request_text=text)
@@ -543,7 +584,11 @@ class Voice:
         provider = self.provider()
         ex = self.executor(conn, provider)
         context = self.convo.for_planner()
-        result = agent.respond(request, ex, provider, context=context)
+        result = agent.respond(request, ex, provider, context=context, announce=self.announce)
+        acted = [o for o in result.outcomes if o.tool in agent.ANNOUNCED]
+        if self.announced and acted and all(o.ok for o in acted):
+            self.announced = result.reply  # said up front; the popup shows the full reply
+            self.turn_update(reply=result.reply)
         return result.reply
 
     def do(self, conn: Any, request: str) -> str:
@@ -741,6 +786,7 @@ class Voice:
             self.write_status("thinking", heard=text)
             t1 = time.monotonic()
             self.asked = {}
+            self.announced = ""
             reply = None if given else self.fast(text)
             if self.asked:
                 entry["asked"] = self.asked
@@ -764,9 +810,12 @@ class Voice:
             if self.interrupt.is_set():
                 entry["route"] = f"{entry['route']} (interrupted)"
                 return False
-            if reply:
+            if reply and reply == self.announced:
+                spoke = True  # already said before the action ran
+            elif reply:
                 self.turn.update(reply=reply, state="speaking")
                 self.write_status("speaking")
+                self.wait_for_popup(reply)
                 t2 = time.monotonic()
                 self.say(spoken(reply))
                 entry["speak_s"] = round(time.monotonic() - t2, 1)
