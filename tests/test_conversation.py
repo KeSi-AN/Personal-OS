@@ -177,7 +177,7 @@ def test_closing(text: str, ends: bool):
 # --- short-term context ---------------------------------------------------------------------
 
 
-def test_conversation_expires_and_hides_captured_answers_from_the_planner():
+def test_conversation_keeps_both_sides_and_expires():
     c = dialogue.Conversation(ttl_s=300)
     c.add(
         "remind me in two minutes to stretch", "I'll remind you at 16:34 to stretch.", "do", now=0
@@ -187,7 +187,9 @@ def test_conversation_expires_and_hides_captured_answers_from_the_planner():
     assert "You: remind me in two minutes to stretch" in text
     assert "Donna: I'll remind you at 16:34" in text
     assert "You: what did I work on yesterday" in text
-    assert "parser" not in text  # an `ask` answer carries captured content (ADR-050)
+    # Donna's own answers are kept too ("those tabs" needs them); anything copied from them
+    # into an action needs a yes (planner.borrowed).
+    assert "Donna: You worked on the parser." in text
     assert c.active(now=309) and not c.active(now=311)
     assert c.for_planner(now=400) == ""
 
@@ -299,3 +301,30 @@ def test_a_redirected_answer_runs_as_the_next_turn(home: Path, config: Config, q
     log = history(env.config.runtime_dir)
     assert [x["trigger"] for x in log] == ["hotkey", "followup"]
     assert log[1]["heard"] == "open zoom"
+
+
+def test_the_conversation_is_rebuilt_from_history_and_ends_on_thanks(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from personal_os.voice.main import record_history
+
+    now = datetime.now(UTC)
+    at = lambda m: (now - timedelta(minutes=m)).isoformat()  # noqa: E731
+    record_history(tmp_path, {"at": at(50), "heard": "old talk", "reply": "x", "route": "agent"})
+    record_history(tmp_path, {"at": at(40), "heard": "thanks", "route": dialogue.ENDED})
+    record_history(
+        tmp_path,
+        {
+            "at": at(3),
+            "heard": "which tabs are open?",
+            "reply": "Docs, Music and Mail.",
+            "route": "agent",
+        },
+    )
+    record_history(tmp_path, {"at": at(2), "heard": "", "route": "nothing heard", "quiet": True})
+    record_history(
+        tmp_path, {"at": at(1), "heard": "group those", "reply": "", "route": "agent", "error": "x"}
+    )
+    c = dialogue.Conversation.from_history(tmp_path)
+    text = c.for_planner()
+    assert text.splitlines() == ["You: which tabs are open?", "Donna: Docs, Music and Mail."]

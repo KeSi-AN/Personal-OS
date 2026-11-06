@@ -126,7 +126,7 @@ class Overlay:
                 self._confirm, provider=provider,
             )  # fmt: skip
             assert provider is not None
-            r = agent.respond(text, ex, provider)
+            r = agent.chat_turn(text, ex, provider, source="overlay")
             lines = [r.reply]
             if r.outcomes:
                 lines += ["", *(f"{o.tool}: {o.status} · {o.message}" for o in r.outcomes)]

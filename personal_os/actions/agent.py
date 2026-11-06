@@ -16,6 +16,7 @@ through, so the cited answer is the reply. Taint (ADR-050) and provenance (ADR-0
 from __future__ import annotations
 
 import contextlib
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -55,11 +56,16 @@ Which tool:
 - reminders -> list_reminders, set_reminder, update_reminder, cancel_reminder
 - play a song or video by name -> play_media (never media: that only presses play/pause)
 - search the web, open a site -> browser_open; this page / summarise this tab -> browser_read
-- pause, next, what's playing -> browser_media / whats_playing; switch or close tabs -> browser_tab
+- pause, next, what's playing -> browser_media / whats_playing; switch, close or group tabs ("the first three" = positions [1, 2, 3]) -> browser_tab
 - open apps, volume, screenshot, notes, files -> the matching tool
 
 reply is spoken aloud: one to three short, natural sentences. No lists, no markdown.
 After tool results arrive, answer from them; say what you did or found.
+Several requests in one sentence ("pause this and play X"): make all the calls in the same step.
+Use the earlier conversation for "it", "those", "that one", "the first three": it says what was
+just talked about.
+Only claim what a tool result shows. If no tool can do something, say plainly that you can't
+do it yet; never say you can, and never say you did something no tool did.
 
 Examples:
 User: what's the difference between RAM and storage?
@@ -222,6 +228,7 @@ def respond(
             continue
         gathered.extend(results)
         transcript = f"{user}\n\n" + CONTINUE.format(results="\n\n".join(gathered))
+    out.reply = grounded(out.reply, out.outcomes, executor)
     if not out.reply:
         acts = [
             o
@@ -235,3 +242,55 @@ def respond(
         else:
             out.reply = "I'm not sure how to help with that."
     return out
+
+
+# A reply claiming something was done ("I've paused the music", "Playing X now").
+_CLAIM = re.compile(
+    r"\b(?:i(?:'ve| have| just)?|i'm|i am|now|it's|it is)\b[^.!?]{0,40}?\b("
+    r"play(?:ed|ing)|paus(?:ed|ing)|stopp(?:ed|ing)|open(?:ed|ing)|clos(?:ed|ing)|"
+    r"group(?:ed|ing)|switch(?:ed|ing)|mut(?:ed|ing)|set|created|sav(?:ed|ing)|sent|"
+    r"cancel(?:l)?(?:ed|ing)|chang(?:ed|ing)|mov(?:ed|ing)|start(?:ed|ing)|turn(?:ed|ing)|"
+    r"search(?:ed|ing)|click(?:ed|ing)|typ(?:ed|ing)|remind(?:ed)?)\b",
+    re.I,
+)
+
+
+def grounded(reply: str, outcomes: list[Outcome], executor: Executor) -> str:
+    """Never let a reply claim an action that didn't happen: with no action succeeding, a
+    claim ("I played it for you") is replaced by what really happened."""
+    acted = [
+        o
+        for o in outcomes
+        if o.ok and (t := executor.registry.get(o.tool)) is not None and t.tier > Tier.READ
+    ]
+    if acted or not reply or not _CLAIM.search(reply):
+        return reply
+    failed = [o for o in outcomes if not o.ok and o.status != "succeeded"]
+    if failed:
+        why = str(failed[0].message).split(":")[-1].strip().rstrip(".")
+        return f"I couldn't do that: {why}."
+    return "I haven't done that: I don't have a way to do it yet."
+
+
+def chat_turn(
+    request: str, executor: Executor, provider: LLMProvider, *, source: str
+) -> AgentReply:
+    """One typed exchange (overlay, `personal-os chat`) in the shared conversation: it sees
+    what was said before, by voice or typed, and is remembered for what comes next."""
+    from personal_os.voice import dialogue
+    from personal_os.voice.main import record_history
+
+    runtime_dir = executor.runtime_dir
+    entry: dict[str, Any] = {"at": executor.clock.now().isoformat(), "trigger": source}
+    entry["heard"] = request
+    if dialogue.closing(request):
+        entry["route"] = dialogue.ENDED
+        record_history(runtime_dir, entry)
+        return AgentReply(reply="Anytime.")
+    convo = dialogue.Conversation.from_history(runtime_dir)
+    result = respond(request, executor, provider, context=convo.for_planner())
+    entry.update(route="agent", reply=result.reply)
+    if result.error:
+        entry["error"] = result.error
+    record_history(runtime_dir, entry)
+    return result

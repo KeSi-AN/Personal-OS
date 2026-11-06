@@ -19,7 +19,9 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -253,49 +255,69 @@ def refers_back(request: str) -> bool:
 
 # --- the last few exchanges ----------------------------------------------------------------
 
-CONTEXT_TTL_S = 300.0
-CONTEXT_KEEP = 6
-# Replies that are safe to show the action planner: they come from Donna's own commands,
-# not from your captured activity (answers from `ask` do, so they're left out: ADR-050).
-PLANNER_SAFE = ("fast", "do", "chat", "remember")
+CONTEXT_TTL_S = 1800.0  # a conversation lasts while you keep coming back within 30 minutes
+CONTEXT_KEEP = 10
+ENDED = "end of conversation"  # the route voice logs for "thanks" / "that's all"
 
 
 @dataclass
 class Exchange:
-    at: float
+    at: float  # wall-clock seconds
     heard: str
     reply: str
     route: str
 
 
 class Conversation:
-    """What was said in the last few minutes. In memory only; gone when voice restarts."""
+    """The current conversation: the last few exchanges, shared by voice, the overlay and
+    `personal-os chat`. Built from the voice history file (runtime folder, already kept for
+    `voice log`), so it survives a restart and nothing new is stored. "Thanks" ends it.
+
+    Donna's own replies are included: she needs them to understand "those tabs" or "do it".
+    They may hold captured text (a tab title, a page), so a call whose text comes from here
+    rather than your latest words needs your yes (planner.borrowed, ADR-074)."""
 
     def __init__(self, ttl_s: float = CONTEXT_TTL_S, keep: int = CONTEXT_KEEP) -> None:
         self.ttl_s = ttl_s
         self.items: deque[Exchange] = deque(maxlen=keep)
 
+    @classmethod
+    def from_history(cls, runtime_dir: Path, **kw: Any) -> Conversation:
+        from personal_os.voice.main import history
+
+        convo = cls(**kw)
+        for entry in history(runtime_dir, 50):
+            if entry.get("route") == ENDED:
+                convo.clear()
+                continue
+            heard = str(entry.get("heard") or "")
+            if not heard or entry.get("error") or entry.get("quiet"):
+                continue
+            try:
+                at = datetime.fromisoformat(str(entry.get("at"))).timestamp()
+            except ValueError:
+                continue
+            convo.add(heard, str(entry.get("reply") or ""), str(entry.get("route") or ""), at)
+        return convo
+
     def add(self, heard: str, reply: str, route: str, now: float | None = None) -> None:
         if heard:
-            self.items.append(
-                Exchange(time.monotonic() if now is None else now, heard, reply, route)
-            )
+            self.items.append(Exchange(time.time() if now is None else now, heard, reply, route))
 
     def active(self, now: float | None = None) -> bool:
-        now = time.monotonic() if now is None else now
+        now = time.time() if now is None else now
         return bool(self.items) and now - self.items[-1].at < self.ttl_s
 
     def recent(self, now: float | None = None) -> list[Exchange]:
         return list(self.items) if self.active(now) else []
 
     def for_planner(self, now: float | None = None) -> str:
-        """Earlier in this conversation, as the planner may see it: everything you said, and
-        Donna's replies only where they came from her own commands."""
+        """The conversation so far, for the agent: what you said and what Donna answered."""
         lines = []
         for x in self.recent(now):
             lines.append(f"You: {x.heard}")
-            if x.reply and x.route.split(" ")[0] in PLANNER_SAFE:
-                lines.append(f"Donna: {x.reply[:300]}")
+            if x.reply:
+                lines.append(f"Donna: {x.reply[:400]}")
         return "\n".join(lines)
 
     def clear(self) -> None:

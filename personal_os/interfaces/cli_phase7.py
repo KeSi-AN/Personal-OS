@@ -721,7 +721,7 @@ def chat(
     ex = Executor(
         cfg, conn, SystemClock(), build_registry(cfg), default_desktop(), confirm, provider=provider
     )
-    r = agent.respond(" ".join(message), ex, provider)
+    r = agent.chat_turn(" ".join(message), ex, provider, source="chat")
     typer.echo(r.reply)
     for o in r.outcomes:
         typer.echo(f"  {o.tool}: {o.status} - {o.message}")

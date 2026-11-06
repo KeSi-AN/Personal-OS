@@ -78,7 +78,8 @@ class Voice:
         self.hotkey_error: str | None = None  # kept, so "ready" writes don't hide it
         self.state = "starting"
         self.turn: dict[str, Any] | None = None  # the current or last exchange, for the popup
-        self.convo = dialogue.Conversation()  # the last few exchanges, in memory only
+        # The conversation so far (from the voice history, so it survives a restart).
+        self.convo = dialogue.Conversation.from_history(cfg.runtime_dir)
         # A request to run next, without listening: "no, at 5 pm instead" or "I wanted X".
         self.next_request: str | None = None
         # Set by a hotkey press while thinking or speaking: stop talking, listen again.
@@ -367,12 +368,33 @@ class Voice:
             provider, self.index.current(), threshold=self.cfg.voice.router_threshold
         )
 
+    def media_in_browser(self, intent: Any, text: str) -> str | None:
+        """Play, pause, stop, next, previous: the music in your browser tab when the browser
+        is connected (the Windows media key toggles whichever player Windows picks). None to
+        use the media key instead (no browser, or nothing playable in it)."""
+        if len(intent.calls) != 1 or intent.calls[0][0] != "media":
+            return None
+        key = intent.calls[0][1].get("action")
+        action = {"play_pause": intent.verb if intent.verb in ("play", "pause") else "toggle",
+                  "next": "next", "previous": "previous"}.get(key)  # fmt: skip
+        if action is None:
+            return None
+        from personal_os.browser import control
+
+        if not control.connected(self.cfg.runtime_dir):
+            return None
+        reply = self.run_tool("browser_media", {"action": action}, text)
+        return None if reply.startswith("I couldn't") else reply
+
     def run_intent(self, intent: Any, text: str) -> str:
         from personal_os.actions.base import Origin
         from personal_os.storage.db import open_db
 
         if not intent.calls:
             return str(intent.reply)
+        tab_reply = self.media_in_browser(intent, text)
+        if tab_reply is not None:
+            return tab_reply
         self.speaker.earcon("ack")  # heard and understood, before the tool runs
         conn = open_db(self.cfg.db_path)
         try:
@@ -520,7 +542,7 @@ class Voice:
 
         provider = self.provider()
         ex = self.executor(conn, provider)
-        context = self.convo.for_planner() if dialogue.refers_back(request) else ""
+        context = self.convo.for_planner()
         result = agent.respond(request, ex, provider, context=context)
         return result.reply
 
@@ -533,7 +555,7 @@ class Voice:
         ex = self.executor(conn, provider)
         # The conversation only when this request points back at it ("it", "instead"): a
         # self-contained request is planned on its own words alone.
-        context = self.convo.for_planner() if dialogue.refers_back(request) else ""
+        context = self.convo.for_planner()
         report = run_request(request, ex, provider, context=context)
         if report.error:
             return "I couldn't do that. " + (

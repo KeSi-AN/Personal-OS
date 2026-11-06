@@ -206,3 +206,61 @@ def test_now_tool_output_is_captured_content(home: Path, config: Config, monkeyp
     env = Env(home, config)
     o = env.ex.request("now", {}, origin=agent.Origin.USER)
     assert o.ok and o.result is not None and o.result.captured
+
+
+# --- honest replies and shared memory ---------------------------------------------------------
+
+
+def test_a_claim_with_no_action_behind_it_is_corrected(home: Path, config: Config, monkeypatch):
+    fake_now(monkeypatch)
+    env = Env(home, config)
+    # From the log: it only looked at the tabs, then said it was playing a song.
+    script = Script(use(("now", {})), answer("I'm playing 'When I Was Your Man' right now."))
+    r = agent.respond("can you play a song in this tab?", env.ex, FakeProvider(script))
+    assert r.reply == "I haven't done that: I don't have a way to do it yet."
+    script = Script(answer("I played When I Was Your Man for you."))
+    r = agent.respond("play when I was your man", env.ex, FakeProvider(script))
+    assert "haven't done that" in r.reply
+    # Real answers and real actions are left alone.
+    r = agent.respond("hi", env.ex, FakeProvider(Script(answer("A thread runs inside a process."))))
+    assert r.reply == "A thread runs inside a process."
+    script = Script(
+        use(("set_reminder", {"text": "stretch", "minutes": 5})), answer("I've set it.")
+    )
+    assert agent.respond("remind me", env.ex, FakeProvider(script)).reply == "I've set it."
+
+
+def test_typed_chat_shares_the_conversation(home: Path, config: Config):
+    from personal_os.voice.main import history, record_history
+
+    env = Env(home, config)
+    env.config.runtime_dir.mkdir(parents=True, exist_ok=True)
+    record_history(
+        env.config.runtime_dir,
+        {
+            "at": T0.isoformat(),
+            "heard": "which tabs are open?",
+            "reply": "Docs and Music.",
+            "route": "agent",
+        },
+    )
+    seen: list[str] = []
+
+    def responder(system: str, user: str, schema: Any) -> Any:
+        seen.append(user)
+        return answer("Grouped them? Not yet: I'd need to know which.")
+
+    import personal_os.voice.dialogue as dialogue_mod
+
+    monkeypatch_now = T0.timestamp() + 60
+    orig = dialogue_mod.time.time
+    dialogue_mod.time.time = lambda: monkeypatch_now  # type: ignore[assignment]
+    try:
+        agent.chat_turn("group those tabs", env.ex, FakeProvider(responder), source="chat")
+    finally:
+        dialogue_mod.time.time = orig  # type: ignore[assignment]
+    assert "Donna: Docs and Music." in seen[0]  # she sees her own earlier answer
+    log = history(env.config.runtime_dir)
+    assert log[-1]["trigger"] == "chat" and log[-1]["heard"] == "group those tabs"
+    agent.chat_turn("thanks", env.ex, FakeProvider(responder), source="chat")
+    assert history(env.config.runtime_dir)[-1]["route"] == "end of conversation"
