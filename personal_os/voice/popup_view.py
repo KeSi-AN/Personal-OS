@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+READ_S = 20.0  # an answer with details stays up at least this long
 ACTIVE = ("listening", "thinking", "speaking")
 
 
@@ -23,6 +24,7 @@ class View:
     heard: str = ""
     reply: str = ""
     question: str = ""
+    details: str = ""  # the full answer for the screen (lists, links, evidence)
     error: str = ""
     paused: bool = False
     killed: bool = False
@@ -72,6 +74,7 @@ def view_from(
         heard=str(turn.get("heard", "")),
         reply=str(turn.get("reply", "")),
         question=str(turn.get("question", "")),
+        details=str(turn.get("details", "")),
         error=str(turn.get("error", "")) or str(status.get("error", "")),
         paused=paused,
         killed=killed,
@@ -121,4 +124,5 @@ class AutoClose:
             self.done_since = now
         if self.pinned:
             return False, new_turn
-        return now - self.done_since >= self.seconds, new_turn
+        wait = max(self.seconds, READ_S) if view.details else self.seconds  # time to read it
+        return now - self.done_since >= wait, new_turn

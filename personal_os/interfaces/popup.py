@@ -46,6 +46,8 @@ def recently_launched(runtime_dir: Path, within_s: float = 8.0) -> bool:
 
 STATE = "popup.json"  # last launch, last error: for doctor
 WIDTH, HEIGHT = 360, 240
+BIG_WIDTH, BIG_HEIGHT = 480, 560  # when there's a full answer to read
+LONG_REPLY = 240  # characters: longer replies get the big window too
 MARGIN = 20
 TASKBAR = 56  # logical pixels kept clear at the bottom of the screen
 WEBVIEW2_CLIENT = r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
@@ -163,13 +165,21 @@ def _spawn(demo: bool) -> None:
     )
 
 
-def position(screen_w: int, screen_h: int, corner: str) -> tuple[int, int]:
+def position(
+    screen_w: int, screen_h: int, corner: str, size: tuple[int, int] = (WIDTH, HEIGHT)
+) -> tuple[int, int]:
     """Top-left of the window for a corner, in logical pixels, clear of the taskbar."""
+    w, h = size
     right = corner.endswith("right")
     bottom = corner.startswith("bottom")
-    x = screen_w - WIDTH - MARGIN if right else MARGIN
-    y = screen_h - HEIGHT - MARGIN - TASKBAR if bottom else MARGIN
+    x = screen_w - w - MARGIN if right else MARGIN
+    y = screen_h - h - MARGIN - TASKBAR if bottom else MARGIN
     return max(0, x), max(0, y)
+
+
+def wants_big(view: View) -> bool:
+    """A full answer to read (details, or a long reply): the bigger window."""
+    return bool(view.details) or len(view.reply) > LONG_REPLY
 
 
 # --- the demo: fake turns, so the states can be seen without speaking ---------------------
@@ -224,6 +234,23 @@ DEMO: list[tuple[float, View]] = [
             alerts=({"id": "demo", "title": "Reminder", "text": "Stretch (demo)", "at": DEMO_AT},),
         ),
     ),
+    (
+        4.0,
+        View(
+            True,
+            "done",
+            "demo5",
+            "hotkey",
+            heard="Which tabs do I have open?",
+            reply="You have four tabs open in Brave. The rest is on screen.",
+            details=(
+                "- Python docs: https://docs.python.org/3/\n"
+                "- Demo music (playing)\n"
+                "- Example page: https://example.com/\n"
+                "- Another demo tab"
+            ),
+        ),
+    ),
     (0.0, View(True, "done", "demo4", "hotkey", heard="That's the demo.", reply="Closing soon.")),
 ]
 
@@ -257,6 +284,8 @@ class Api:
         self._auto.pin(pinned)
         self._window: Any = None
         self._seen = ""
+        self._big = False
+        self.screen = (1280, 800)
         self._closing = False
 
     def view(self) -> dict[str, Any]:
@@ -274,9 +303,40 @@ class Api:
                 self._seen = key
                 with contextlib.suppress(OSError):
                     runtime.write_json_atomic(self._cfg.runtime_dir / SEEN, {"key": key})
+        big = wants_big(v)
+        if big != self._big:
+            self._big = big
+            threading.Thread(target=self._resize, args=(big,), daemon=True).start()
         if close:
             self.close()
         return data
+
+    def _resize(self, big: bool) -> None:
+        """Grow for a full answer, back to small for the next turn, keeping to the corner."""
+        if self._window is None:
+            return
+        size = (BIG_WIDTH, BIG_HEIGHT) if big else (WIDTH, HEIGHT)
+        x, y = position(*self.screen, self._cfg.voice.popup_position, size)
+        with contextlib.suppress(Exception):
+            self._window.resize(*size)
+            self._window.move(x, y)
+
+    def open_link(self, url: str) -> bool:
+        """A link in an answer: opened in your browser (through browser control when it's
+        connected). Web addresses only."""
+        url = str(url)
+        if not url.startswith(("http://", "https://")):
+            return False
+        from personal_os.browser import control
+
+        try:
+            control.send(self._cfg.runtime_dir, "tabs.open", {"url": url},
+                         browser=self._cfg.actions.browser, timeout_s=5)  # fmt: skip
+        except Exception:
+            from personal_os.interfaces.tray import open_url
+
+            open_url(url)
+        return True
 
     def dismiss(self, alert_id: str) -> bool:
         """Dismiss a reminder shown in the popup."""
@@ -394,6 +454,7 @@ def _run(cfg: Config, *, demo: bool, pinned: bool = False) -> int:
         background_color="#1d1d20",
     )
     api._window = window
+    api.screen = (sw, sh)
     webview.start(gui="edgechromium", private_mode=True, debug=False)
     return 0
 

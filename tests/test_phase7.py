@@ -85,12 +85,12 @@ def test_spoken_replies_are_short():
     from personal_os.voice.main import spoken
 
     long = "One. Two. Three. Four."
-    assert spoken(long) == "One. Two. The rest is on the dashboard."
+    assert spoken(long) == "One. Two. The rest is on screen."
     assert spoken("Just one.") == "Just one."
     listing = "You watched 5 videos:\n- 18:47 'A' (15m)\n- 19:18 'B'\n- 19:21 'C'\n- 19:28 'D'"
     assert spoken(listing) == (
         "You watched 5 videos: 18:47 'A' (15m); 19:18 'B'; 19:21 'C'. "
-        "There's more on the dashboard."
+        "The rest is on screen."
     )
 
 

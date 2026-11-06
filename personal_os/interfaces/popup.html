@@ -31,6 +31,11 @@ main { flex:1; padding:0 12px; overflow-y:auto; scrollbar-width:thin;
 footer { display:flex; gap:6px; padding:6px 12px 10px; align-items:center; }
 #note { color:var(--muted); font-size:12px; flex:1; }
 .hidden { display:none; }
+#details { margin:8px 0; padding:8px 10px; border:1px solid var(--line); border-radius:8px;
+  background:var(--bg); font-size:13px; }
+#details .row { margin:2px 0; white-space:pre-wrap; word-wrap:break-word; }
+#details .row.item::before { content:"• "; color:var(--muted); }
+#details a { color:var(--accent); cursor:pointer; text-decoration:underline; }
 .alert { border:1px solid var(--warn); border-radius:8px; padding:6px 8px; margin:6px 0;
   display:flex; gap:8px; align-items:flex-start; }
 .alert .body { flex:1; } .alert b { color:var(--warn); } .alert .when { color:var(--muted); font-size:12px; }
@@ -69,6 +74,7 @@ footer { display:flex; gap:6px; padding:6px 12px 10px; align-items:center; }
   <div id="heardbox" class="hidden"><span class="who">You</span><div id="heard" class="line"></div></div>
   <div id="question" class="line hidden"></div>
   <div id="replybox" class="hidden"><span class="who">Reply</span><div id="reply" class="line"></div></div>
+  <div id="details" class="hidden"></div>
   <div id="error" class="line hidden"></div>
 </main>
 <footer>
@@ -131,6 +137,37 @@ function renderAlerts(alerts) {
   }
 }
 
+let lastDetails = null;
+const URL_RE = /(https?:\/\/[^\s<>"')\]]+)/g;
+
+function renderDetails(text) {
+  if (text === lastDetails) return;
+  lastDetails = text;
+  const box = $("details");
+  box.replaceChildren();
+  box.classList.toggle("hidden", !text);
+  for (const raw of (text || "").split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const row = document.createElement("div");
+    const item = /^([-*•]|\d+[.)]|\[\d+\])\s+/.test(line);
+    row.className = "row" + (item ? " item" : "");
+    const body = item ? line.replace(/^([-*•]|\d+[.)])\s+/, "") : line;
+    let at = 0;
+    for (const m of body.matchAll(URL_RE)) {  // links built as elements: text is never HTML
+      row.append(document.createTextNode(body.slice(at, m.index)));
+      const a = document.createElement("a");
+      a.textContent = m[0].length > 60 ? m[0].slice(0, 57) + "…" : m[0];
+      a.title = m[0];
+      a.onclick = () => window.pywebview.api.open_link(m[0]);
+      row.append(a);
+      at = m.index + m[0].length;
+    }
+    row.append(document.createTextNode(body.slice(at)));
+    box.append(row);
+  }
+}
+
 function render(v) {
   const alerts = v.alerts || [];
   const alertOnly = alerts.length > 0 && !ACTIVE.includes(v.state);
@@ -151,6 +188,7 @@ function render(v) {
   show("question", v.question);
   box("reply", v.reply);
   show("error", v.error);
+  renderDetails(alertOnly ? "" : v.details);
   $("pin").setAttribute("aria-pressed", v.pinned ? "true" : "false");
 }
 

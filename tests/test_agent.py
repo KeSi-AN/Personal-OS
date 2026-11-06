@@ -377,3 +377,13 @@ def test_fast_actions_say_first_then_act(home: Path, config: Config, monkeypatch
     reply = v.fast("open calculator")
     assert order[:2] == ["say Opening Calculator.", "run open_app"]
     assert reply == v.announced  # respond() won't say it a second time
+
+
+def test_read_results_become_on_screen_details(home: Path, config: Config, monkeypatch):
+    fake_now(monkeypatch, "brave tabs (2): Docs; Music")
+    env = Env(home, config)
+    script = Script(use(("now", {})), answer("You have two tabs open."))
+    r = agent.respond("which tabs?", env.ex, FakeProvider(script))
+    assert r.reply == "You have two tabs open." and "Docs; Music" in r.details
+    script = Script(answer("Short answer."))
+    assert agent.respond("hi", env.ex, FakeProvider(script)).details == ""

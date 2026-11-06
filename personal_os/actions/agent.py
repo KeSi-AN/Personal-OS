@@ -63,6 +63,8 @@ Which tool:
 - open apps, volume, screenshot, notes, files -> the matching tool
 
 reply is spoken aloud: one to three short, natural sentences. No lists, no markdown.
+details (optional) is shown on screen, not spoken: the full list, links or steps when the
+answer is longer than a spoken reply. Leave it empty for short answers.
 After tool results arrive, answer from them; say what you did or found.
 Several requests in one sentence ("pause this and play X"): make all the calls in the same step.
 Use the earlier conversation for "it", "those", "that one", "the first three": it says what was
@@ -102,6 +104,7 @@ DECISION: Any = Literal["answer", "use_tools"]
 
 class FinalAnswer(BaseModel):
     reply: str = Field(min_length=1)
+    details: str = ""
 
 
 def agent_schema(executor: Executor) -> type[BaseModel]:
@@ -115,6 +118,7 @@ def agent_schema(executor: Executor) -> type[BaseModel]:
         decide=(DECISION, ...),
         calls=(list[call], Field(default_factory=list, max_length=MAX_CALLS)),
         reply=(str, ""),
+        details=(str, ""),
     )
     return model
 
@@ -126,6 +130,7 @@ class AgentReply:
     tainted: bool = False
     steps: int = 0
     error: str | None = None
+    details: str = ""  # shown in the popup, not spoken: lists, links, evidence
 
 
 def agent_prompt(executor: Executor) -> str:
@@ -185,6 +190,7 @@ def respond(
                 )  # fmt: skip
                 out.steps = step
                 out.reply = clean(answer.reply, 600)
+                out.details = answer.details
                 break
             plan: Any = provider.chat_json(
                 system, transcript, schema, validate=check, temperature=0.2, max_tokens=700
@@ -196,6 +202,7 @@ def respond(
         out.steps = step
         if plan.decide == "answer" or not plan.calls:
             out.reply = clean(plan.reply or "", 600)
+            out.details = getattr(plan, "details", "") or ""
             if out.reply or not gathered:
                 break
             final_only = True  # results but no words: one more call, answer only
@@ -233,6 +240,7 @@ def respond(
                 return out
         if fresh and all(o.tool == "recall" and o.ok for o in fresh) and len(fresh) == 1:
             out.reply = str(fresh[0].message)
+            out.details = _data(fresh[0])  # the answer with its evidence
             break  # the cited answer is the reply: no second model call
         if not fresh:
             final_only = True  # it only repeated itself: answer from what it has
@@ -240,6 +248,9 @@ def respond(
         gathered.extend(results)
         transcript = f"{user}\n\n" + CONTINUE.format(results="\n\n".join(gathered))
     out.reply = grounded(out.reply, out.outcomes, executor)
+    if not out.details:  # what the reply was built from, to read in full on screen
+        shown = [_data(o) for o in out.outcomes if o.ok and o.tool in DETAIL_TOOLS]
+        out.details = "\n\n".join(x for x in shown if x)[:DETAILS_MAX]
     if not out.reply:
         acts = [
             o
@@ -292,6 +303,17 @@ def announcement(tool: str, args: dict[str, Any]) -> str:
     if tool == "set_volume" and args.get("percent") is not None:
         return f"Volume {args.get('percent')}."
     return ""
+
+
+DETAILS_MAX = 4000
+# Read tools whose results are worth showing in full when the spoken reply summarises them.
+DETAIL_TOOLS = {"now", "list_reminders", "conversation", "recall", "browser_read", "whats_playing",
+                "search_context", "calendar_today", "mail_unread", "list_folder", "about_me",
+                "remembered_facts"}  # fmt: skip
+
+
+def _data(o: Outcome) -> str:
+    return clean(str(o.result.data), DETAILS_MAX) if o.result and o.result.data else ""
 
 
 def grounded(reply: str, outcomes: list[Outcome], executor: Executor) -> str:

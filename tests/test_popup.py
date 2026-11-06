@@ -254,7 +254,7 @@ def test_view_from_status():
     assert v.paused and v.killed
     assert set(v.as_dict()) == {
         "voice_running", "state", "turn_id", "trigger", "heard", "reply",
-        "question", "error", "paused", "killed", "alerts",
+        "question", "error", "paused", "killed", "alerts", "details",
     }  # fmt: skip
     err = view_from({"running": True, "error": "hotkey taken"}, paused=False, killed=False)
     assert err.error == "hotkey taken"
@@ -372,3 +372,49 @@ def test_api_close_and_pin_without_a_window(config: Config):
     api.close()  # no window yet: nothing to do, no error
     data = api.view()
     assert data["state"] == "listening" and data["pinned"] is False and data["new_turn"] is True
+
+
+# --- 9j: the whole answer on screen -----------------------------------------------------------
+
+
+def test_big_window_for_full_answers():
+    assert popup.wants_big(View(True, "done", "t", details="- a\n- b"))
+    assert popup.wants_big(View(True, "done", "t", reply="x" * 300))
+    assert not popup.wants_big(View(True, "done", "t", reply="Opening Brave."))
+    assert popup.position(1920, 1080, "bottom-right", (popup.BIG_WIDTH, popup.BIG_HEIGHT)) == (
+        1920 - popup.BIG_WIDTH - 20,
+        1080 - popup.BIG_HEIGHT - 20 - popup.TASKBAR,
+    )
+
+
+def test_an_answer_to_read_stays_up_longer():
+    a = AutoClose(5)
+    detailed = View(True, "done", "t1", details="- a long list")
+    a.step(detailed, 0)
+    assert a.step(detailed, 10)[0] is False  # time to read it
+    assert a.step(detailed, 20)[0] is True
+
+
+def test_details_reach_the_view(config: Config):
+    v = view_from(
+        {"running": True, "turn": {"id": "t", "state": "done", "details": "- one"}},
+        paused=False, killed=False,
+    )  # fmt: skip
+    assert v.details == "- one"
+
+
+def test_details_are_built_as_elements_and_links_open_safely(config: Config):
+    html = popup.page()
+    assert "renderDetails" in html and "createTextNode" in html
+    assert "innerHTML = text" not in html
+    api = popup.Api(config, demo=True)
+    assert api.open_link("javascript:alert(1)") is False  # web addresses only
+    assert api.open_link("file:///C:/secret") is False
+
+
+def test_spoken_points_to_the_screen():
+    from personal_os.voice.main import spoken
+
+    long = "One. Two. Three. Four."
+    assert spoken(long) == "One. Two. The rest is on screen."
+    assert "dashboard" not in spoken("Heading\n- a\n- b\n- c\n- d\n- e")

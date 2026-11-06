@@ -585,6 +585,8 @@ class Voice:
         ex = self.executor(conn, provider)
         context = self.convo.for_planner()
         result = agent.respond(request, ex, provider, context=context, announce=self.announce)
+        if self.turn is not None and result.details:
+            self.turn["details"] = result.details  # the popup shows it in full
         acted = [o for o in result.outcomes if o.tool in agent.ANNOUNCED]
         if self.announced and acted and all(o.ok for o in acted):
             self.announced = result.reply  # said up front; the popup shows the full reply
@@ -892,17 +894,17 @@ MAX_FOLLOWUPS = 8  # a conversation ends after this many follow-ups without a pr
 
 
 def spoken(reply: str) -> str:
-    """What's said out loud: the first two sentences (or a list's heading and first items),
-    pointing to the dashboard for the rest. The full answer is still saved for the dashboard."""
+    """What's said out loud: the first two sentences (or a list's heading and first items).
+    The whole answer is in the popup, which says so."""
     lines = [ln.strip() for ln in reply.splitlines() if ln.strip()]
     if len(lines) > 1:  # a list: heading plus the first three items
         items = [ln.lstrip("- ").strip() for ln in lines[1:4]]
-        more = " There's more on the dashboard." if len(lines) > 4 else ""
+        more = " The rest is on screen." if len(lines) > 4 else ""
         return lines[0] + " " + "; ".join(items) + "." + more
     parts = re.split(r"(?<=[.!?])\s+", reply.strip())
     if len(parts) <= SPOKEN_SENTENCES:
         return reply
-    return " ".join(parts[:SPOKEN_SENTENCES]) + " The rest is on the dashboard."
+    return " ".join(parts[:SPOKEN_SENTENCES]) + " The rest is on screen."
 
 
 HISTORY = "voice_history.jsonl"
