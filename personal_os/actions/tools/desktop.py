@@ -50,7 +50,7 @@ class UrlArgs(Args):
 
 class OpenUrl(Tool):
     name = "open_url"
-    summary = "open a web page (http/https) in your default browser"
+    summary = "open a web page in the default browser (prefer browser_open: it uses your browser)"
     tier = Tier.LOW
     reversible = True
     network = True
@@ -246,7 +246,10 @@ INVERSE = {"play_pause": "play_pause", "next": "previous", "previous": "next", "
 
 class Media(Tool):
     name = "media"
-    summary = "music and sound: play/pause, next or previous track, mute, sound volume up/down"
+    summary = (
+        "system media keys: play/pause, next or previous track for whatever is already loaded, "
+        "mute, sound volume up/down (it can't choose a song: use play_media)"
+    )
     tier = Tier.LOW
     reversible = True
     args_model = MediaArgs

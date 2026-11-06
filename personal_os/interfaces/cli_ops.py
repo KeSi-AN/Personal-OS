@@ -230,6 +230,14 @@ def doctor() -> None:
         host = browser_install.status(b)
         reg = "registered" if host.registered else "not registered"
         typer.echo(f"browser    {b:<7} native host {reg}")
+    from personal_os.browser import control as browser_control
+
+    live = browser_control.connected(cfg.runtime_dir)
+    typer.echo(
+        "control    "
+        + (f"{', '.join(live)} connected (Donna can open, play, read and click)" if live else
+           "no browser connected (open Brave with the Personal OS extension, version 1.1+)")
+    )  # fmt: skip
     typer.echo(f"autostart  {'enabled' if autostart.is_enabled() else 'disabled'}")
     keys = h.get("hotkeys") or {}
     if keys:

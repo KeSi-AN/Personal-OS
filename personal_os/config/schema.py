@@ -175,6 +175,7 @@ class CommandSpec(_Section):
 
 class ActionsConfig(_Section):
     auto_allow_tiers: list[int] = [0, 1]
+    browser: str = "brave"  # which connected browser Donna uses (brave, chrome, edge)
     allowed_paths: list[Path] = []
     # When false, actions touch only allowed_paths: watched folders are captured, not acted on.
     act_in_watched_roots: bool = True

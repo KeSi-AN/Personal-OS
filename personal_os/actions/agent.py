@@ -53,7 +53,10 @@ Which tool:
 - what's open / what am I doing / which tabs / what's in front -> now
 - what did I do / where did I leave off / how long did I spend -> recall
 - reminders -> list_reminders, set_reminder, update_reminder, cancel_reminder
-- open, play, volume, screenshot, notes, files -> the matching tool
+- play a song or video by name -> play_media (never media: that only presses play/pause)
+- search the web, open a site -> browser_open; this page / summarise this tab -> browser_read
+- pause, next, what's playing -> browser_media / whats_playing; switch or close tabs -> browser_tab
+- open apps, volume, screenshot, notes, files -> the matching tool
 
 reply is spoken aloud: one to three short, natural sentences. No lists, no markdown.
 After tool results arrive, answer from them; say what you did or found.
@@ -67,6 +70,8 @@ User: which tabs do I have open?
 {{"decide": "use_tools", "calls": [{{"tool": "now", "args": {{}}}}], "reply": ""}}
 User: what was I working on yesterday afternoon?
 {{"decide": "use_tools", "calls": [{{"tool": "recall", "args": {{"question": "what was I working on yesterday afternoon?"}}}}], "reply": ""}}
+User: play When I Was Your Man by Bruno Mars
+{{"decide": "use_tools", "calls": [{{"tool": "play_media", "args": {{"query": "When I Was Your Man Bruno Mars", "site": "youtube music"}}}}], "reply": ""}}
 User: remind me in 20 minutes to drink water
 {{"decide": "use_tools", "calls": [{{"tool": "set_reminder", "args": {{"text": "drink water", "minutes": 20}}}}], "reply": ""}}
 """

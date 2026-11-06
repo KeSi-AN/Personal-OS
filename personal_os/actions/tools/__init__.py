@@ -3,7 +3,16 @@
 from __future__ import annotations
 
 from personal_os.actions.base import Registry, Tool
-from personal_os.actions.tools import agent, commands, desktop, files, google_tools, notify, read
+from personal_os.actions.tools import (
+    agent,
+    browser,
+    commands,
+    desktop,
+    files,
+    google_tools,
+    notify,
+    read,
+)
 from personal_os.config.schema import Config
 
 
@@ -14,6 +23,13 @@ def build_registry(config: Config | None = None) -> Registry:
         agent.Recall(),
         agent.ListReminders(),
         agent.Memory(),
+        browser.BrowserOpen(),
+        browser.PlayMedia(),
+        browser.BrowserTab(),
+        browser.BrowserMedia(),
+        browser.WhatsPlaying(),
+        browser.BrowserRead(),
+        browser.BrowserAct(),
         read.SearchContext(),
         read.ReadFile(),
         read.ListFolder(),

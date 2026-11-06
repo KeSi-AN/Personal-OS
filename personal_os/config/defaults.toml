@@ -125,6 +125,7 @@ enabled = false            # phone access (phase 6): HTTPS + per-device pairing
 port = 47822
 
 [actions]
+browser = "brave"          # the browser Donna controls through the extension (brave, chrome, edge)
 auto_allow_tiers = [0, 1]  # only for requests you make directly; see DESIGN.md section 6.3
 # Folders actions may touch besides watched_roots and the notes/screenshots folders.
 allowed_paths = []
