@@ -65,7 +65,7 @@ async function act(path, body, reload) { const r = await api(path, body);
 """
 
 NAV = [
-    ("/", "Today"), ("/timeline", "Timeline"), ("/projects", "Projects"), ("/ask", "Ask"),
+    ("/", "← New dashboard"), ("/old", "Today (old)"), ("/timeline", "Timeline"), ("/projects", "Projects"), ("/ask", "Ask"),
     ("/inbox", "Inbox"), ("/actions", "Actions"), ("/memory", "Memory"), ("/privacy", "Privacy"),
 ]  # fmt: skip
 PHONE_NAV = {"/", "/timeline", "/projects", "/ask"}

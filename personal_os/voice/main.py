@@ -915,6 +915,7 @@ def record_history(runtime_dir: Path, entry: dict[str, Any]) -> None:
     """The last few exchanges, on this laptop only (runtime folder), for `voice log` and the
     dashboard. Older lines are dropped."""
     path = runtime_dir / HISTORY
+    path.parent.mkdir(parents=True, exist_ok=True)
     lines = path.read_text("utf-8").splitlines() if path.exists() else []
     lines = [*lines, json.dumps(entry, ensure_ascii=False)][-HISTORY_KEEP:]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

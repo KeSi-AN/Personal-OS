@@ -79,6 +79,7 @@ known-first-party = ["personal_os", "tests"]
 "tests/*" = ["E501"]
 # HTML templates read better unwrapped
 "personal_os/web/pages.py" = ["E501"]
+"personal_os/web/v2.py" = ["E501"]
 "personal_os/web/html.py" = ["E501"]
 # user-facing CLI messages read better on one line
 "personal_os/interfaces/cli_phase7.py" = ["E501"]

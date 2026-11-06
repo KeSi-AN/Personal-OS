@@ -45,6 +45,7 @@ SESSION_COOKIE = "pos_session"
 DEVICE_COOKIE = "pos_device"
 PHONE_ROUTES = {
     ("GET", "/"),
+    ("GET", "/p"),
     ("GET", "/timeline"),
     ("GET", "/projects"),
     ("GET", "/ask"),
@@ -168,7 +169,8 @@ def create_app(state: WebState, *, lan: bool = False) -> FastAPI:
         if host not in allowed_hosts():
             return JSONResponse({"detail": "wrong host"}, status_code=421)
         path, method = request.url.path, request.method
-        if lan and (method, path) not in PHONE_ROUTES:
+        phone_ok = (method, path) in PHONE_ROUTES or (method == "GET" and path.startswith("/p/"))
+        if lan and not phone_ok:
             return JSONResponse({"detail": "not available from a phone"}, status_code=403)
         if method != "GET":
             origin = request.headers.get("origin")
@@ -241,7 +243,7 @@ def create_app(state: WebState, *, lan: bool = False) -> FastAPI:
 
     # --- pages -------------------------------------------------------------------------------
 
-    @app.get("/", response_class=HTMLResponse)
+    @app.get("/old", response_class=HTMLResponse)
     def today() -> str:
         with state.db() as conn:
             return pages.today(state, conn, phone=lan)
@@ -353,6 +355,10 @@ def create_app(state: WebState, *, lan: bool = False) -> FastAPI:
 
     def defer(_prompt: str) -> bool:
         raise Deferred
+
+    from personal_os.web import v2
+
+    v2.register(app, state, executor, defer, lan=lan)  # dashboard v2: /, /p, /donna, /notes...
 
     @app.post("/api/do")
     def api_do(body: DoBody) -> dict[str, Any]:
