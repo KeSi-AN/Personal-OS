@@ -118,3 +118,20 @@ There's no port, and web pages can't reach this channel. Each connected browser 
 Reading a page counts as captured content, so a later action needs your yes, and page text can't be sent out by a later network call. Browser pages (`brave://`, the Web Store, the PDF viewer) are out of reach for any extension.
 
 The host learns which browser it's in from its process tree. Brave also reads Chrome's registration, so the launcher's argument alone said "chrome".
+
+## Next (requested 2026-11-07)
+
+| Phase | What | Why |
+|---|---|---|
+| 9i **Show, then say** | The popup shows the answer **before** Donna speaks: voice waits (at most about 0.5 s) for the popup to confirm it has drawn this turn's reply. For actions, she says what she's about to do ("Playing Circles by Post Malone") and **then** does it, and speaks again only if it fails. The agent gets a short spoken "on it" line from the tool's own description while a step runs. | You saw replies after hearing them, and heard "playing" after the music had already started |
+| 9j **A popup that shows the whole answer** | Long or structured answers (lists, tabs, links, evidence) expand the popup into a scrollable card with clickable links. Donna speaks a short version and says "it's on screen" instead of "the rest is on the dashboard". Pin keeps it open. | Answers were cut short with nowhere to read the rest |
+| 9k **Projects you curate** | Sources (links, browser tabs, whole tab groups, files), notes, to-dos and "resume" (reopen the project's tabs as a group), by voice ("add these tabs to Personal-OS"), through the extension's right-click **Add to project**, or on the dashboard. Attached sources teach the tracker which pages belong to which project; the model's guesses become suggestions. | The local model can't track projects precisely; you can, in one sentence |
+| 9l **Dashboard v2** | A new dashboard: Today (time spent, next up, where you left off, timeline), Projects (overview, sources, notes, to-dos, timeline, resume), Donna (the full conversation with evidence, actions and undo), Notes, Settings. The old dashboard is removed once the new one replaces it. Design: [DASHBOARD_V2.md](DASHBOARD_V2.md) | The current dashboard is about the system, not your day |
+| 9m **Donna knows herself** | An `about_me` tool: is the wake word on, which voice, the hotkeys, what's connected (doctor's facts). A `conversation` tool: "what did we talk about?" reads the conversation history, not your activity. | "Is the wake word active?" and "show me our recent chats" were answered by searching your activity |
+
+### Memory check (2026-11-07), and what it showed
+
+Shared memory works: follow-ups see both sides of the conversation, voice and typed. In the log, "the first three tabs" was resolved from the turn before. Two weaknesses showed up, to fix in 9i:
+
+- **She can repeat her own earlier mistake.** After the extension refused a command it didn't know yet ("unknown command tabs.group"), her reply copied her earlier wrong sentence word for word: "I can't group tabs… a feature of the browser itself". The prompt should say that earlier replies can be wrong, and that only this turn's tool results count. A false "I can't" should be corrected the way false "I did" claims already are.
+- **Copied context is guarded but noisy.** A call built from earlier words ("which: first three") needed a yes, as designed. It was declined, because the request had used "YouTube", not positions.
