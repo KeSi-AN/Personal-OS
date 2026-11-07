@@ -544,24 +544,27 @@ class Daemon:
 
     def _sync_project_sources(self) -> None:
         """Pages added from the browser's "Add to Personal OS project" go to the project inbox;
-        tab groups named like a project keep its sources in step (phase 9k)."""
+        tab groups named like a project keep its sources in step (phase 9k). Each item is its own
+        write: filing a link also teaches the tracker, which opens a transaction of its own."""
         from personal_os.projects import items
-        from personal_os.storage.db import transaction
+        from personal_os.projects.registry import get_project
 
         rt = self.config.runtime_dir
         inbox = rt / "browser" / "inbox"
         try:
-            with transaction(self.control_conn):
-                for f in sorted(inbox.glob("*.json")) if inbox.is_dir() else []:
-                    rec = runtime.read_json(f) or {}
-                    f.unlink(missing_ok=True)
-                    url = str(rec.get("url", ""))
-                    if url.startswith(("http://", "https://")):
-                        items.add(self.control_conn, self.clock, None, "link", url=url,
-                                  title=str(rec.get("title", "")), source="extension")  # fmt: skip
-                for f in (rt / "now").glob("tabs-*.json") if (rt / "now").is_dir() else []:
-                    tabs = (runtime.read_json(f) or {}).get("tabs") or []
-                    items.sync_groups(self.control_conn, self.clock, list(tabs))
+            items.publish_projects(self.control_conn, self.clock, rt)  # for the right-click menu
+            for f in sorted(inbox.glob("*.json")) if inbox.is_dir() else []:
+                rec = runtime.read_json(f) or {}
+                f.unlink(missing_ok=True)
+                url = str(rec.get("url", ""))
+                picked = get_project(self.control_conn, str(rec.get("project") or ""))
+                if url.startswith(("http://", "https://")):
+                    items.add(self.control_conn, self.clock, picked.id if picked else None,
+                              "link", url=url, title=str(rec.get("title", "")),
+                              source="extension")  # fmt: skip
+            for f in (rt / "now").glob("tabs-*.json") if (rt / "now").is_dir() else []:
+                tabs = (runtime.read_json(f) or {}).get("tabs") or []
+                items.sync_groups(self.control_conn, self.clock, list(tabs))
         except Exception as exc:  # never let this take the loop down
             _log.warning(
                 "project sources not synced", extra={"fields": {"exc_type": type(exc).__name__}}

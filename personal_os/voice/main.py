@@ -33,6 +33,7 @@ from personal_os.core import runtime
 from personal_os.core.clock import SystemClock
 from personal_os.core.logging import get_logger, setup_logging
 from personal_os.voice import dialogue, tts
+from personal_os.voice.audio import MIC_MUTED, mic_muted
 from personal_os.voice.stt import make_transcriber
 
 _log = get_logger("voice")
@@ -756,6 +757,13 @@ class Voice:
         try:
             if given:
                 pass  # a request already made: "no, at 5 pm instead"
+            elif trigger == "hotkey" and mic_muted():
+                # A muted mic records silence: say so, rather than "nothing heard".
+                entry["route"] = "mic muted"
+                entry["reply"] = MIC_MUTED
+                self.turn_update(reply=MIC_MUTED, state="speaking")
+                self.say(MIC_MUTED)
+                return False
             elif trigger == "followup":
                 self.speaker.earcon("more")  # softer: "anything else?"
                 text = self.listen(start_timeout_s=self.cfg.voice.followup_s)

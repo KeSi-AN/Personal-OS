@@ -9,6 +9,7 @@ memory and is never written to disk.
 
 from __future__ import annotations
 
+import contextlib
 import queue
 from collections import deque
 from collections.abc import Callable, Iterable
@@ -274,3 +275,28 @@ def _record_energy(
         return None
     a, b = span
     return np.concatenate(blocks[CALIBRATE_BLOCKS + a : CALIBRATE_BLOCKS + b + 1])
+
+
+MIC_MUTED = "Your microphone is muted in Windows. Unmute it and try again."
+
+
+def mic_muted() -> bool | None:
+    """Is Windows' default microphone muted (the mic-mute key, or quick settings)? None if it
+    can't be told. A muted mic records silence, which otherwise looks like "nothing heard"."""
+    try:
+        from ctypes import POINTER, cast
+
+        import comtypes
+        from comtypes import CLSCTX_ALL
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+
+        with contextlib.suppress(OSError):
+            comtypes.CoInitialize()  # this thread may not have COM yet
+        mic = AudioUtilities.GetMicrophone()
+        if mic is None:
+            return None
+        endpoint = mic.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+        vol = cast(endpoint, POINTER(IAudioEndpointVolume))
+        return bool(vol.GetMute())
+    except Exception:
+        return None

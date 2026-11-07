@@ -208,3 +208,63 @@ def test_export_delete_and_forget_cover_project_items(home: Path, config: Config
 
     forget(env.conn, T0 - timedelta(minutes=1), T0 + timedelta(minutes=1), env.clock, marker=False)
     assert items.items(env.conn, None) == []
+
+
+def test_a_pick_from_the_menu_goes_straight_to_its_project(home: Path, config: Config):
+    from personal_os.daemon import Daemon
+
+    env = Env(home, config)
+    pid = project(env)
+    host = Host(home, "brave")
+    host.handle(
+        {"type": "inbox", "url": "https://docs.python.org/3/", "title": "Docs", "project": pid}
+    )
+    host.handle({"type": "inbox", "url": "https://b.example/", "title": "Later", "project": ""})
+    host.handle(
+        {"type": "inbox", "url": "https://c.example/", "title": "Gone", "project": "deleted-one"}
+    )
+    fake = SimpleNamespace(config=env.config, control_conn=env.conn, clock=SimClock(T0))
+    Daemon._sync_project_sources(fake)  # type: ignore[arg-type]
+    assert [i.title for i in items.items(env.conn, pid)] == ["Docs"]
+    assert sorted(i.title for i in items.items(env.conn, None)) == [
+        "Gone",
+        "Later",
+    ]  # unknown: unfiled
+    # The menu's project list is published for the browser, and the host hands it over.
+    listed = host.handle({"type": "projects"})["projects"]
+    assert {"id": pid, "name": "Personal OS"} in listed
+
+
+def test_menu_lists_active_projects_only(home: Path, config: Config):
+    env = Env(home, config)
+    pid = project(env, "Manual one")  # made by you: always offered
+    from personal_os.storage.db import transaction
+
+    with transaction(env.conn):
+        env.conn.execute(
+            "INSERT INTO projects (id, name, source, created_at) VALUES ('old-repo', 'Old repo', 'auto', 0)"
+        )
+    names = [p["name"] for p in items.menu_projects(env.conn, env.clock)]
+    assert "Manual one" in names and "Old repo" not in names
+    items.add(env.conn, env.clock, "old-repo", "note", body="x")  # holding items: offered
+    assert "Old repo" in [p["name"] for p in items.menu_projects(env.conn, env.clock)]
+    assert pid
+
+
+def test_the_daemon_syncs_a_matching_tab_group(home: Path, config: Config):
+    """Through the daemon's own path: a nested transaction once made this fail silently."""
+    import json as _json
+
+    from personal_os.daemon import Daemon
+
+    env = Env(home, config)
+    pid = project(env)
+    now_dir = env.config.runtime_dir / "now"
+    now_dir.mkdir(parents=True, exist_ok=True)
+    (now_dir / "tabs-brave.json").write_text(_json.dumps({"browser": "brave", "tabs": TABS}))
+    fake = SimpleNamespace(config=env.config, control_conn=env.conn, clock=SimClock(T0))
+    Daemon._sync_project_sources(fake)  # type: ignore[arg-type]
+    assert sorted(i.title for i in items.items(env.conn, pid, ("tab",))) == [
+        "Agent design",
+        "MV3 docs",
+    ]

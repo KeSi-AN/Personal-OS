@@ -255,6 +255,14 @@ def doctor() -> None:
 
         vs = voice_status(cfg.runtime_dir)
         typer.echo(f"voice      {vs['state']}" + (f" ({vs['error']})" if vs.get("error") else ""))
+        from personal_os.voice.audio import mic_muted
+
+        muted = mic_muted()
+        typer.echo(
+            f"mic        {'MUTED in Windows' if muted else 'on' if muted is False else 'unknown'}"
+        )
+        if muted:
+            problems.append("the microphone is muted in Windows: voice hears only silence")
         if not vs.get("running"):
             problems.append("voice is on but its process isn't running")
         from personal_os.interfaces import popup

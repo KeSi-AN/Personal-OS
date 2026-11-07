@@ -16,6 +16,7 @@ written to runtime/browser/res/. Web pages can't reach this channel; nothing lis
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -23,6 +24,7 @@ import struct
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import IO, Any
 
@@ -31,7 +33,7 @@ from personal_os.config.loader import default_home
 HOST_NAME = "com.personalos.host"
 HOST_VERSION = "1.1.0"
 MAX_MESSAGE_BYTES = 1_000_000  # we never accept huge messages, whatever the protocol allows
-_ACCEPTED_TYPES = {"visit", "signal", "tabs", "result", "inbox"}
+_ACCEPTED_TYPES = {"visit", "signal", "tabs", "result", "inbox", "projects"}
 _ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 _BROWSERS = {"brave.exe": "brave", "chrome.exe": "chrome", "msedge.exe": "edge"}
 CMD_POLL_S = 0.15
@@ -100,6 +102,11 @@ class Host:
             return {"ok": True, "paused": self.paused(), "host_version": HOST_VERSION}
         if kind not in _ACCEPTED_TYPES:
             return {"ok": False, "error": "unsupported message", "paused": self.paused()}
+        if kind == "projects":  # the list for the right-click "Add to project" menu
+            data: dict[str, Any] = {}
+            with contextlib.suppress(OSError, ValueError):
+                data = json.loads((self.runtime / "browser" / "projects.json").read_text("utf-8"))
+            return {"ok": True, "paused": self.paused(), "projects": data.get("projects", [])}
         if kind == "result":
             self.write_result(msg)  # an answer to a command Donna sent: not capture
             return {"ok": True, "paused": self.paused()}
@@ -112,8 +119,12 @@ class Host:
             if url.startswith(("http://", "https://")):
                 d = self.runtime / "browser" / "inbox"
                 d.mkdir(parents=True, exist_ok=True)
-                rec = {"url": url[:2000], "title": str(msg.get("title", ""))[:200]}
-                (d / f"{time.time_ns()}-{os.getpid()}.json").write_text(json.dumps(rec), "utf-8")
+                rec = {"url": url[:2000], "title": str(msg.get("title", ""))[:200],
+                       "project": str(msg.get("project", ""))[:80]}  # fmt: skip
+                # Time first (filed in order), then a random part: Windows' clock is coarse, and two
+                # quick right-clicks must not share a name and overwrite each other.
+                name = f"{time.time_ns()}-{os.getpid()}-{uuid.uuid4().hex[:8]}.json"
+                (d / name).write_text(json.dumps(rec), "utf-8")
             return {"ok": True, "paused": False}
         if kind == "tabs":
             msg = {**msg, "browser": self.browser}  # Brave reports itself as Chrome

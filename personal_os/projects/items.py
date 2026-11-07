@@ -227,3 +227,35 @@ def sync_groups(conn: sqlite3.Connection, clock: Clock, tabs: list[dict[str, obj
             source="group")  # fmt: skip
         n += 1
     return n
+
+
+MENU_MAX = 12
+
+
+def menu_projects(conn: sqlite3.Connection, clock: Clock) -> list[dict[str, str]]:
+    """The projects worth offering in the browser's "Add to project" menu: worked on in the
+    last 30 days or holding items, most recent first."""
+    recent = to_ms(clock.now()) - 30 * 86_400_000
+    last = dict(conn.execute(
+        "SELECT project_id, MAX(ts_end) FROM sessions WHERE project_id IS NOT NULL GROUP BY 1"
+    ).fetchall())  # fmt: skip
+    held = {r[0] for r in conn.execute("SELECT DISTINCT project_id FROM project_items")}
+
+    def wanted(p: Project) -> bool:
+        return p.id in held or (last.get(p.id) or 0) >= recent or p.source == "manual"
+
+    keep = [p for p in load_projects(conn) if p.id != "none" and wanted(p)]
+    keep.sort(key=lambda p: -(last.get(p.id) or 0))
+    return [{"id": p.id, "name": p.name} for p in keep[:MENU_MAX]]
+
+
+def publish_projects(conn: sqlite3.Connection, clock: Clock, runtime_dir: object) -> None:
+    from pathlib import Path
+
+    from personal_os.core import runtime
+
+    d = Path(str(runtime_dir)) / "browser"
+    d.mkdir(parents=True, exist_ok=True)
+    data = {"projects": menu_projects(conn, clock)}
+    if runtime.read_json(d / "projects.json") != data:  # only when it changes
+        runtime.write_json_atomic(d / "projects.json", data)

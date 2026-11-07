@@ -387,3 +387,20 @@ def test_read_results_become_on_screen_details(home: Path, config: Config, monke
     assert r.reply == "You have two tabs open." and "Docs; Music" in r.details
     script = Script(answer("Short answer."))
     assert agent.respond("hi", env.ex, FakeProvider(script)).details == ""
+
+
+def test_a_muted_mic_is_said_not_heard_as_silence(home: Path, config: Config, monkeypatch):
+    import winsound
+
+    from personal_os.voice import main as voice_main
+    from personal_os.voice.main import history
+    from tests.test_phase7 import voice_for
+
+    monkeypatch.setattr(winsound, "Beep", lambda *_a: None)
+    monkeypatch.setattr(voice_main, "mic_muted", lambda: True)
+    env = Env(home, config)
+    v, h = voice_for(env, "this should never be heard")
+    v.respond("hotkey")
+    assert h.said == [voice_main.MIC_MUTED]
+    assert h.phrases == ["this should never be heard"]  # it didn't listen
+    assert history(env.config.runtime_dir)[-1]["route"] == "mic muted"

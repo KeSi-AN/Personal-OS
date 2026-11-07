@@ -35,6 +35,14 @@ def no_real_app_list(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def mic_not_muted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests never ask Windows whether this machine's microphone is muted."""
+    from personal_os.voice import main as voice_main
+
+    monkeypatch.setattr(voice_main, "mic_muted", lambda: False)
+
+
+@pytest.fixture(autouse=True)
 def no_real_popup(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
     """Tests never open the voice popup window; launches are recorded here instead."""
     from personal_os.interfaces import popup

@@ -63,6 +63,8 @@ function connect(): chrome.runtime.Port | null {
         void runCommand(String(msg.op), msg.args ?? {}).then((res) => port?.postMessage({ type: "result", id, ...res }));
         return;
       }
+      const listed = (msg as { projects?: { id: string; name: string }[] }).projects;
+      if (Array.isArray(listed)) addMenu(listed);
       if (typeof msg?.paused === "boolean") {
         setBadge(msg.paused ? "II" : "");
         void withState((st) => {
@@ -259,6 +261,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     for (const v of Object.values(st.visits)) send(toRecord(v, now, null, BROWSER));
   });
   void sendTabs();
+  askProjects();
 });
 
 // --- open tabs: what's open right now, for "what tabs do I have open?" ----------------------
@@ -303,20 +306,39 @@ chrome.tabGroups.onUpdated.addListener(() => scheduleTabs());
 
 // --- "Add to Personal OS project": right-click a page or a link -----------------------------
 // It goes to the project inbox; you file it (or Donna does) from there.
+// The submenu lists your active projects (asked of the native host, refreshed each minute);
+// "Unfiled" keeps it for later.
 const ADD_MENU = "pos-add-to-project";
+const PICK = "pos-add:"; // + project id ("" = unfiled)
+let menuKey = "";
 
-function addMenu(): void {
+function addMenu(projects: { id: string; name: string }[] = []): void {
+  const key = JSON.stringify(projects);
+  if (key === menuKey) return;
+  menuKey = key;
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({ id: ADD_MENU, title: "Add to Personal OS project", contexts: ["page", "link"] });
+    const contexts: ["page", "link"] = ["page", "link"];
+    chrome.contextMenus.create({ id: ADD_MENU, title: "Add to Personal OS project", contexts });
+    for (const p of projects) {
+      chrome.contextMenus.create({ id: PICK + p.id, parentId: ADD_MENU, title: p.name, contexts });
+    }
+    if (projects.length) chrome.contextMenus.create({ id: "pos-sep", parentId: ADD_MENU, type: "separator", contexts });
+    chrome.contextMenus.create({ id: PICK, parentId: ADD_MENU, title: "Unfiled (decide later)", contexts });
   });
 }
 
+function askProjects(): void {
+  connect()?.postMessage({ type: "projects" });
+}
+
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId !== ADD_MENU || tab?.incognito) return;
+  const id = String(info.menuItemId);
+  if (!id.startsWith(PICK) || tab?.incognito) return;
   const url = info.linkUrl ?? info.pageUrl ?? tab?.url;
   if (!isTrackable(url)) return;
   const title = info.linkUrl ? (info.selectionText ?? info.linkUrl) : (tab?.title ?? "");
-  send({ v: 1, type: "inbox", url, title: String(title).slice(0, 200), at: new Date().toISOString() });
+  const project = id.slice(PICK.length);
+  send({ v: 1, type: "inbox", url, title: String(title).slice(0, 200), project, at: new Date().toISOString() });
 });
 
 async function initFocus(): Promise<void> {
@@ -341,6 +363,7 @@ function boot(): void {
   void initFocus();
   scheduleTabs();
   addMenu();
+  askProjects();
 }
 
 chrome.runtime.onStartup.addListener(boot);
