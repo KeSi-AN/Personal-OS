@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Any
 
+from personal_os.context.evidence import own_commit
 from personal_os.core.clock import Clock, from_ms, to_ms
 from personal_os.storage.db import transaction
 
@@ -57,11 +58,16 @@ def build_sessions(conn: sqlite3.Connection, start: datetime, end: datetime) -> 
     n = max(0, (end_ms - start_ms) // BUCKET_MS + 1)
     weight: list[Counter[str]] = [Counter() for _ in range(n)]
     rows = _rows(conn, start_ms, end_ms)
+    # While you're away (no input for 5 minutes, locked, asleep), files changing, pages
+    # loading and repos updating aren't you working: an assistant or a sync did them.
+    away = [(r["ts_start"], r["ts_stop"]) for r in rows if r["source"] == "idle"]
     for r in rows:
         if r["source"] in ("system", "idle"):
             continue
         pid = r["project_id"] or UNKNOWN
         a, b = max(r["ts_start"], start_ms), min(r["ts_stop"], end_ms)
+        if r["source"] != "window" and any(x <= r["ts_start"] < y for x, y in away):
+            continue
         if r["source"] == "window" and b > a:
             for i in range(
                 (a - start_ms) // BUCKET_MS, min(n - 1, (b - start_ms) // BUCKET_MS) + 1
@@ -74,6 +80,11 @@ def build_sessions(conn: sqlite3.Connection, start: datetime, end: datetime) -> 
             i = (r["ts_start"] - start_ms) // BUCKET_MS
             if 0 <= i < n:
                 weight[i][pid] += POINT_WEIGHT_MS
+    for w in weight:  # a minute holds at most a minute: a page visit on top of the window
+        total = sum(w.values())  # it was in doesn't make the minute longer
+        if total > BUCKET_MS:
+            for k in w:
+                w[k] = w[k] * BUCKET_MS // total
     labels: list[str | None] = [w.most_common(1)[0][0] if w else None for w in weight]
 
     sessions: list[Session] = []
@@ -156,6 +167,7 @@ def _session(
     pages: dict[str, int] = {}
     commands = failed = 0
     commits: list[str] = []
+    pulled = 0
     first = last = None
     for r in rows:
         if not (lo <= r["ts_start"] < hi) and not (r["ts_start"] < lo < r["ts_stop"]):
@@ -178,7 +190,10 @@ def _session(
             commands += 1
             failed += p.get("success") is False
         elif r["source"] == "git" and r["type"] == "commit":
-            commits.append((p.get("message") or "").splitlines()[0][:120])
+            if own_commit(p):
+                commits.append((p.get("message") or "").splitlines()[0][:120])
+            else:
+                pulled += 1  # brought in by a pull: not work done in this session
     stats = {
         "apps": {k: v // 1000 for k, v in apps.most_common(8)},
         "files": dict(files.most_common(10)),
@@ -186,6 +201,7 @@ def _session(
         "commands": commands,
         "failed_commands": failed,
         "commits": commits,
+        "pulled": pulled,
         "by_project_s": {k: v // 1000 for k, v in total.most_common(6)},
     }
     start = from_ms(max(lo, first or lo))

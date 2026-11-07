@@ -293,20 +293,35 @@ class CommitInfo:
     parents: int
     author_email: str
     message: str
+    committed_at: str = ""  # ISO committer date, with `with_date`
 
 
-def parse_log(raw: bytes) -> list[CommitInfo]:
-    """Parse `git log --format=%H%x1f%P%x1f%ae%x1f%B%x1e`."""
+def parse_reflog(raw: bytes) -> dict[str, str]:
+    """Parse `git reflog --format=%H%x1f%gs`: each sha's most recent reflog subject
+    ("commit: fix x", "pull origin main: Fast-forward", "checkout: moving from a to b")."""
+    out: dict[str, str] = {}
+    for line in raw.decode("utf-8", "replace").splitlines():
+        sha, _, subject = line.partition("\x1f")
+        if sha.strip() and sha.strip() not in out:
+            out[sha.strip()] = subject.strip()
+    return out
+
+
+def parse_log(raw: bytes, *, with_date: bool = False) -> list[CommitInfo]:
+    """Parse `git log --format=%H%x1f%P%x1f%ae%x1f%B%x1e`, or with `with_date`
+    `--format=%H%x1f%P%x1f%ae%x1f%cI%x1f%B%x1e`."""
     commits: list[CommitInfo] = []
     for rec in raw.decode("utf-8", "replace").split("\x1e"):
         rec = rec.strip("\n")
         if not rec:
             continue
         parts = rec.split("\x1f")
-        if len(parts) < 4:
+        if len(parts) < (5 if with_date else 4):
             continue
-        sha, parents, email, message = parts[0], parts[1], parts[2], parts[3]
+        sha, parents, email = parts[0], parts[1], parts[2]
+        date = parts[3].strip() if with_date else ""
+        message = "\x1f".join(parts[4:] if with_date else parts[3:])
         commits.append(
-            CommitInfo(sha.strip(), len(parents.split()), email.strip(), message.strip())
+            CommitInfo(sha.strip(), len(parents.split()), email.strip(), message.strip(), date)
         )
     return commits

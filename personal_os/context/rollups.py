@@ -94,7 +94,7 @@ def day_pack(conn: sqlite3.Connection, day: datetime) -> EvidencePack:
     start, end = day_bounds(day)
     lines = [summary_line(s) for s in load_summaries(conn, start, end)]
     rows = fetch_rows(conn, to_ms(start), to_ms(end), sources=("git", "terminal"))
-    lines += [x for x in lines_from_rows(rows) if x.kind in ("commit", "failed_command")]
+    lines += [x for x in lines_from_rows(rows) if x.kind in ("commit", "pulled", "failed_command")]
     return finalize(lines, 50)
 
 

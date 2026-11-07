@@ -15,6 +15,7 @@ from typing import Literal
 
 from personal_os.actions import reminders
 from personal_os.context import rollups
+from personal_os.context.evidence import OWN_COMMIT_SQL
 from personal_os.context.summarizer import load_summaries
 from personal_os.core.clock import Clock, to_ms
 from personal_os.projects.sessions import day_bounds, load_sessions
@@ -191,7 +192,7 @@ def build(
             b.lines.append("I didn't see any project work today.")
         commits = conn.execute(
             "SELECT count(*) FROM events WHERE source = 'git' AND type = 'commit' "
-            "AND ts_start >= ?",
+            f"AND ts_start >= ? AND {OWN_COMMIT_SQL}",
             (to_ms(today_start),),
         ).fetchone()[0]
         if commits:

@@ -26,6 +26,7 @@ from personal_os.observers.gitutil import (
     normalize_remote,
     parse_log,
     parse_numstat_z,
+    parse_reflog,
     parse_status_v2,
 )
 
@@ -33,6 +34,11 @@ VERSION = "1.0.0"
 HEADS_KEY = "git.heads"
 STATE_KEY = "git.state_hashes"
 MAX_NEW_COMMITS = 20
+# Reflog subjects of commits made in this repo; anything else that moved HEAD (a pull, a
+# merge fast-forward, a checkout, a reset) brought in commits made somewhere else.
+MADE_HERE = ("commit", "cherry-pick", "revert", "rebase")
+ARRIVED = ("pull", "merge", "checkout", "reset", "clone", "fetch")
+OLD_COMMIT_S = 15 * 60  # not in the reflog and committed this long before it appeared: arrived
 
 
 @dataclass
@@ -247,12 +253,19 @@ class GitObserver(BaseObserver):
             repo.root,
             "log",
             f"--max-count={MAX_NEW_COMMITS}",
-            "--format=%H%x1f%P%x1f%ae%x1f%B%x1e",
+            "--format=%H%x1f%P%x1f%ae%x1f%cI%x1f%B%x1e",
             f"{old}..{new}",
             check=False,
         )
+        reflog = parse_reflog(
+            await self.runner.run(
+                repo.root, "reflog", "-n", "100", "--format=%H%x1f%gs", "HEAD", check=False
+            )
+        )
+        tip = reflog.get(new, "")
         events = []
-        for c in reversed(parse_log(raw)):
+        for c in reversed(parse_log(raw, with_date=True)):
+            pulled = _arrived(reflog.get(c.sha), tip, c.committed_at, now)
             stats = parse_numstat_z(
                 await self.runner.run(
                     repo.root,
@@ -272,6 +285,8 @@ class GitObserver(BaseObserver):
                 branch=branch,
                 parents=c.parents,
                 author_is_me=bool(repo.my_email) and c.author_email.lower() == repo.my_email,
+                pulled=pulled,
+                committed_at=c.committed_at or None,
                 message=c.message[:2000],
                 files_changed=len(stats),
                 insertions=sum(a or 0 for a, _ in stats.values()),
@@ -292,3 +307,20 @@ class GitObserver(BaseObserver):
             "repos": len(self.repos),
             "unreadable": {r.root: r.unreadable for r in self.repos.values() if r.unreadable},
         }
+
+
+def _arrived(subject: str | None, tip: str, committed_at: str, now: datetime) -> bool:
+    """Did this commit arrive here (pull, merge, checkout) rather than get made here? By its
+    own reflog entry if it has one, else by how HEAD got to the new tip, else by its age: a
+    pull's fast-forward lists only the tip in the reflog, not the commits it brought."""
+    if subject is not None:
+        return not subject.startswith(MADE_HERE)
+    if tip.startswith(ARRIVED):
+        return True
+    if tip.startswith(MADE_HERE):
+        return False
+    try:
+        when = datetime.fromisoformat(committed_at)
+    except ValueError:
+        return False
+    return (now - when).total_seconds() > OLD_COMMIT_S

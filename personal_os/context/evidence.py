@@ -26,9 +26,22 @@ MIN_WINDOW_MS = 20_000
 MIN_PAGE_MS = 5_000
 MAX_FILE_LINES = 10  # more files than this: grouped by folder
 
+
+def own_commit(payload: dict[str, Any]) -> bool:
+    """A commit made here by you, not one a pull brought in or someone else's."""
+    return bool(payload.get("author_is_me", True)) and not payload.get("pulled", False)
+
+
+# SQL for the same test on stored git.commit events.
+OWN_COMMIT_SQL = (
+    "coalesce(json_extract(payload, '$.author_is_me'), 1) = 1 "
+    "AND coalesce(json_extract(payload, '$.pulled'), 0) = 0"
+)
+
 # Higher = kept first when a pack is over its line budget.
 PRIORITY = {
     "commit": 9,
+    "pulled": 6,
     "failed_command": 8,
     "summary": 8,
     "git_state": 7,
@@ -283,6 +296,30 @@ def lines_from_rows(
             if c["n"] > 1:
                 result += f" [{c['n']} runs, {c['failed']} failed]"
             line.text = f"`{cmd}` in {folder}{result}"
+
+        elif kind == "git.commit" and not own_commit(p):
+            # Brought in by a pull (or someone else's): one line per pull, never "you made".
+            msg = clean((p.get("message") or "").splitlines()[0] if p.get("message") else "", 140)
+            repo = _name(p.get("repo_root"))
+            same = next(
+                (
+                    x for x in reversed(out[-40:])
+                    if x.kind == "pulled" and x.project_id == pid
+                    and abs((ts - x.ts).total_seconds()) < 120
+                ),
+                None,
+            )  # fmt: skip
+            if same is None:
+                same = EvidenceLine(ts, "pulled", "", [], "", pid)
+                same.weight = 0
+                out.append(same)
+            same.event_ids.append(eid)
+            same.weight += 1
+            n = same.weight
+            same.text = (
+                f"pulled {n} commit{'s' * (n != 1)} into {repo}, made elsewhere or by someone "
+                f"else, not work done here (latest: '{msg}')"
+            )
 
         elif kind == "git.commit":
             msg = clean((p.get("message") or "").splitlines()[0] if p.get("message") else "", 140)

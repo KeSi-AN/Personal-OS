@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from personal_os.context import memory, usage
 from personal_os.context.evidence import (
+    OWN_COMMIT_SQL,
     EvidenceLine,
     EvidencePack,
     fetch_by_ids,
@@ -154,6 +155,8 @@ def _session_line(conn: sqlite3.Connection, s: Session) -> EvidenceLine:
         bits.append("files " + ", ".join(list(st["files"])[:4]))
     if st.get("commits"):
         bits.append("commits: " + "; ".join(st["commits"][:3]))
+    if st.get("pulled"):
+        bits.append(f"pulled {st['pulled']} commits made elsewhere (not work done here)")
     if st.get("commands"):
         bits.append(f"{st['commands']} commands ({st.get('failed_commands', 0)} failed)")
     ids = [
@@ -235,6 +238,8 @@ def _recent(
         params.append(before_ms)
     if failed_only:
         sql += " AND json_extract(payload, '$.success') = 0"
+    if source == "git" and type_ == "commit":
+        sql += f" AND {OWN_COMMIT_SQL}"  # what you did, not what a pull brought in
     ids = [r[0] for r in conn.execute(sql + " ORDER BY ts_start DESC LIMIT ?", [*params, n])]
     return lines_from_rows(fetch_by_ids(conn, ids))
 
@@ -330,7 +335,7 @@ def gather_activity(conn: sqlite3.Connection, q: ParsedQuestion, now: datetime) 
         )
     ]
     rows = fetch_rows(conn, to_ms(start), to_ms(end), project_id=pid, sources=("git", "terminal"))
-    lines += [x for x in lines_from_rows(rows) if x.kind in ("commit", "failed_command")]
+    lines += [x for x in lines_from_rows(rows) if x.kind in ("commit", "pulled", "failed_command")]
     return Gathered(finalize(lines, 60), facts, scope=scope)
 
 
@@ -665,7 +670,8 @@ def _facts_answer(q: ParsedQuestion, g: Gathered, reason: str) -> Answer:
     """No usable model output: say what the evidence shows, plainly."""
     sentences: list[tuple[str, list[int]]] = [(f, []) for f in g.facts]
     for line in g.pack.lines:
-        if line.kind in ("summary", "commit", "failed_command", "git_state") and len(sentences) < 8:
+        kinds = ("summary", "commit", "pulled", "failed_command", "git_state")
+        if line.kind in kinds and len(sentences) < 8:
             sentences.append((f"{line.kind.replace('_', ' ')}: {line.text}.", [line.ref]))
     if len(sentences) <= len(g.facts):
         for line in g.pack.lines[-6:]:

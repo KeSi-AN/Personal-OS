@@ -258,10 +258,33 @@ def test_sessions_split_on_gaps_and_absorb_short_detours(w: World):
     assert [s.project_id for s in sessions] == ["auth-service", "portfolio-site"]
     first, second = sessions
     assert first.start <= T0 + timedelta(minutes=1) and first.end >= T0 + timedelta(minutes=79)
-    # the 5-minute detour stays inside the session but is visible in its stats (plus 20 s
-    # credited for the portfolio-site commit and its state event at minute 0)
-    assert 0.8 < first.confidence < 1 and first.stats["by_project_s"]["portfolio-site"] == 320
+    # the 5-minute detour stays inside the session but is visible in its stats (plus a share
+    # of minute 0 for the portfolio-site commit and its state event: that minute was already
+    # a full minute in the auth-service window, so the commits get part of it, not 20 s more)
+    assert 0.8 < first.confidence < 1
+    assert 300 < first.stats["by_project_s"]["portfolio-site"] < 320
     assert second.start >= T0 + timedelta(minutes=109)
+
+
+def test_active_time_is_never_more_than_the_time_that_passed(w: World):
+    w.window(0, 30, "session.py - auth-service - Visual Studio Code")
+    for minute in range(30):  # saves, commits and state changes on top of the window time
+        w.commit(minute, AUTH, f"c{minute}")
+    w.resolve()
+    (s,) = build_sessions(w.conn, T0, T0 + timedelta(hours=1))
+    assert s.active_ms <= 31 * 60_000
+
+
+def test_activity_while_you_are_away_is_not_your_work(w: World):
+    """An assistant editing files and committing while you're idle kept the session "active"
+    for the whole evening (7 Nov: 3h16m active, with under two hours at the keyboard)."""
+    w.window(0, 20, "session.py - auth-service - Visual Studio Code")
+    w.add(Event.interval(Idle(threshold_s=300), w.at(20), w.at(60), observer_version="t"))
+    for minute in range(22, 60, 2):
+        w.commit(minute, AUTH, f"agent {minute}")
+    w.resolve()
+    sessions = build_sessions(w.conn, T0, T0 + timedelta(hours=2))
+    assert len(sessions) == 1 and sessions[0].active_ms <= 21 * 60_000
 
 
 def test_a_sliding_rebuild_window_never_cuts_a_session(w: World):

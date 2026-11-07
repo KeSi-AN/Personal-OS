@@ -269,6 +269,10 @@ class GitCommit(Payload):
     branch: str | None = None
     parents: int = 1
     author_is_me: bool = True
+    # Arrived here (a pull, a merge, a branch switch) rather than made here: the commits a
+    # `git pull` brings in aren't work you did today.
+    pulled: bool = False
+    committed_at: str | None = None  # when it was really committed (ISO), if known
     message: str = ""
     files_changed: int = 0
     insertions: int = 0

@@ -94,6 +94,8 @@ def _session_card(
         facts.append("files " + ", ".join(list(st["files"])[:5]))
     if st.get("commits"):
         facts.append("commits: " + "; ".join(st["commits"][:3]))
+    if st.get("pulled"):
+        facts.append(f"pulled {st['pulled']} commits")
     if st.get("commands"):
         facts.append(f"{st['commands']} commands ({st.get('failed_commands', 0)} failed)")
     detail = f"<div class='small muted'>{e(' · '.join(facts))}</div>" if facts else ""
