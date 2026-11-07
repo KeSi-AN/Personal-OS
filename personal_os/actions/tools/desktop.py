@@ -181,6 +181,76 @@ class OpenApp(Tool):
         return Result(f"Started {args.app}", data=f"pid {pid}")
 
 
+class CloseAppArgs(Args):
+    app: str = Field(min_length=2, max_length=120)
+
+
+def _app_names(app: str, ctx: ToolContext) -> tuple[set[str], set[str]]:
+    """What an app is called, normalized: (names its windows' titles may show, its program
+    names). "vs code" -> ({"vscode", "visualstudiocode"}, {"code"})."""
+    wanted = _norm(app)
+    names = {wanted}
+    programs: set[str] = set()
+    key = resolve_app(app, ctx.config.actions.apps)
+    if key is not None:
+        names.add(_norm(key))
+        argv = ctx.config.actions.apps[key]
+        if argv:
+            programs.add(_norm(Path(os.path.expandvars(argv[0])).stem))
+    # Every alias of the same app: "code", "visualstudiocode" -> "vscode".
+    target = _norm(APP_ALIASES.get(wanted, "")) or (_norm(key) if key else wanted)
+    names |= {a for a, t in APP_ALIASES.items() if _norm(t) == target}
+    names.add(target)
+    try:
+        found = installed_app(app, ctx.config)
+    except ActionError:
+        found = None
+    if found is not None:
+        names.add(_norm(found.name))
+        if found.exe:
+            programs.add(_norm(Path(found.exe).stem))
+    programs |= {n for n in names if n}  # "brave" is Brave.exe, "code" is Code.exe
+    return {n for n in names if len(n) >= 5}, programs
+
+
+class CloseApp(Tool):
+    name = "close_app"
+    summary = "close an open app (all its windows) by the app's name; it can still ask to save"
+    tier = Tier.LOW
+    reversible = True
+    args_model = CloseAppArgs
+
+    def _find(self, args: CloseAppArgs, ctx: ToolContext) -> list[Any]:
+        titles, programs = _app_names(args.app, ctx)
+        found = []
+        for w in ctx.desktop.app_windows():
+            if w.title == "Program Manager":  # the desktop itself (explorer.exe): never
+                continue
+            exe = _norm(Path(w.exe).stem) if w.exe else ""
+            title = _norm(w.title)
+            # By its program first; a title match only for a long, specific name, so
+            # "code" never closes a browser tab titled "Claude Code".
+            if (exe and exe in programs) or (
+                not exe and any(t and title.endswith(t) for t in titles)
+            ):
+                found.append(w)
+        if not found:
+            raise ActionError(f"{args.app} isn't open")
+        return found
+
+    def preview(self, args: CloseAppArgs, ctx: ToolContext) -> str:
+        found = self._find(args, ctx)
+        shown = "; ".join(w.title[:50] for w in found[:3])
+        return f"close {len(found)} {args.app} window{'s' if len(found) > 1 else ''}: {shown}"
+
+    def run(self, args: CloseAppArgs, ctx: ToolContext) -> Result:
+        found = self._find(args, ctx)
+        for w in found:
+            ctx.desktop.close_window(w.handle)
+        undo = {"tool": "open_app", "args": {"app": args.app}}
+        return Result(f"Closed {args.app}", data=f"{len(found)} window(s)", undo=undo)
+
+
 class NoteArgs(Args):
     title: str = Field(min_length=1, max_length=120)
     text: str = Field(max_length=20000)

@@ -8,9 +8,15 @@ Ollama's own choice and that choice is kept for the rest of the process.
 
 from __future__ import annotations
 
+import contextlib
+import http.client
 import json
+import queue
 import re
+import socket
+import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -18,7 +24,14 @@ from typing import Any
 from pydantic import ValidationError
 
 from personal_os.config.schema import LLMConfig
-from personal_os.llm.provider import Health, LLMError, LLMUnavailable, T, normalize
+from personal_os.llm.provider import (
+    Health,
+    LLMCancelled,
+    LLMError,
+    LLMUnavailable,
+    T,
+    normalize,
+)
 
 QUERY_INSTRUCTION = (
     "Instruct: Given a question about the user's past computer activity, retrieve the records "
@@ -36,6 +49,9 @@ class OllamaProvider:
         self.embed_model = cfg.embedding_model
         self._gpu_layers: int | None = None if cfg.gpu_layers < 0 else cfg.gpu_layers
         self.last_call: dict[str, Any] = {}  # attempts, tokens and time of the last chat_json
+        # Set by the caller (voice) to stop a chat mid-answer: "stop" while it's thinking.
+        # With it, chats stream, and setting it hangs up, which makes Ollama stop generating.
+        self.cancel: threading.Event | None = None
 
     # --- transport ---------------------------------------------------------------------------
 
@@ -59,6 +75,81 @@ class OllamaProvider:
         except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
             raise LLMUnavailable(f"ollama not reachable at {self.cfg.base_url}: {exc}") from None
 
+    def _chat_cancellable(self, body: dict[str, Any], cancel: threading.Event) -> dict[str, Any]:
+        """/api/chat, streamed, given up the moment `cancel` is set. Returns what the
+        unstreamed call would: the whole message, and the final counts."""
+        url = urllib.parse.urlsplit(self.cfg.base_url)
+        https = url.scheme == "https"
+        conn_cls = http.client.HTTPSConnection if https else http.client.HTTPConnection
+        conn = conn_cls(url.hostname or "127.0.0.1", url.port, timeout=self.cfg.timeout_s)
+        lines: queue.Queue[tuple[str, Any]] = queue.Queue()
+
+        def read() -> None:
+            try:
+                conn.request(
+                    "POST", url.path.rstrip("/") + "/api/chat",
+                    json.dumps(body | {"stream": True}).encode(),
+                    {"Content-Type": "application/json"},
+                )  # fmt: skip
+                resp = conn.getresponse()
+                if resp.status != 200:
+                    raw = resp.read()
+                    try:
+                        detail = json.loads(raw).get("error", "")
+                    except ValueError:
+                        detail = ""
+                    lines.put(("status", (resp.status, detail)))
+                    return
+                for line in resp:
+                    if line.strip():
+                        lines.put(("line", line))
+                lines.put(("end", None))
+            except Exception as exc:
+                lines.put(("error", exc))
+
+        threading.Thread(target=read, name="pos-llm-stream", daemon=True).start()
+        content: list[str] = []
+        try:
+            while True:
+                if cancel.is_set():
+                    raise LLMCancelled("stopped")
+                try:
+                    kind, value = lines.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                if kind == "status":
+                    code, detail = value
+                    if code == 404:
+                        raise LLMUnavailable(detail or "/api/chat: not found")
+                    raise LLMError(f"ollama {code}: {detail}"[:300])
+                if kind == "error":
+                    if cancel.is_set():
+                        raise LLMCancelled("stopped")
+                    raise LLMUnavailable(f"ollama not reachable at {self.cfg.base_url}: {value}")
+                if kind == "end":
+                    raise LLMError("ollama ended the answer early")
+                chunk = json.loads(value)
+                if chunk.get("error"):
+                    raise LLMError(f"ollama: {chunk['error']}"[:300])
+                content.append(chunk.get("message", {}).get("content", ""))
+                if chunk.get("done"):
+                    whole = {"role": "assistant", "content": "".join(content)}
+                    final: dict[str, Any] = {**chunk, "message": whole}
+                    return final
+        finally:
+            # Hanging up is what stops Ollama generating (and unblocks the reader).
+            with contextlib.suppress(Exception):
+                if conn.sock is not None:
+                    conn.sock.shutdown(socket.SHUT_RDWR)
+            with contextlib.suppress(Exception):
+                conn.close()
+
+    def _send(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        cancel = self.cancel
+        if path == "/api/chat" and cancel is not None:
+            return self._chat_cancellable(body, cancel)
+        return self._request(path, body, self.cfg.timeout_s)
+
     def _options(self, *, gpu: bool, num_ctx: int, temperature: float) -> dict[str, Any]:
         opts: dict[str, Any] = {"num_ctx": num_ctx, "temperature": temperature}
         if not gpu:
@@ -69,15 +160,15 @@ class OllamaProvider:
 
     def _with_gpu_fallback(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         try:
-            return self._request(path, body, self.cfg.timeout_s)
-        except LLMUnavailable:
+            return self._send(path, body)
+        except (LLMUnavailable, LLMCancelled):
             raise
         except LLMError:
             if body["options"].get("num_gpu") in (None, 0) or self._gpu_layers is None:
                 raise
             self._gpu_layers = None  # e.g. out of VRAM: let Ollama choose from now on
             body["options"].pop("num_gpu")
-            return self._request(path, body, self.cfg.timeout_s)
+            return self._send(path, body)
 
     # --- chat ----------------------------------------------------------------------------------
 
@@ -101,6 +192,8 @@ class OllamaProvider:
         stats |= {"seconds": 0.0, "error": None}
         self.last_call = stats
         for _attempt in range(2):
+            if self.cancel is not None and self.cancel.is_set():
+                raise LLMCancelled("stopped")
             stats["attempts"] += 1
             body = {
                 "model": self.chat_model,

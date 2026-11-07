@@ -190,7 +190,11 @@ def voice_status() -> None:
             typer.echo(f"             {audio['error']}")
     typer.echo(
         f"barge-in     {v.barge_in}"
-        + (" (talk over a reply, or say Donna)" if v.barge_in == "voice" else "")
+        + (
+            " (talk over a reply, or say Donna)"
+            if v.barge_in == "voice"
+            else " (say Donna or stop talking, or the hotkey)"
+        )
     )
     key = "key stored" if SpeechifyVoice.key() else "no key"
     typer.echo(

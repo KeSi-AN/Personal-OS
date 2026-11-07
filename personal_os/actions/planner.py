@@ -206,14 +206,19 @@ def borrowed(args: dict[str, Any], request: str, context: str) -> bool:
     isn't "asked for directly": it needs your confirmation (tier 1) like content-derived calls.
     "Do I have any reminders?" once became a new reminder copied from an earlier sentence."""
     asked, earlier = _words(request), _words(context)
+    # Spaces and punctuation aside: "vscode" was asked for in "close VS Code".
+    said = re.sub(r"[^a-z0-9]", "", request.lower())
     for value in args.values():
         if not isinstance(value, str) or len(value) < 4:
             continue
         words = _words(value)
         if not words:
             continue
+        mine = {w for w in words if w in asked or (len(w) >= 4 and w in said)}
+        if re.sub(r"[^a-z0-9]", "", value.lower()) in said:
+            continue  # the whole value is what you said, spaced differently
         # Mostly not in what you just said, and mostly in what was said before.
-        if len(words & asked) * 2 < len(words) and len(words & earlier) * 2 >= len(words):
+        if len(mine) * 2 < len(words) and len(words & earlier) * 2 >= len(words):
             return True
     return False
 

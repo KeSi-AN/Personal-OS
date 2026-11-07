@@ -25,6 +25,8 @@ class View:
     reply: str = ""
     question: str = ""
     details: str = ""  # the full answer for the screen (lists, links, evidence)
+    progress: str = ""  # what she's doing while thinking ("Using recall…")
+    dismissed: bool = False  # you stopped this turn: the window closes now
     error: str = ""
     paused: bool = False
     killed: bool = False
@@ -75,6 +77,8 @@ def view_from(
         reply=str(turn.get("reply", "")),
         question=str(turn.get("question", "")),
         details=str(turn.get("details", "")),
+        progress=str(turn.get("progress", "")),
+        dismissed=bool(turn.get("dismissed", False)),
         error=str(turn.get("error", "")) or str(status.get("error", "")),
         paused=paused,
         killed=killed,
@@ -124,5 +128,7 @@ class AutoClose:
             self.done_since = now
         if self.pinned:
             return False, new_turn
+        if view.dismissed:  # stopped: gone at once, not after the usual few seconds
+            return True, new_turn
         wait = max(self.seconds, READ_S) if view.details else self.seconds  # time to read it
         return now - self.done_since >= wait, new_turn

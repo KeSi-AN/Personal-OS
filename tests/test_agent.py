@@ -286,13 +286,13 @@ def test_about_me_and_conversation_tools(home: Path, config: Config):
 def test_actions_are_announced_before_they_run(home: Path, config: Config):
     env = Env(home, config)
     order: list[str] = []
-    real = env.ex.request
+    real = env.desktop.set_volume
 
-    def spy(tool: str, *a: Any, **k: Any) -> Any:
-        order.append(f"run {tool}")
-        return real(tool, *a, **k)
+    def spy(percent: int) -> None:  # the action itself, after any confirmation
+        order.append("run set_volume")
+        real(percent)
 
-    env.ex.request = spy  # type: ignore[method-assign]
+    env.desktop.set_volume = spy  # type: ignore[method-assign]
     script = Script(use(("set_volume", {"percent": 30})), answer("Volume is 30."))
     agent.respond(
         "volume 30", env.ex, FakeProvider(script), announce=lambda t: order.append(f"say {t}")

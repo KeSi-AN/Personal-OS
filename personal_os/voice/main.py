@@ -84,8 +84,14 @@ class Voice:
         # A request to run next, without listening: "no, at 5 pm instead" or "I wanted X".
         self.next_request: str | None = None
         self.announced = ""  # said before an action ran: not said again after
-        # Set by a hotkey press while thinking or speaking: stop talking, listen again.
+        # The current turn's stop signal: set by the hotkey or "Donna" while thinking or
+        # speaking (then a new turn listens), by "stop talking" and the popup's Stop / Esc
+        # (then nothing more happens), and by talking over a reply. Listening, the model call
+        # and playback all give up when it's set.
         self.interrupt = threading.Event()
+        self.stopped_by_you = False  # this turn was stopped on purpose, not cut by a new one
+        self.unanswered = False  # a yes-or-no question got no answer at all this turn
+        self.said_last = ""  # the last thing she said aloud
 
     # --- status ---------------------------------------------------------------------------
 
@@ -175,8 +181,23 @@ class Voice:
         self.pressed("wake")
 
     def _stop_talking(self) -> None:
-        """ "Stop talking" / "be quiet" while a reply plays: stop it, don't listen (JARVIS)."""
+        """ "Stop talking" / "be quiet" while she's thinking or talking: stop, don't listen."""
+        self.cancel_turn()
+
+    def cancel_turn(self) -> None:
+        """Stop this turn wherever it is (listening, thinking, speaking): the model call is
+        hung up, playback stops, nothing queued runs, and no follow-up is listened for."""
+        self.stopped_by_you = True
+        self.next_request = None
         self.interrupt.set()
+
+    def watch_stop(self) -> None:
+        """The popup's Stop button and Esc: a request file in the runtime folder."""
+        while not self.stop.is_set():
+            if take_stop(self.cfg.runtime_dir) and self.state in ACTIVE:
+                _log.info("stopped from the popup")
+                self.cancel_turn()
+            self.stop.wait(0.15)
 
     def sync_wake(self) -> None:
         """Start or stop the wake word (Vosk, as in JARVIS) to match the (re-read) config."""
@@ -189,7 +210,7 @@ class Voice:
                 self.wake = wake.VoskWake(
                     self.cfg.data_dir, list(v.wake_words), on_wake=self._woke,
                     on_stop=self._stop_talking, busy=self.recording.is_set,
-                    speaking=lambda: self.state == "speaking", engine=self.engine,
+                    speaking=lambda: self.state in ("speaking", "thinking"), engine=self.engine,
                 )  # fmt: skip
                 self.wake.start()
             except Exception as exc:
@@ -210,14 +231,17 @@ class Voice:
 
         v = self.cfg.voice
 
+        def stopped() -> bool:  # voice shutting down, or this turn stopped (Esc, "stop")
+            return self.stop.is_set() or self.interrupt.is_set()
+
         def record(first: Any, timeout: float) -> Any:
             if self.engine is not None:  # echo-cancelled: a reply still fading isn't you
                 return record_from_engine(
-                    self.engine, self.stop.is_set, floor=v.mic_floor,
+                    self.engine, stopped, floor=v.mic_floor,
                     silence_ms=v.vad_silence_ms, preroll=first or (), start_timeout_s=timeout,
                 )  # fmt: skip
             return record_utterance(
-                self.stop.is_set, floor=v.mic_floor, silence_ms=v.vad_silence_ms,
+                stopped, floor=v.mic_floor, silence_ms=v.vad_silence_ms,
                 preroll=first or (), start_timeout_s=timeout,
             )  # fmt: skip
 
@@ -268,19 +292,24 @@ class Voice:
     # --- handling --------------------------------------------------------------------------------
 
     def say(self, text: str) -> None:
-        """Speak, stoppable: by the hotkey, or by talking over it (voice.barge_in = voice).
-        A reply to a turn that itself began by barge-in isn't voice-interruptible, so stray
-        sound can never keep the assistant answering itself."""
+        """Speak, stoppable: by the hotkey, "Donna", "stop talking", the popup, or by talking
+        over it (voice.barge_in = voice). A reply to a turn that itself began by talking over
+        a reply isn't stopped by just any speech (the wake word and the rest still work), so
+        her own voice leaking past the echo canceller can never keep her answering herself
+        (seen: "I'm here to help" heard back as "I'm here", answered, heard again...)."""
+        self.said_last = text  # what a "barge-in" is compared with: was it her own voice?
         try:
             clean = self.engine is not None and self.engine.aec_active
-            if self.cfg.voice.barge_in == "voice" and clean:
-                # The speakers are out of the mic, other apps too: what's left is you, so a
-                # reply to an interruption can be interrupted again.
+            by_voice = self.cfg.voice.barge_in == "voice" and self.turn_trigger != "barge"
+            if by_voice and clean:
                 from personal_os.voice.bargein import CleanBargeIn
 
-                with CleanBargeIn(self.engine, self._barged, floor=self.cfg.voice.mic_floor):
+                with CleanBargeIn(
+                    self.engine, self._barged, floor=self.cfg.voice.mic_floor,
+                    playing=self.speaker.player.playing.is_set,
+                ):  # fmt: skip
                     self.speaker.say(text, interrupt=self.interrupt)
-            elif self.cfg.voice.barge_in == "voice" and self.turn_trigger != "barge":
+            elif by_voice:
                 from personal_os.voice.bargein import BargeIn
 
                 with BargeIn(self.speaker.player, self._barged, floor=self.cfg.voice.mic_floor):
@@ -352,14 +381,24 @@ class Voice:
                 )  # fmt: skip
         return self.run_intent(intent, text)
 
-    def ask_aloud(self, question: str) -> str:
-        """Ask, then beep, so it's clear it's now waiting for your answer."""
+    def ask_aloud(self, question: str, *, shown: str | None = None) -> str:
+        """Ask (on screen as it's said), then beep, so it's clear it's waiting for you."""
+        shown = shown or question
+        self.show("speaking", question=shown)
         self.say(question)
-        if self.turn is not None:
-            self.turn.update(question=question, state="listening")
-        self.write_status("listening", question=question)
+        if self.interrupt.is_set():
+            return ""
+        self.show("listening", question=shown)
         self.speaker.earcon("listen")
-        return self.listen()
+        answer = self.listen()
+        self.show("thinking", question="")
+        return answer
+
+    def show(self, state: str, **fields: Any) -> None:
+        """Put the turn in `state` with these fields, on screen at once."""
+        if self.turn is not None:
+            self.turn.update(fields, state=state)
+        self.write_status(state)
 
     def classifier(self) -> Any:
         """The local model, for answers the rules can't place (None if it's off)."""
@@ -457,23 +496,32 @@ class Voice:
         from personal_os.actions.executor import Executor
         from personal_os.actions.tools import build_registry
 
-        return Executor(
+        made: list[Any] = []
+        ex = Executor(
             self.cfg, conn, self.clock, build_registry(self.cfg), default_desktop(),
-            self.confirm, provider=provider,
+            lambda prompt: self.confirm(prompt, made[0] if made else None), provider=provider,
         )  # fmt: skip
+        made.append(ex)
+        ex.stop_signal = self.interrupt  # "stop" stops a running action too (a slow browser)
+        return ex
 
-    def confirm(self, prompt: str) -> bool:
-        first = prompt.splitlines()[0].split(" (tier")[0]
-        detail = next(
-            (
-                ln.strip()
-                for ln in prompt.splitlines()[1:]
-                if ln.strip() and not ln.startswith("Proceed")
-            ),
-            "",
-        )
-        self.say(f"Shall I {first.replace('_', ' ')}: {detail[:160]}? Say yes or no.")
-        answer = self.listen()
+    def confirm(self, prompt: str, ex: Any = None) -> bool:
+        """A spoken yes or no before an action, asked in plain words ("Open VS Code?") and
+        shown in the popup while it's asked."""
+        if self.interrupt.is_set():
+            return False
+        pending = getattr(ex, "pending", None)
+        question = confirm_question(pending) if pending else question_from_prompt(prompt)
+        shown = question
+        if pending and pending.get("tainted"):
+            shown += " (This comes from earlier in the conversation, or something read.)"
+        answer = self.ask_aloud(f"{question} Say yes or no.", shown=shown)
+        if self.interrupt.is_set():
+            return False
+        if not answer.strip():
+            # Silence isn't a "no": say so, rather than report "you declined" afterwards.
+            self.unanswered = True
+            return False
         verdict, change = dialogue.yes_no(answer)
         if verdict == "amend":
             self.next_request = change
@@ -525,7 +573,14 @@ class Voice:
         return f"I couldn't: {why}."
 
     def handle(self, text: str) -> str:
-        from personal_os.context.route import chat_reply, evening, normalize, route, strip_polite
+        from personal_os.context.route import (
+            about_my_past,
+            chat_reply,
+            evening,
+            normalize,
+            route,
+            strip_polite,
+        )
         from personal_os.storage.db import open_db
 
         kind = route(text)
@@ -562,6 +617,8 @@ class Voice:
                     self.next_request = change
                     return ""
                 return "I won't remember it."
+            if kind == "ask" and about_my_past(request):
+                return self.recall(conn, request)  # the same answer `personal-os ask` gives
             if self.cfg.agent.enabled and self.provider() is not None:
                 return self.agent(conn, request)  # conversation, questions and actions alike
             if kind == "do":
@@ -577,6 +634,22 @@ class Voice:
         finally:
             conn.close()
 
+    def recall(self, conn: Any, request: str) -> str:
+        """A question about your own history ("what did I do today?"): answered from your
+        activity with evidence, exactly as `personal-os ask` answers it, with the evidence in
+        the popup. The agent once answered this from what's open now instead."""
+        from personal_os.context.ask import ask
+
+        if not self.convo.active():
+            self.previous = None  # "and yesterday?" means nothing after a long gap
+        answer = ask(conn, self.provider(), request, self.clock.now(), previous=self.previous)
+        self.previous = answer.question
+        evidence = [x.render() for x in answer.cited()]
+        self.save_last(request, answer.text, evidence)
+        if self.turn is not None and evidence:
+            self.turn["details"] = "\n".join(evidence)[:4000]
+        return " ".join(s for s, _ in answer.sentences)
+
     def agent(self, conn: Any, request: str) -> str:
         """Donna as one assistant (docs/AGENT.md): she decides whether to answer, look
         something up or act, using the same tools and policy as everything else."""
@@ -585,7 +658,11 @@ class Voice:
         provider = self.provider()
         ex = self.executor(conn, provider)
         context = self.convo.for_planner()
-        result = agent.respond(request, ex, provider, context=context, announce=self.announce)
+        result = agent.respond(
+            request, ex, provider, context=context, announce=self.announce,
+            cancelled=self.interrupt.is_set, progress=lambda note: self.turn_update(progress=note),
+            max_steps=min(self.cfg.agent.max_steps, VOICE_MAX_STEPS),
+        )  # fmt: skip
         if self.turn is not None and result.details:
             self.turn["details"] = result.details  # the popup shows it in full
         acted = [o for o in result.outcomes if o.tool in agent.ANNOUNCED]
@@ -622,7 +699,11 @@ class Voice:
             return None
         from personal_os.llm import make_provider
 
-        return make_provider(self.cfg.llm)
+        provider = make_provider(self.cfg.llm)
+        with contextlib.suppress(AttributeError):
+            # "stop" hangs up a model call mid-answer (Ollama's client streams then).
+            provider.cancel = self.interrupt  # type: ignore[attr-defined]
+        return provider
 
     def save_last(self, question: str, answer: str, evidence: list[str]) -> None:
         runtime.write_json_atomic(
@@ -646,6 +727,7 @@ class Voice:
         self.start_engine()
         threading.Thread(target=self.warm, name="pos-warm", daemon=True).start()
         self.sync_wake()
+        threading.Thread(target=self.watch_stop, name="pos-stop", daemon=True).start()
         self.write_status("ready")
         _log.info("voice ready", extra={"fields": {"hotkey": self.hotkey_error is None}})
         last_reload = time.monotonic()
@@ -691,6 +773,9 @@ class Voice:
     def speak_queued(self) -> None:
         """Say what the daemon queued (a reminder, a briefing), while nothing else is going on."""
         for text in take_speech(self.cfg.runtime_dir):
+            self.interrupt.clear()  # a stopped turn earlier mustn't silence a reminder now
+            self.stopped_by_you = False
+            self.turn_trigger = "queued"
             self.write_status("speaking")
             self.say(text)
             self.write_status("ready")
@@ -742,6 +827,8 @@ class Voice:
         entry: dict[str, Any] = {"at": self.clock.now().isoformat(), "trigger": trigger}
         t0 = time.monotonic()
         self.interrupt.clear()
+        self.stopped_by_you = False
+        self.unanswered = False
         self.turn_trigger = trigger
         preroll, self.barge_frames = self.barge_frames, []
         # If speech recognition was unloaded while idle, load it while you're still talking.
@@ -772,8 +859,25 @@ class Voice:
                     self.speaker.earcon("listen")  # the canceller keeps it out of the mic
                 carry = trigger in ("barge", "wake") and bool(preroll)
                 text = self.listen(preroll) if carry else self.listen()
+                if trigger == "barge" and text and own_words(text, self.said_last):
+                    # Her own voice, leaking past the echo canceller ("Did you mean?" while
+                    # she asked "Did you mean vscode?"): not you, so nothing is done.
+                    entry["heard"] = text
+                    entry["route"] = "her own voice (ignored)"
+                    return False
+                if (
+                    trigger == "wake" and carry and text
+                    and not mentions_wake(text, list(self.cfg.voice.wake_words))
+                ):  # fmt: skip
+                    # The wake word fired, but there's no "Donna" in what was recorded: it
+                    # was something else (a video, people talking), so it isn't acted on.
+                    entry["heard"] = text
+                    entry["route"] = "no wake word in it"
+                    return False
                 if trigger == "wake" and text and not _without_wake(text):
                     text = self.listen()  # just "Donna": now the request itself
+                elif trigger == "wake" and text:
+                    text = _without_wake(text)  # what came before "Donna" isn't the request
             assert text is not None
             entry["heard"] = text
             entry["listen_s"] = round(time.monotonic() - t0, 1)
@@ -781,6 +885,12 @@ class Voice:
                 entry["route"] = "nothing heard"
                 if trigger == "followup":
                     entry["quiet"] = True  # the window closed unused: not worth a log line
+                return False
+            if not given and _STOP_WORDS.match(_without_wake(text) or text):
+                # "Stop" as the request: end it all here. Not "pause the music" (that's
+                # "pause"), and nothing is said back; the popup closes.
+                entry["route"] = "stopped by you"
+                self.cancel_turn()
                 return False
             if trigger == "followup" and not given and dialogue.closing(text):
                 entry["route"] = "end of conversation"
@@ -807,6 +917,11 @@ class Voice:
                 # request, so it isn't sent to the model to be answered.
                 entry["route"] = "ignored (one word)"
                 return False
+            elif not given and _fragment(text):
+                # One word that isn't a command ("code."): most of it was missed. Ask again
+                # rather than have the model guess, with the old conversation, for 40 s.
+                entry["route"] = "asked again (one word)"
+                reply = f"Sorry, I only caught “{text.strip(' .,!?')}”. Please say it again."
             else:
                 # Not a quick command: questions and requests get the accurate transcript.
                 if not given:
@@ -815,39 +930,50 @@ class Voice:
                 self.turn_update(heard=text)
                 entry["route"] = route(text)
                 reply = self.handle(text)
+            if self.unanswered and reply and "declined" in reply:
+                reply = "I didn't hear a yes or no, so I didn't do it."
             entry["reply"] = reply
             entry["handle_s"] = round(time.monotonic() - t1, 1)
             if self.interrupt.is_set():
-                entry["route"] = f"{entry['route']} (interrupted)"
                 return False
             if reply and reply == self.announced:
                 spoke = True  # already said before the action ran
             elif reply:
-                self.turn.update(reply=reply, state="speaking")
+                self.turn.update(reply=reply, state="speaking", progress="")
                 self.write_status("speaking")
                 self.wait_for_popup(reply)
                 t2 = time.monotonic()
                 self.say(spoken(reply))
                 entry["speak_s"] = round(time.monotonic() - t2, 1)
-                if self.interrupt.is_set():
-                    entry["route"] = f"{entry['route']} (interrupted)"
-                else:
-                    spoke = True
+                spoke = not self.interrupt.is_set()
         except Exception as exc:  # never let one request kill the voice process
-            entry["error"] = f"{type(exc).__name__}: {exc}"[:300]
-            _log.warning("voice request failed", extra={"fields": {"exc_type": type(exc).__name__}})
-            self.say("Sorry, something went wrong.")
+            if not self.interrupt.is_set():  # a stopped model call isn't a failure
+                entry["error"] = f"{type(exc).__name__}: {exc}"[:300]
+                _log.warning(
+                    "voice request failed", extra={"fields": {"exc_type": type(exc).__name__}}
+                )
+                self.say("Sorry, something went wrong.")
         finally:
             entry["total_s"] = round(time.monotonic() - t0, 1)
+            stopped = self.interrupt.is_set() and "error" not in entry
+            if stopped:
+                cut = "stopped" if self.stopped_by_you else "interrupted"
+                if not str(entry.get("route", "")).startswith("stopped"):
+                    entry["route"] = f"{entry.get('route') or 'listening'} ({cut})"
             if self.turn is not None:
+                if self.stopped_by_you:
+                    self.turn["dismissed"] = True  # the popup closes now
+                said = entry.get("reply") or self.turn["reply"]
                 self.turn.update(
-                    state="done", done_at=self.clock.now().isoformat(),
-                    heard=entry.get("heard") or self.turn["heard"],
-                    reply=entry.get("reply") or self.turn["reply"],
+                    state="done", done_at=self.clock.now().isoformat(), progress="",
+                    question="", heard=entry.get("heard") or self.turn["heard"],
+                    reply="Stopped." if stopped and self.stopped_by_you else said,
                     **({"error": "Something went wrong."} if "error" in entry else {}),
                 )  # fmt: skip
             if not entry.get("quiet"):
                 record_history(self.cfg.runtime_dir, entry)
+            if self.stopped_by_you:
+                ended = True  # a stopped exchange isn't something to build on later
             if entry.get("heard") and "error" not in entry and not ended:
                 self.convo.add(entry["heard"], entry.get("reply", ""), str(entry.get("route", "")))
             _log.info(
@@ -867,6 +993,88 @@ class Voice:
 _WAKE_ONLY = re.compile(
     r"^\W*(?:(?:hey|hi|hello|ok|okay|oh)\W+)?(?:donna|dona|donnah|donah|dawna|danna)\W*", re.I
 )
+# The wake word within the first few words: "so yeah, hey Donna, open Brave".
+_WAKE_NEAR_START = re.compile(
+    r"^(?:\W*[\w']+){0,6}?\W*(?:(?:hey|hi|hello|ok|okay|oh)\W+)?"
+    r"(?:donna|dona|donnah|donah|dawna|danna)\b\W*",
+    re.I,
+)
+# Said as the whole request: stop everything and close (media has "pause the music").
+_STOP_WORDS = re.compile(
+    r"^\W*(?:ok(?:ay)?\W+)?(?:stop(?:\s+(?:it|that|now|talking|speaking|listening))?|"
+    r"cancel(?:\s+(?:it|that))?|never\s*mind|nevermind|enough|be\s+quiet|shut\s+up|"
+    r"quiet|forget\s+it|that'?s\s+(?:all|it|enough))(?:\s+please)?\W*$",
+    re.I,
+)
+VOICE_MAX_STEPS = 3  # model calls per spoken request (each 5-15 s on this laptop)
+ACTIVE = ("listening", "thinking", "speaking")
+
+
+def own_words(heard: str, said: str) -> bool:
+    """Is what was heard just (part of) what she was saying? Then it was her own voice."""
+    from rapidfuzz import fuzz
+
+    h = re.sub(r"[^a-z0-9 ]", "", heard.lower()).strip()
+    s = re.sub(r"[^a-z0-9 ]", "", said.lower()).strip()
+    if len(h) < 4 or not s:
+        return False
+    return fuzz.partial_ratio(h, s) >= 85
+
+
+def mentions_wake(text: str, words: list[str]) -> bool:
+    """Is the wake word (or what speech recognition makes of it: "Dana", "Donner") in it?"""
+    from rapidfuzz import fuzz
+
+    wanted = [w.strip().lower() for w in words if w.strip()] or ["donna"]
+    for token in re.findall(r"[a-z']+", text.lower()):
+        if len(token) >= 4 and any(fuzz.ratio(token, w) >= 65 for w in wanted):
+            return True
+    return False
+
+
+def confirm_question(pending: dict[str, Any]) -> str:
+    """What to ask before an action, in plain words: "Open VS Code?", "Close Brave?"."""
+    tool = str(pending.get("tool", ""))
+    args = pending.get("args") or {}
+
+    def short(path: Any) -> str:
+        p = str(path).rstrip("/\\")
+        return re.split(r"[/\\]", p)[-1] or p
+
+    if tool == "open_app":
+        q = f"Open {args.get('app')}"
+        if args.get("target"):
+            q += f" with {short(args['target'])}"
+    elif tool == "close_app":
+        q = f"Close {args.get('app')}"
+    elif tool in ("open_path", "reveal_path"):
+        q = f"{'Open' if tool == 'open_path' else 'Show'} {short(args.get('path', ''))}"
+    elif tool == "open_url":
+        from urllib.parse import urlsplit
+
+        q = f"Open {urlsplit(str(args.get('url', ''))).hostname or 'that page'}"
+    else:
+        preview = str(pending.get("preview", ""))
+        line = next((ln.strip() for ln in preview.splitlines() if ln.strip()), "")
+        plain = bool(line) and len(line) <= 90 and not re.search(r"[\\/{}\[\]=]|\.exe\b", line)
+        q = line if plain else tool.replace("_", " ")
+        q = q[:1].upper() + q[1:]
+    return q.rstrip(" .?") + "?"
+
+
+def question_from_prompt(prompt: str) -> str:
+    """The question from an executor prompt alone (no details of the action to hand)."""
+    lines = prompt.splitlines()
+    first = lines[0].split(" (tier")[0].replace("_", " ") if lines else "do that"
+    detail = next(
+        (
+            ln.strip()
+            for ln in lines[1:]
+            if ln.strip() and not ln.startswith("Proceed") and not ln.strip().startswith("!")
+        ),
+        "",
+    )
+    return f"Shall I {first}: {detail[:160]}?" if detail else f"Shall I {first}?"
 
 
 def _fragment(text: str) -> bool:
@@ -882,8 +1090,12 @@ _ONE_WORD_REQUESTS = frozenset(_ONE_WORDS.split())
 
 
 def _without_wake(text: str) -> str:
-    """What was said besides the wake word: "Hey Donna, open Brave" -> "open Brave"."""
-    return _WAKE_ONLY.sub("", text, count=1).strip(" ,.!?")
+    """What was said besides the wake word: "Hey Donna, open Brave" -> "open Brave", and
+    "so yeah. Donna, open Brave" -> "open Brave" (what came before isn't the request)."""
+    cut = _WAKE_ONLY.sub("", text, count=1)
+    if cut == text:
+        cut = _WAKE_NEAR_START.sub("", text, count=1)
+    return cut.strip(" ,.!?")
 
 
 def _launch_popup(cfg: Config) -> None:
@@ -931,6 +1143,26 @@ def record_history(runtime_dir: Path, entry: dict[str, Any]) -> None:
 
 SAY_DIR = "say"
 _said = 0
+STOP_FILE = "voice_stop.json"
+
+
+def request_stop(runtime_dir: Path) -> None:
+    """Ask the running voice process to stop what it's doing now (the popup's Stop / Esc)."""
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    runtime.write_json_atomic(runtime_dir / STOP_FILE, {"at": time.time()})
+
+
+def take_stop(runtime_dir: Path, max_age_s: float = 3.0) -> bool:
+    """A fresh stop request, removed once read (an old one never stops a later turn)."""
+    path = runtime_dir / STOP_FILE
+    if not path.exists():
+        return False
+    data = runtime.read_json(path) or {}
+    path.unlink(missing_ok=True)
+    try:
+        return time.time() - float(data.get("at", 0)) <= max_age_s
+    except (TypeError, ValueError):
+        return False
 
 
 def queue_speech(runtime_dir: Path, text: str) -> bool:

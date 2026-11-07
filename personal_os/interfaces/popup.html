@@ -26,6 +26,8 @@ main { flex:1; padding:0 12px; overflow-y:auto; scrollbar-width:thin;
 .who { color:var(--muted); font-size:12px; }
 #heard { color:var(--muted); font-style:italic; }
 #question { color:var(--warn); }
+#progress { color:var(--muted); font-size:12px; }
+#stop { border-color:var(--bad); }
 #error { color:var(--bad); }
 #notice { color:var(--warn); font-size:12px; }
 footer { display:flex; gap:6px; padding:6px 12px 10px; align-items:center; }
@@ -72,16 +74,18 @@ footer { display:flex; gap:6px; padding:6px 12px 10px; align-items:center; }
   <div id="alerts"></div>
   <div id="notice" class="line hidden"></div>
   <div id="heardbox" class="hidden"><span class="who">You</span><div id="heard" class="line"></div></div>
+  <div id="progress" class="line hidden"></div>
   <div id="question" class="line hidden"></div>
   <div id="replybox" class="hidden"><span class="who">Reply</span><div id="reply" class="line"></div></div>
   <div id="details" class="hidden"></div>
   <div id="error" class="line hidden"></div>
 </main>
 <footer>
-  <span id="note">Esc closes</span>
+  <span id="note">Esc stops and closes</span>
+  <button id="stop" class="hidden" title="Stop listening, thinking or talking (Esc)">Stop</button>
   <button id="pin" aria-pressed="false" title="Keep open">Pin</button>
   <button id="dash" title="Open the dashboard">Dashboard</button>
-  <button id="close" title="Close (Esc)">✕</button>
+  <button id="close" title="Stop and close (Esc)">✕</button>
 </footer>
 <script>
 "use strict";
@@ -186,6 +190,8 @@ function render(v) {
   show("notice", notices.join(" "));
   box("heard", v.heard);
   show("question", v.question);
+  show("progress", v.state === "thinking" && !alertOnly ? v.progress : "");
+  $("stop").classList.toggle("hidden", !ACTIVE.includes(v.state));
   box("reply", v.reply);
   show("error", v.error);
   renderDetails(alertOnly ? "" : v.details);
@@ -198,9 +204,11 @@ async function tick() {
 }
 
 window.addEventListener("pywebviewready", () => { tick(); setInterval(tick, 220); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") window.pywebview.api.close(); });
+// Esc and ✕ stop whatever voice is doing as well as closing the window.
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") window.pywebview.api.stop(true); });
 document.addEventListener("pointerdown", () => { window.pywebview && window.pywebview.api.focus(); });
-$("close").onclick = () => window.pywebview.api.close();
+$("close").onclick = () => window.pywebview.api.stop(true);
+$("stop").onclick = () => window.pywebview.api.stop(false).then(tick);
 $("pin").onclick = async () => {
   const on = $("pin").getAttribute("aria-pressed") !== "true";
   const now = await window.pywebview.api.pin(on);

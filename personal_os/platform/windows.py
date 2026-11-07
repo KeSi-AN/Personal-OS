@@ -560,6 +560,31 @@ def top_level_windows() -> list[tuple[int, str, str]]:
     return out
 
 
+def window_exe(hwnd: int) -> str:
+    """The program a window belongs to ("Code.exe"); for a UWP app, the app's own, not
+    ApplicationFrameHost's. "" if it can't be told."""
+    pid = _window_pid(hwnd)
+    if not pid:
+        return ""
+    try:
+        name = psutil.Process(pid).name()
+        if name.lower() == "applicationframehost.exe":
+            child = _uwp_child_pid(hwnd, pid)
+            if child:
+                name = psutil.Process(child).name()
+        return name
+    except psutil.Error:
+        return ""
+
+
+WM_CLOSE = 0x0010
+
+
+def close_window(hwnd: int) -> None:
+    """Ask a window to close, as its ✕ does: the app can still ask to save your work."""
+    user32.PostMessageW(wintypes.HWND(hwnd), WM_CLOSE, 0, 0)
+
+
 def set_window(hwnd: int, action: str) -> None:
     if action == "minimize":
         user32.ShowWindow(hwnd, SW_MINIMIZE)

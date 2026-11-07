@@ -9,9 +9,12 @@ The reference is Windows' loopback of the default output device, so the assistan
 lets the wake word listen all the time and lets you talk over a reply (barge-in) without the
 assistant hearing itself (seen once: a YouTube video kept "interrupting" replies).
 
-Speakers add delay (an HDMI TV: about a quarter second), which the canceller can't bridge on
+Speakers add delay (an HDMI TV: about a quarter second), more than the canceller bridges on
 its own, so the engine measures it by cross-correlating the mic with the reference while
-something plays, and feeds the reference that much later.
+something plays, and feeds the reference that much later, less some slack. The reference
+must never arrive after the echo it describes: the canceller only looks back in time, so a
+reference fed too late cancels nothing (a TV's 240 ms used on laptop speakers did that, and
+Donna heard herself). Feeding it a little early is fine: the canceller finds the rest.
 
 Consumers `subscribe()` to 32 ms frames (512 samples, Silero VAD's frame) of clean audio, each
 with the raw mic level, so "is this you or leftover echo?" can be answered per frame. Without
@@ -41,7 +44,8 @@ BLOCK = 160  # 10 ms: the echo canceller's frame
 FRAME = 512  # 32 ms: what consumers get (Silero VAD's frame)
 HISTORY_S = 4.0  # kept for delay estimation
 MAX_DELAY_S = 0.8
-DEFAULT_DELAY_S = 0.24  # measured on an HDMI TV; re-measured live
+DEFAULT_DELAY_S = 0.05  # laptop speakers or headphones; an HDMI TV is measured live (~0.24)
+AEC_SLACK_S = 0.10  # fed this much earlier than measured: the canceller covers the rest
 ESTIMATE_EVERY_S = 1.0
 MATCH = 0.5  # envelope correlation needed to trust a delay estimate
 SUBSCRIBER_FRAMES = 400  # ~13 s buffered per subscriber before old frames are dropped
@@ -66,9 +70,10 @@ class DelayEstimator:
 
     def __init__(self, initial_s: float = DEFAULT_DELAY_S) -> None:
         self.delay_s = initial_s
-        # Seeded with the starting value, so one odd estimate (the first second of a reply,
-        # mostly silence) can't move the delay; several agreeing ones do.
-        self.recent: deque[float] = deque([initial_s] * 3, maxlen=7)
+        # Seeded once with the starting value: one odd estimate (the first second of a reply,
+        # mostly silence) can't move the delay, but two or three agreeing ones do, so a
+        # wrong starting value is corrected within the first reply or two.
+        self.recent: deque[float] = deque([initial_s], maxlen=5)
 
     def update(self, mic: np.ndarray, ref: np.ndarray) -> float | None:
         """mic and ref: the same stretch of time, ref undelayed. Returns a new estimate or
@@ -266,7 +271,8 @@ class AudioEngine:
             if len(block) != BLOCK:
                 continue
             ref_now = self.ref.at(t, BLOCK)  # undelayed, for estimating the delay
-            ref_block = self.ref.at(t - self.delay.delay_s, BLOCK) if self.aec_active else ref_now
+            lead = max(0.0, self.delay.delay_s - AEC_SLACK_S)
+            ref_block = self.ref.at(t - lead, BLOCK) if self.aec_active else ref_now
             clean = self._cancel(block, ref_block) if self.aec_active else block
             self._hist_mic.append(block)
             self._hist_ref.append(ref_now)

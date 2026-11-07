@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Literal
@@ -102,6 +102,10 @@ class Executor:
         self.audit = Audit(conn, clock)
         self.paths = PathPolicy(config)
         self.runtime_dir = config.runtime_dir
+        self.pending: dict[str, Any] | None = None  # the action being confirmed, while asked
+        # Set from outside to stop a running action (voice: you said "stop"), like the kill
+        # switch does: a tool waiting on something slow gives up.
+        self.stop_signal: threading.Event | None = None
 
     def request(
         self,
@@ -114,7 +118,10 @@ class Executor:
         dry_run: bool = False,
         undo_of: str | None = None,
         read_so_far: Sequence[str] = (),
+        on_run: Callable[[], None] | None = None,
     ) -> Outcome:
+        """`on_run`: called once the action is approved (or needs no approval), just before
+        it runs; voice says "Opening Brave." there."""
         aid = str(uuid7(self.clock.now()))
         tool = self.registry.get(tool_name)
         if tool is None:
@@ -176,11 +183,19 @@ class Executor:
             prompt = self._prompt(
                 tool.name, int(tool.tier), origin, tainted, preview, decision.reason
             )
+            # What's being asked about, for a confirmer that phrases its own question (voice
+            # says "Open VS Code?", not the prompt's tier and preview lines).
+            self.pending = {
+                "tool": tool.name, "args": meta["args"], "preview": preview,
+                "tainted": tainted, "reason": decision.reason,
+            }  # fmt: skip
             try:
                 approved = self.confirmer(prompt)
             except Deferred:
                 log("declined", "waiting for your approval in the dashboard")
                 return Outcome(aid, tool.name, "pending", decision.reason, preview)
+            finally:
+                self.pending = None
             if not approved:
                 log("declined", decision.reason)
                 return Outcome(aid, tool.name, "declined", "you declined", preview)
@@ -191,6 +206,8 @@ class Executor:
         if killswitch.engaged(self.runtime_dir):  # engaged while you were confirming
             log("blocked", "kill switch is on")
             return Outcome(aid, tool.name, "blocked", "kill switch is on", preview)
+        if on_run is not None:
+            on_run()
         log("started", preview)
         stop_watch = threading.Event()
         watcher = threading.Thread(target=self._watch_kill, args=(ctx, stop_watch), daemon=True)
@@ -200,9 +217,10 @@ class Executor:
             if ctx.cancel.is_set():
                 raise Cancelled
         except Cancelled:
-            log("cancelled", "kill switch")
-            return Outcome(aid, tool.name, "cancelled", "cancelled by the kill switch", preview)
+            return self._cancelled(aid, tool.name, preview, log)
         except ActionError as exc:
+            if ctx.cancel.is_set():  # it gave up because it was told to stop
+                return self._cancelled(aid, tool.name, preview, log)
             log("failed", str(exc))
             return Outcome(aid, tool.name, "failed", str(exc), preview)
         except Exception as exc:  # a tool bug: record it, never crash the caller
@@ -240,9 +258,17 @@ class Executor:
             provider=self.provider,
         )  # fmt: skip
 
+    def _cancelled(self, aid: str, tool: str, preview: str, log: Any) -> Outcome:
+        if self.stop_signal is not None and self.stop_signal.is_set():
+            log("cancelled", "stopped")
+            return Outcome(aid, tool, "cancelled", "stopped", preview)
+        log("cancelled", "kill switch")
+        return Outcome(aid, tool, "cancelled", "cancelled by the kill switch", preview)
+
     def _watch_kill(self, ctx: ToolContext, stop: threading.Event) -> None:
-        while not stop.wait(0.2):
-            if killswitch.engaged(self.runtime_dir):
+        while not stop.wait(0.1):
+            stopped = self.stop_signal is not None and self.stop_signal.is_set()
+            if stopped or killswitch.engaged(self.runtime_dir):
                 ctx.cancel.set()
                 return
 

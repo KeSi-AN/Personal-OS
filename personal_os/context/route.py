@@ -100,6 +100,25 @@ def route(text: str) -> Route:
     return "ask"
 
 
+# A question about what you did (your history), not about now or the conversation: "what did
+# I do today?", "where did I leave off on X?", "how long was I on YouTube?", "how was my day?".
+_MY_PAST = re.compile(
+    r"\b(?:did|have|had|was|were)\s+i\b|\bi\s+(?:did|was|worked|spent|left)\b|"
+    r"\bmy\s+(?:day|morning|afternoon|evening|week)\b|\bleave\s+off\b|\bleft\s+off\b",
+    re.I,
+)
+_NOT_HISTORY = re.compile(
+    r"\b(?:say|said|ask(?:ed)?\s+you|tell\s+you|told\s+you|remind)\b", re.I
+)  # the conversation and reminders have their own answers
+
+
+def about_my_past(text: str) -> bool:
+    """Is this a question about your own past activity? Those are answered from your history
+    with evidence, the same way `personal-os ask` answers them, never by the model's guess."""
+    t = strip_polite(normalize(text))
+    return bool(_QUESTION.match(t) and _MY_PAST.search(t) and not _NOT_HISTORY.search(t))
+
+
 def incomplete(text: str) -> bool:
     """Heard only part of a request: "Can you open?", "Can you open the-", "Can you?"."""
     text = strip_wake(text)

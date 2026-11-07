@@ -276,6 +276,11 @@ _REVEAL = re.compile(
     r"(?:file\s*explorer|explorer|files|folder)$|^where(?:'s| is)\s+(?:the\s+|my\s+)?(.+)$",
     re.I,
 )
+_CLOSE = re.compile(
+    r"^(?:close|quit|exit|shut\s+down)\s+(?:the\s+|my\s+)?(.+?)"
+    r"(?:\s+(?:app|application|program|browser|windows?))?$",
+    re.I,
+)
 _APP_WORD = re.compile(r"\s+(app|application|program|browser)$", re.I)
 _KIND = re.compile(
     r"\s+(folder|directory|file|project|document|pdf|video|picture|photo|image)$", re.I
@@ -295,6 +300,9 @@ def route(
     m = _REVEAL.match(t)
     if m:
         return _open_target((m[1] or m[2]).strip(), index, threshold, reveal=True)
+    m = _CLOSE.match(t)
+    if m:
+        return _close_app(m[1].strip(), index, threshold)
     m = _OPEN.match(t)
     if not m:
         return None
@@ -367,6 +375,24 @@ def _open_target(
     out = _command(target.entry, reveal=reveal, app=app.entry if app is not None else None)
     out.confidence = min(target.score, app.score) if app is not None else target.score
     return out
+
+
+def _close_app(said: str, index: Index, threshold: float) -> Intent | None:
+    """ "close VS Code": the app's windows, by rules. Anything that isn't an app ("close this
+    tab") is left to the model."""
+
+    def build(e: Entry) -> Intent:
+        return Intent([("close_app", {"app": e.target})], f"Closing {e.name}.")
+
+    app, guesses = _decide(said, index.of("app"), threshold)
+    if app is not None:
+        out = build(app.entry)
+        out.confidence = app.score
+        out.verb = "close"
+        return out
+    if guesses:
+        return _guess(guesses, "close", build)
+    return None
 
 
 def _command(e: Entry, *, reveal: bool = False, app: Entry | None = None) -> Intent:

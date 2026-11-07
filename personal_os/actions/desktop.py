@@ -26,6 +26,7 @@ class WindowInfo:
     handle: int
     title: str
     state: str  # "minimized" | "maximized" | "normal"
+    exe: str = ""  # the program it belongs to ("Code.exe"), when asked for
 
 
 class Desktop(Protocol):
@@ -38,6 +39,8 @@ class Desktop(Protocol):
     def screenshot(self, path: Path) -> None: ...
     def windows(self, title_part: str) -> list[WindowInfo]: ...
     def set_window(self, handle: int, action: str) -> None: ...
+    def app_windows(self) -> list[WindowInfo]: ...
+    def close_window(self, handle: int) -> None: ...
     def recycle(self, path: Path) -> None: ...
     def get_brightness(self) -> int | None: ...
     def set_brightness(self, percent: int) -> None: ...
@@ -110,6 +113,13 @@ class FakeDesktop:
         for w in self.open_windows:
             if w.handle == handle:
                 w.state = {"minimize": "minimized", "maximize": "maximized"}.get(action, "normal")
+
+    def app_windows(self) -> list[WindowInfo]:
+        return list(self.open_windows)
+
+    def close_window(self, handle: int) -> None:
+        self.calls.append(("close_window", handle))
+        self.open_windows = [w for w in self.open_windows if w.handle != handle]
 
     def recycle(self, path: Path) -> None:
         self.calls.append(("recycle", str(path)))
@@ -190,6 +200,16 @@ class WindowsDesktop:  # pragma: no cover - exercised by the live tests and the 
         from personal_os.platform import windows as w
 
         w.set_window(handle, action)
+
+    def app_windows(self) -> list[WindowInfo]:
+        from personal_os.platform import windows as w
+
+        return [WindowInfo(h, t, s, w.window_exe(h)) for h, t, s in w.top_level_windows()]
+
+    def close_window(self, handle: int) -> None:
+        from personal_os.platform import windows as w
+
+        w.close_window(handle)
 
     def recycle(self, path: Path) -> None:
         from personal_os.platform import windows as w

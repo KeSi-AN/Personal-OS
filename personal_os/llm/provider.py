@@ -20,6 +20,10 @@ class LLMUnavailable(LLMError):
     """The runtime isn't reachable or the model isn't installed."""
 
 
+class LLMCancelled(LLMError):
+    """Stopped on purpose (you said "stop" while it was thinking): not an error to report."""
+
+
 @dataclass
 class Health:
     reachable: bool

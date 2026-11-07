@@ -49,6 +49,7 @@ def build_registry(config: Config | None = None) -> Registry:
         desktop.OpenPath(),
         desktop.OpenUrl(),
         desktop.OpenApp(),
+        desktop.CloseApp(),
         desktop.CreateNote(),
         desktop.CopyToClipboard(),
         desktop.Media(),

@@ -12,6 +12,7 @@ a biased second decode is still used for a near miss on a name ("Did you mean ..
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from pathlib import Path
@@ -34,6 +35,26 @@ def normalize(audio: np.ndarray) -> np.ndarray:
     if 0 < peak < 0.5:
         out = out * min(0.9 / peak, MAX_GAIN)
     return out
+
+
+# Whisper invents text for noise ("Neeeeeee", "Thank you for watching"): segments it was
+# unsure held speech at all, or that are one sound repeated, are dropped.
+NO_SPEECH = 0.6
+UNSURE_LOGPROB = -1.0
+REPEATED = 2.4  # gzip compression ratio: real speech is well under it
+
+
+def heard(segments: Any) -> str:
+    kept = []
+    for s in segments:
+        no_speech = float(getattr(s, "no_speech_prob", 0.0) or 0.0)
+        logprob = float(getattr(s, "avg_logprob", 0.0) or 0.0)
+        ratio = float(getattr(s, "compression_ratio", 0.0) or 0.0)
+        if (no_speech > NO_SPEECH and logprob < UNSURE_LOGPROB) or ratio > REPEATED:
+            continue
+        kept.append(s.text.strip())
+    text = " ".join(kept).strip()
+    return re.sub(r"(\w)\1{3,}", r"\1\1", text)  # "Neeeeee" -> "Nee"
 
 
 def model_dir(data_dir: Path, name: str) -> Path:
@@ -85,7 +106,7 @@ class Transcriber:
                 condition_on_previous_text=False,
                 without_timestamps=True,
             )
-            return " ".join(s.text.strip() for s in segments).strip()
+            return heard(segments)
 
     def recheck(self, audio: np.ndarray, phrases: list[str]) -> str:
         """The same audio decoded again, biased hard towards a few candidate phrases

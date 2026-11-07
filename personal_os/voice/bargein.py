@@ -26,8 +26,11 @@ the video's speech "interrupted" each reply, was answered, and so on):
 With the audio engine's echo canceller (voice/engine.py) there's a better way, `CleanBargeIn`:
 the speakers are taken out of the mic (the assistant and any other app), so what's left is you.
 A frame is you when the VAD hears speech in the clean audio and the clean audio is a large
-share of the raw mic (leftover echo is a few percent of it; your voice is most of it). The
-two guards above aren't needed then: other apps' sound is cancelled too.
+share of the raw mic (leftover echo is a few percent of it; your voice is most of it). Other
+apps' sound is cancelled too, so the other-audio guard isn't needed. It only listens while a
+reply is actually sounding, not in the first ~0.3 s of each sentence (the canceller is still
+catching up there), and the no-chains guard applies here too (voice/main.py `say`): seen on
+laptop speakers, "I'm here to help" leaked through, was heard as "I'm here", and answered.
 """
 
 from __future__ import annotations
@@ -178,7 +181,8 @@ class BargeIn:
 
 YOU_SHARE = 0.4  # clean / raw level above this: most of what the mic hears is not the speakers
 CLEAN_SPEECH_PROB = 0.6
-CLEAN_TRIGGER_FRAMES = 7  # ~220 ms
+CLEAN_TRIGGER_FRAMES = 10  # ~320 ms: a word, not a click or a burst of leftover echo
+SETTLE_FRAMES = 9  # ~290 ms at the start of each sentence, while the canceller catches up
 
 
 class YouGate:
@@ -214,10 +218,14 @@ class CleanBargeIn:
         on_speech: Callable[[list[np.ndarray]], None],
         *,
         floor: float,
+        playing: Callable[[], bool] | None = None,
     ) -> None:
+        """`playing`: is a reply sounding right now? Only then is there anything to talk
+        over; between sentences and after the reply, nothing is taken as an interruption."""
         self.engine = engine
         self.on_speech = on_speech
         self.floor = floor
+        self.playing = playing or (lambda: True)
         self.done = threading.Event()
         self.thread: threading.Thread | None = None
 
@@ -236,12 +244,23 @@ class CleanBargeIn:
             gate = YouGate(StreamingVAD(), self.floor)
         except Exception:
             return
+        was_playing, settle = False, 0
         with self.engine.subscribe() as q:  # type: ignore[attr-defined]
             while not self.done.is_set():
                 try:
                     frame = q.get(timeout=0.2)
                 except queue.Empty:
                     continue
-                if gate.feed(frame.audio, frame.raw_rms):
+                if not self.playing():
+                    gate.run, was_playing = 0, False
+                    continue
+                if not was_playing:  # a sentence starts: let the canceller settle first
+                    was_playing, settle = True, SETTLE_FRAMES
+                hit = gate.feed(frame.audio, frame.raw_rms)
+                if settle:
+                    settle -= 1
+                    gate.run = 0
+                    continue
+                if hit:
                     self.on_speech(list(gate.recent))
                     return

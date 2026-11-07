@@ -273,8 +273,8 @@ def demo_view(elapsed: float, *, loop: bool = False) -> View:
 
 
 class Api:
-    """What the page may call. Only harmless things: read the view, pin, close, open the
-    dashboard through the usual one-time login link."""
+    """What the page may call. Only harmless things: read the view, pin, close, stop what
+    voice is doing, open the dashboard through the usual one-time login link."""
 
     def __init__(self, cfg: Config, *, demo: bool, pinned: bool = False) -> None:
         self._cfg = cfg
@@ -347,6 +347,18 @@ class Api:
     def pin(self, on: bool) -> bool:
         self._auto.pin(bool(on))
         return self._auto.pinned
+
+    def stop(self, close: bool = False) -> bool:
+        """Stop what voice is doing now: listening, thinking or speaking (Stop, Esc, ✕).
+        Nothing is said or done after it; `close` also closes the window."""
+        if not self._demo:
+            from personal_os.voice.main import request_stop
+
+            with contextlib.suppress(OSError):
+                request_stop(self._cfg.runtime_dir)
+        if close:
+            self.close()
+        return True
 
     def close(self) -> None:
         if self._closing or self._window is None:

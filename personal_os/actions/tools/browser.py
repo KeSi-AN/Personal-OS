@@ -24,7 +24,10 @@ from personal_os.browser import control, recipes
 
 def _send(ctx: ToolContext, op: str, args: dict[str, Any] | None = None) -> Any:
     try:
-        return control.send(ctx.config.runtime_dir, op, args, browser=ctx.config.actions.browser)
+        return control.send(
+            ctx.config.runtime_dir, op, args, browser=ctx.config.actions.browser,
+            cancel=ctx.cancel,
+        )  # fmt: skip
     except (control.BrowserUnavailable, control.BrowserError) as exc:
         raise ActionError(str(exc)) from None
 

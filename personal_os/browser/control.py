@@ -9,6 +9,7 @@ a web page can't reach any of this.
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -65,8 +66,10 @@ def send(
     *,
     browser: str = "brave",
     timeout_s: float = TIMEOUT_S,
+    cancel: threading.Event | None = None,
 ) -> Any:
-    """Run one command in the browser; its data, or BrowserError with the extension's reason."""
+    """Run one command in the browser; its data, or BrowserError with the extension's reason.
+    `cancel`: stop waiting the moment it's set (you said "stop"); the command is withdrawn."""
     target = pick(runtime_dir, browser)
     cid = uuid.uuid4().hex
     cmd_dir, res_dir = _dir(runtime_dir, "cmd"), _dir(runtime_dir, "res")
@@ -78,6 +81,9 @@ def send(
     res = res_dir / f"{cid}.json"
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
+        if cancel is not None and cancel.is_set():
+            (cmd_dir / f"{cid}.json").unlink(missing_ok=True)
+            raise BrowserError("stopped")
         if res.exists():
             try:
                 data = json.loads(res.read_text("utf-8"))

@@ -16,6 +16,7 @@ through, so the cited answer is the reply. Taint (ADR-050) and provenance (ADR-0
 from __future__ import annotations
 
 import contextlib
+import functools
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -162,10 +163,22 @@ def respond(
     context: str = "",
     max_steps: int | None = None,
     announce: Callable[[str], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> AgentReply:
     """`announce`: called with a short spoken line ("Playing Circles.") just before an action
-    that changes something runs, so voice says it first and then it happens."""
+    that changes something runs (after any confirmation), so voice says it first and then it
+    happens. `cancelled`: checked before each model call and each action; once it's true,
+    nothing more is done and the reply is empty ("stop" while she's thinking). `progress`:
+    a short note of what she's doing now, for the screen."""
     out = AgentReply(reply="")
+
+    def stopped() -> bool:
+        if cancelled is not None and cancelled():
+            out.reply, out.error = "", "stopped"
+            return True
+        return False
+
     killed = killswitch.engaged(executor.runtime_dir)
     steps = max_steps or executor.config.agent.max_steps
     schema = agent_schema(executor)
@@ -183,6 +196,10 @@ def respond(
     gathered: list[str] = []
     final_only = False
     for step in range(1, steps + 1):
+        if stopped():
+            return out
+        if progress is not None:
+            progress("Thinking…" if step == 1 else "Putting the answer together…")
         try:
             if final_only or (step == steps and gathered):
                 answer = provider.chat_json(
@@ -197,6 +214,8 @@ def respond(
                 system, transcript, schema, validate=check, temperature=0.2, max_tokens=700
             )
         except LLMError as exc:
+            if stopped():
+                return out
             _log.warning("agent step unusable", extra={"fields": {"error": str(exc)[:300]}})
             out.error = "the local model's answer wasn't usable"
             break
@@ -219,14 +238,18 @@ def respond(
             key = _key(executor, call.tool, args)
             if key in seen:
                 continue  # already have it: shown again below
+            if stopped():
+                return out
             from_context = bool(context) and borrowed(args, request, context)
-            if announce is not None and call.tool in ANNOUNCED:
-                line = announcement(call.tool, args)
-                if line:
-                    announce(line)
+            line = announcement(call.tool, args) if call.tool in ANNOUNCED else ""
+            if progress is not None:
+                progress(f"Using {call.tool.replace('_', ' ')}…")
             o = executor.request(
                 call.tool, args, origin=Origin.PLANNED, tainted=out.tainted or from_context,
                 request_text=request, read_so_far=read_texts,
+                # Said once it's approved, just before it runs: never "Opening X" and then
+                # "shall I open X?", and never for something you then decline.
+                on_run=functools.partial(announce, line) if announce and line else None,
             )  # fmt: skip
             out.outcomes.append(o)
             fresh.append(o)
@@ -317,16 +340,49 @@ def _data(o: Outcome) -> str:
     return clean(str(o.result.data), DETAILS_MAX) if o.result and o.result.data else ""
 
 
+# What a claimed verb must find in the action that ran (its tool, message or arguments):
+# "I've closed VS Code" after open_app ran is a false claim, not a matching one.
+_CLAIM_NEEDS = {
+    "open": ("open", "start", "launch"),
+    "clos": ("clos",),
+    "play": ("play", "media"),
+    "paus": ("paus", "media"),
+    "stopp": ("stop", "paus", "cancel", "media", "clos"),
+    "mut": ("mut",),
+    "remind": ("remind",),
+    "set": ("set", "remind", "volume", "bright"),
+    "cancel": ("cancel",),
+}
+
+
+def _claim_matches(verb: str, acted: list[Outcome]) -> bool:
+    stem = re.sub(r"(?:ed|ing)$", "", verb.lower())
+    needs = next((v for k, v in _CLAIM_NEEDS.items() if stem.startswith(k)), None)
+    if needs is None:
+        return True  # a verb with no rule here isn't second-guessed
+    for o in acted:
+        said = f"{o.tool} {o.message} {o.preview}".lower()
+        if any(n in said for n in needs):
+            return True
+    return False
+
+
 def grounded(reply: str, outcomes: list[Outcome], executor: Executor) -> str:
     """Never let a reply claim an action that didn't happen: with no action succeeding, a
-    claim ("I played it for you") is replaced by what really happened."""
+    claim ("I played it for you") is replaced by what really happened; and with actions
+    that did run, a claim of a different one ("I've closed VS Code" when it opened) is
+    replaced by what those actions say they did."""
     acted = [
         o
         for o in outcomes
         if o.ok and (t := executor.registry.get(o.tool)) is not None and t.tier > Tier.READ
     ]
-    if acted or not reply or not _CLAIM.search(reply):
+    if not reply or not _CLAIM.search(reply):
         return reply
+    if acted:
+        if all(_claim_matches(m[1], acted) for m in _CLAIM.finditer(reply)):
+            return reply
+        return " ".join(str(o.message).rstrip(".") + "." for o in acted)
     failed = [o for o in outcomes if not o.ok and o.status != "succeeded"]
     if failed:
         why = str(failed[0].message).split(":")[-1].strip().rstrip(".")

@@ -38,9 +38,12 @@ _log = get_logger("voice.wake")
 
 VOSK_DIR = "vosk-model-small-en-us-0.15"
 VOSK_URL = f"https://alphacephei.com/vosk/models/{VOSK_DIR}.zip"
-STOP_PHRASES = ("stop talking", "stop speaking", "be quiet", "shut up")
+STOP_PHRASES = ("stop talking", "stop speaking", "be quiet", "shut up", "stop it", "cancel that",
+                "never mind", "nevermind")  # fmt: skip
 DEBOUNCE_S = 2.0  # JARVIS waits 2 s after a wake before listening for another
-RING_S = 8.0  # the sentence so far, handed over on wake
+RING_S = 8.0  # the sentence so far, for Vosk
+HANDOVER_S = 3.0  # handed to the recorder on wake: "Donna" and just before it, not what was
+# said (or played) eight seconds earlier, which became the request ("and you open it")
 
 
 def model_path(data_dir: Path) -> Path:
@@ -50,6 +53,18 @@ def model_path(data_dir: Path) -> Path:
 def available(data_dir: Path) -> bool:
     d = model_path(data_dir)
     return (d / "am" / "final.mdl").exists() and (d / "conf" / "model.conf").exists()
+
+
+def recent(chunks: list[np.ndarray], seconds: float, rate: int = 16000) -> list[np.ndarray]:
+    """The chunks covering the last `seconds` of audio (whole chunks, newest last)."""
+    out: list[np.ndarray] = []
+    total = 0
+    for chunk in reversed(chunks):
+        if total >= seconds * rate:
+            break
+        out.append(chunk)
+        total += len(chunk)
+    return out[::-1]
 
 
 def wake_pattern(words: list[str]) -> re.Pattern[str]:
@@ -167,7 +182,7 @@ class VoskWake:
         self.last_wake = now
         self.last = {"heard": t, "did": "woke"}
         _log.info("wake word", extra={"fields": self.last})
-        preroll = list(self.ring)
+        preroll = recent(list(self.ring), HANDOVER_S)
         self._rec.Reset()
         self.ring.clear()
         self.on_wake(preroll)

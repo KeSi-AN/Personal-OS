@@ -125,9 +125,11 @@ class VoiceConfig(_Section):
     mic_floor: float = Field(0.002, gt=0, lt=0.5)
     vad_silence_ms: int = Field(600, ge=200, le=3000)  # quiet this long ends your turn
     router_threshold: float = Field(0.85, gt=0.5, le=1.0)  # name match needed to act at once
-    # voice: talking over a reply (or saying "Donna") stops it and listens; the hotkey always
-    # does. Needs echo cancelling, else it acts like "hotkey" with speakers playing.
-    barge_in: Literal["voice", "hotkey"] = "voice"
+    # wake: while she talks, "Donna" (stops and listens) or "stop talking" / "never mind"
+    # (just stops), the hotkey and the popup interrupt her: as smart speakers do. voice: any
+    # speech does too; needs echo cancelling good enough that she never hears herself (on
+    # laptop speakers she did: "Did you mean ...?" heard back as you). hotkey: as wake.
+    barge_in: Literal["wake", "voice", "hotkey"] = "wake"
     piper_voice: str = "en_US-lessac-medium"
     piper_length_scale: float = Field(0.95, gt=0.5, lt=2.0)  # under 1 speaks faster
     tts: Literal["windows", "piper", "speechify"] = "piper"

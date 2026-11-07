@@ -254,7 +254,8 @@ def test_view_from_status():
     assert v.paused and v.killed
     assert set(v.as_dict()) == {
         "voice_running", "state", "turn_id", "trigger", "heard", "reply",
-        "question", "error", "paused", "killed", "alerts", "details",
+        "question", "error", "paused", "killed", "alerts", "details", "progress",
+        "dismissed",
     }  # fmt: skip
     err = view_from({"running": True, "error": "hotkey taken"}, paused=False, killed=False)
     assert err.error == "hotkey taken"

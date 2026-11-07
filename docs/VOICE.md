@@ -13,7 +13,7 @@ Press **Ctrl+Alt+Shift+V**, wait for the beep, and speak. It stops listening at 
 |---|---|
 | "brief me", "good morning" | Your morning briefing |
 | "end of day", "how was my day" | The end-of-day summary |
-| "where did I leave off on personal-os?" | `ask`; the answer is spoken (the dashboard has the evidence) |
+| "where did I leave off on personal-os?", "what did I do today?" | Answered from your history exactly as `personal-os ask` answers it; the evidence is in the popup |
 | "remind me in 20 minutes to stretch", "take a screenshot", "pause the music" | Done straight away (tier 1) |
 | "commit my changes in auth-service" | Read back to you; only a spoken **yes** does it |
 | "remember that standup moved to 10:30" | Read back; stored only after **yes** |
@@ -69,7 +69,7 @@ When a turn starts (the hotkey, the wake word, or talking over a reply), a small
 - **"Did you mean …?"** when it isn't sure what you said.
 - **Paused** or **kill switch on**, when they apply.
 
-It closes 5 seconds after the reply. **Pin** keeps it open, **Esc** or ✕ closes it (click it first, since it opens without focus), and **Dashboard** opens the dashboard through the usual one-time login link. A new turn reuses the open window.
+It closes 5 seconds after the reply. While she's listening, thinking or talking, **Stop** stops her there: nothing more is said or done, and a model call in progress is hung up. **Esc** or ✕ does the same and closes the window (click it first, since it opens without focus). **Pin** keeps it open, and **Dashboard** opens the dashboard through the usual one-time login link. A new turn reuses the open window. While she thinks, a line under the state says what she's doing ("Using recall…"), and a yes-or-no question shows as it's asked.
 
 It shows only what voice already keeps in its status file, never anything from captured activity, and it writes nothing. It reads the runtime folder about 5 times a second while it's open, and isn't running at all otherwise.
 
@@ -106,7 +106,11 @@ It needs the WebView2 runtime, which Windows 11 includes. Without it, voice work
 
 ## Wake word: "Donna"
 
-Say **"Donna"**, **"Hey Donna"**, **"Hello Donna"** or **"Hi Donna"**, then your request. You can say both in one breath ("Donna, open Brave") or pause after "Donna" and then speak. While she's answering, saying "Donna" stops the reply and listens, and **"stop talking"**, **"stop speaking"**, **"be quiet"** or **"shut up"** just stop it.
+Say **"Donna"**, **"Hey Donna"**, **"Hello Donna"** or **"Hi Donna"**, then your request. You can say both in one breath ("Donna, open Brave") or pause after "Donna" and then speak. While she's thinking or answering, saying "Donna" stops her and listens, and **"stop talking"**, **"stop speaking"**, **"be quiet"**, **"shut up"**, **"stop it"**, **"cancel that"** or **"never mind"** just stop her.
+
+Only the last 3 seconds before "Donna" are handed to speech recognition, and what came before "Donna" is dropped from the request. If what was recorded has no "Donna" in it at all, the wake word was set off by something else (a video, people talking) and nothing is done. If only one word that isn't a command is caught ("code."), she asks you to say it again instead of guessing.
+
+**Closing apps:** "close VS Code", "quit Brave" close that app's windows the way their ✕ does, so an app can still ask to save. It's understood by rules, without the model.
 
 This is the wake word from [JARVIS](https://github.com/Namish-Dev/JARVIS): **Vosk** (`vosk-model-small-en-us-0.15`) transcribes what it hears, on this laptop, and voice wakes when a word in `voice.wake_words` (default `["donna"]`) is in it as a whole word, so "Madonna" and "gonna" don't count. It reacts mid-sentence and hands the whole sentence to speech recognition, so nothing you said after "Donna" is lost. Nothing is stored.
 
@@ -118,10 +122,11 @@ uv run personal-os voice status       # "wake word ... listening", and what it l
 
 ### Talking over a reply, and the speakers
 
-Voice keeps the microphone open and takes **what the speakers are playing out of it**, with the WebRTC echo canceller (Windows' loopback of your default output is the reference). That covers Donna's own voice and any video, music or call on the PC. It measures your speakers' delay by itself (an HDMI TV: about 240 ms). So with `voice.barge_in = "voice"` (the default):
+Voice keeps the microphone open and takes **what the speakers are playing out of it**, with the WebRTC echo canceller (Windows' loopback of your default output is the reference). That covers Donna's own voice and any video, music or call on the PC. It measures your speakers' delay by itself (an HDMI TV: about 240 ms). That keeps the wake word from triggering on her own voice or on a video saying "Donna".
 
-- just start talking while she answers, and the reply stops and she listens;
-- the wake word doesn't trigger on her own voice or on a video saying "Donna".
+While she talks, by default (`voice.barge_in = "wake"`), **"Donna"** stops her and listens, and **"stop talking"**, **"never mind"** and the other stop phrases just stop her, as with a smart speaker; so do the hotkey and the popup. Plain talking over her doesn't, because on laptop speakers enough of her voice leaks past the canceller to be taken for you (seen: her "Did you mean vscode?" heard back as "Did you mean?", cutting the question off). With `voice.barge_in = "voice"`, any speech interrupts her too, and anything heard that matches what she was just saying is thrown away as her own voice.
+
+Only speech while a reply is actually sounding counts, after the first ~0.3 s of each sentence, and it has to last about a third of a second. A reply to a turn that itself began by talking over a reply can't be stopped by just any speech (the wake word, stop phrases, the hotkey and the popup still work), so her own voice leaking through can never set off a loop of her answering herself. The speaker delay starts at 50 ms and is re-measured while she talks; the reference is fed slightly early, since one fed late cancels nothing.
 
 `voice status` shows `echo cancel on`, the reference device and the delay. If you switch the default output (TV to headphones), voice notices within 10 s and cancels the new device. If echo cancelling can't start (no loopback device), barge-in falls back to the older echo gate, which is off while other apps play sound, and the hotkey always works.
 
