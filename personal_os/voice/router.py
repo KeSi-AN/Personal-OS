@@ -497,6 +497,8 @@ def _system(low: str, now: datetime | None) -> Intent | None:
         intent = Intent([("media", {"action": "play_pause"})], "Okay.")
         intent.verb = "pause" if m[1] in ("pause", "stop") else "play"
         return intent
+    if re.fullmatch(r"close\s+(?:the\s+|this\s+|that\s+)?(?:current\s+)?(?:tab|page)", low):
+        return Intent([("browser_tab", {"action": "close"})], "Closing the tab.")
     if re.fullmatch(r"(?:next|skip)(?:\s+(?:song|track))?", low):
         return Intent([("media", {"action": "next"})], "Next.")
     if re.fullmatch(r"previous(?:\s+(?:song|track))?|go back a (?:song|track)", low):

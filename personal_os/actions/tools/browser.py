@@ -111,6 +111,12 @@ class PlayMedia(Tool):
         return Result(f'Playing "{title}" on {args.site}', data=data)
 
 
+# What "which" means when it names no tab: the one in front ("close this tab", "the tab").
+_CURRENT = {"", "current", "this", "active", "it", "this one", "the tab", "tab", "this tab",
+            "current tab", "the current tab", "active tab", "the current one", "this page",
+            "current page", "the page", "page"}  # fmt: skip
+
+
 class TabArgs(Args):
     action: Literal["switch", "close", "group", "back", "forward", "reload", "mute", "unmute"]
     which: str = Field(
@@ -145,9 +151,9 @@ class BrowserTab(Tool):
                 (t for t in tabs if t.get("window") == window), key=lambda t: t.get("index", 0)
             )
             return [ordered[p - 1] for p in positions if 1 <= p <= len(ordered)]
-        if not which.strip():
+        w = which.lower().strip(" .")
+        if w in _CURRENT:
             return [t for t in tabs if t.get("active")][:1]
-        w = which.lower().strip()
         return [
             t
             for t in tabs
@@ -168,7 +174,9 @@ class BrowserTab(Tool):
             if args.positions:
                 raise ActionError("there aren't that many tabs in this window")
             raise ActionError(
-                f'no open tab matches "{args.which}"' if args.which else "no current tab"
+                f'no open tab has "{args.which}" in its title or address'
+                if args.which.lower().strip(" .") not in _CURRENT
+                else "the browser didn't say which tab is in front"
             )
         first = found[0]
         several = found if (args.all or args.positions) else found[:1]

@@ -138,6 +138,9 @@ class VoiceConfig(_Section):
     popup_position: Literal["bottom-right", "top-right", "bottom-left", "top-left"] = "bottom-right"
     popup_autoclose_s: float = Field(5.0, ge=1, le=120)
     followup_s: float = Field(10.0, ge=0, le=20)  # listen this long after a reply (JARVIS: 10)
+    # Other apps (music, a video) play at this share of their volume during a turn, so she
+    # hears you over them; 1 = never turned down.
+    duck: float = Field(0.2, ge=0.0, le=1.0)
     speechify_voice: str = "geffen_32"
     speechify_model: str = "simba-3.5"
     max_spoken_chars: int = Field(600, ge=100, le=2000)

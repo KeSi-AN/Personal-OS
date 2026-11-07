@@ -92,6 +92,10 @@ class Voice:
         self.stopped_by_you = False  # this turn was stopped on purpose, not cut by a new one
         self.unanswered = False  # a yes-or-no question got no answer at all this turn
         self.said_last = ""  # the last thing she said aloud
+        from personal_os.voice.duck import Ducker
+
+        # Music and videos turned down for a conversation, so she hears you over them.
+        self.ducker = Ducker(cfg.runtime_dir, cfg.voice.duck)
 
     # --- status ---------------------------------------------------------------------------
 
@@ -725,6 +729,7 @@ class Voice:
         ).start()
         registered.wait(5)  # "ready" only once the hotkey is (or failed to be) registered
         self.start_engine()
+        self.ducker.recover()  # volumes a crash left turned down
         threading.Thread(target=self.warm, name="pos-warm", daemon=True).start()
         self.sync_wake()
         threading.Thread(target=self.watch_stop, name="pos-stop", daemon=True).start()
@@ -783,7 +788,13 @@ class Voice:
     def converse(self, trigger: str) -> None:
         """One turn, then any follow-ups: a request it was told to make next ("no, at 5 pm
         instead"), and whatever you say in the few seconds after a reply, without the hotkey.
-        "Thanks" or silence ends it; so does a press (that starts a fresh turn)."""
+        "Thanks" or silence ends it; so does a press (that starts a fresh turn). Other apps'
+        sound is turned down for all of it."""
+        self.ducker.level = self.cfg.voice.duck  # the config is re-read every 10 s
+        with self.ducker.turn():
+            self._converse(trigger)
+
+    def _converse(self, trigger: str) -> None:
         more = self.respond(trigger)
         for _ in range(MAX_FOLLOWUPS):
             if self.stop.is_set() or not self.triggers.empty():

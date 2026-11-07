@@ -212,7 +212,7 @@ def test_switch_and_close_tabs_by_their_words(home: Path, config: Config, browse
     )
     assert o.ok and o.message == "Closed 2 tabs"
     o = env.ex.request("browser_tab", {"action": "switch", "which": "netflix"}, origin=Origin.USER)
-    assert not o.ok and "no open tab matches" in o.message
+    assert not o.ok and 'no open tab has "netflix"' in o.message
 
 
 def test_media_and_whats_playing(home: Path, config: Config, browser):

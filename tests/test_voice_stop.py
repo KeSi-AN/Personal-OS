@@ -129,7 +129,9 @@ def test_close_is_understood_without_the_model():
     intent = router.route("Close VS Code.", INDEX)
     assert intent is not None and intent.sure
     assert intent.calls == [("close_app", {"app": "vscode"})]
-    assert router.route("close this tab", INDEX) is None  # not an app: the model's job
+    tab = router.route("close this tab", INDEX)  # not an app: the tab in front
+    assert tab is not None and tab.calls == [("browser_tab", {"action": "close"})]
+    assert router.route("close the netflix thing", INDEX) is None  # unclear: the model's job
 
 
 # --- asking in plain words --------------------------------------------------------------------

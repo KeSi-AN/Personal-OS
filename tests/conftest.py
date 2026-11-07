@@ -43,6 +43,14 @@ def mic_not_muted(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def no_real_ducking(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests never turn down the volume of apps playing on this machine."""
+    from personal_os.voice import duck
+
+    monkeypatch.setattr(duck, "_sessions", lambda: [])
+
+
+@pytest.fixture(autouse=True)
 def no_real_popup(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
     """Tests never open the voice popup window; launches are recorded here instead."""
     from personal_os.interfaces import popup

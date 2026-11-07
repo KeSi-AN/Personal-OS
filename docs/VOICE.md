@@ -110,7 +110,9 @@ Say **"Donna"**, **"Hey Donna"**, **"Hello Donna"** or **"Hi Donna"**, then your
 
 Only the last 3 seconds before "Donna" are handed to speech recognition, and what came before "Donna" is dropped from the request. If what was recorded has no "Donna" in it at all, the wake word was set off by something else (a video, people talking) and nothing is done. If only one word that isn't a command is caught ("code."), she asks you to say it again instead of guessing.
 
-**Closing apps:** "close VS Code", "quit Brave" close that app's windows the way their ✕ does, so an app can still ask to save. It's understood by rules, without the model.
+**Closing apps:** "close VS Code", "quit Brave" close that app's windows the way their ✕ does, so an app can still ask to save. "Close the tab" closes the browser tab in front. Both are understood by rules, without the model.
+
+**Music while you talk:** for a whole conversation (listening, thinking, talking and the follow-ups), every other app making sound plays at a fifth of its volume, as on a smart speaker, so she can hear you over it; it's put back when the conversation ends. `voice.duck` sets the share (`1` turns this off). If voice stops mid-conversation, the volumes are put back the next time it starts.
 
 This is the wake word from [JARVIS](https://github.com/Namish-Dev/JARVIS): **Vosk** (`vosk-model-small-en-us-0.15`) transcribes what it hears, on this laptop, and voice wakes when a word in `voice.wake_words` (default `["donna"]`) is in it as a whole word, so "Madonna" and "gonna" don't count. It reacts mid-sentence and hands the whole sentence to speech recognition, so nothing you said after "Donna" is lost. Nothing is stored.
 
