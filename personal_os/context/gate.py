@@ -29,8 +29,10 @@ class JobGate:
         fullscreen: Callable[[], bool] | None,
         paused: Callable[[], bool],
         ac_power: Callable[[], bool] = on_ac_power,
+        mode_allows: Callable[[], bool] = lambda: True,
     ) -> None:
         self.cfg = cfg
+        self.mode_allows = mode_allows
         self.idle_seconds = idle_seconds
         self.fullscreen = fullscreen
         self.paused = paused
@@ -41,6 +43,8 @@ class JobGate:
             return GateState(False, "llm disabled in config")
         if self.paused():
             return GateState(False, "capture paused")
+        if not self.mode_allows():
+            return GateState(False, "gaming mode: the GPU is the game's")
         if self.cfg.only_on_ac_power and not self.ac_power():
             return GateState(False, "on battery")
         if self.idle_seconds is None:

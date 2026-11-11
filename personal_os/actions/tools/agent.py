@@ -113,7 +113,11 @@ class AboutMe(Tool):
 
         cfg = ctx.config
         v = cfg.voice
-        lines = [f"name: {cfg.agent.name}"]
+        from personal_os.core import modes
+
+        st = modes.state(cfg.runtime_dir)
+        lines = [f"name: {cfg.agent.name}",
+                 f"mode: {st['mode']} ({modes.EFFECTS[st['mode']].describe})"]  # fmt: skip
         try:
             from personal_os.voice import wake
 
@@ -179,4 +183,37 @@ class Conversation(Tool):
         # Her replies can quote pages and tabs: captured content, like any read.
         return Result(
             f"{len(lines)} exchange(s)", data="\n".join(lines) or "(none yet)", captured=True
+        )
+
+
+class ModeArgs(Args):
+    mode: str = Field(description="work, gaming or chill (leisure)")
+
+
+class SetMode(Tool):
+    name = "set_mode"
+    summary = (
+        "switch Donna's mode: work (nudges if chill takes over), gaming (quiet, GPU freed, no "
+        "wake word or popups), chill/leisure (hands-free, no nudges)"
+    )
+    tier = Tier.LOW
+    reversible = True
+    args_model = ModeArgs
+
+    def preview(self, args: ModeArgs, ctx: ToolContext) -> str:
+        return f"switch to {args.mode} mode"
+
+    def run(self, args: ModeArgs, ctx: ToolContext) -> Result:
+        from personal_os.actions.base import ActionError
+        from personal_os.core import modes
+
+        mode = modes.normalize(args.mode)
+        if mode is None:
+            raise ActionError("the modes are work, gaming and chill")
+        before = modes.current(ctx.config.runtime_dir)
+        modes.set_mode(ctx.config.runtime_dir, mode, by="chat", now=ctx.clock.now())
+        fx = modes.EFFECTS[mode]
+        return Result(
+            f"{fx.label} mode. {fx.describe}",
+            undo={"tool": "set_mode", "args": {"mode": before}},
         )

@@ -25,8 +25,8 @@ from personal_os.config.loader import ensure_dirs, load_config
 from personal_os.config.schema import Config
 from personal_os.context.gate import JobGate
 from personal_os.context.jobs import JobReport, run_llm_jobs
+from personal_os.core import modes, runtime
 from personal_os.core import pause as pause_mod
-from personal_os.core import runtime
 from personal_os.core.bus import EventBus
 from personal_os.core.clock import Clock, SystemClock
 from personal_os.core.events import Event, SystemEvent
@@ -124,8 +124,10 @@ class Daemon:
             idle_seconds=probe_.idle_seconds if probe_ else None,
             fullscreen=getattr(probe_, "fullscreen", None),
             paused=self.paused.is_set,
+            mode_allows=lambda: modes.effects(config.runtime_dir).background_jobs,
         )
         self.llm_status: dict[str, Any] = {"gate": "not checked yet"}
+        self.last_nudge: datetime | None = None
         self.restart_requested = False
         self.interfaces = use_platform  # web dashboard, tray (never in tests without a desktop)
         self.tray: Tray | None = None
@@ -299,6 +301,7 @@ class Daemon:
                 last_reminders = mono
                 self._fire_reminders()
                 self._sync_project_sources()
+                self._mode_tick()
                 if self.interfaces:
                     self._sync_voice()
                     await asyncio.to_thread(self._briefings)
@@ -542,6 +545,52 @@ class Daemon:
         if cfg.voice.enabled and cfg.briefings.speak:
             self._speak(cfg, f"{b.title}. " + " ".join(b.lines))
 
+    def _mode_tick(self) -> None:
+        """Every 30 s: gaming mode when a game is in front (and back after), and in work mode a
+        nudge when chill has taken over."""
+        from personal_os.context import activity
+        from personal_os.context import now as now_mod
+
+        rt = self.config.runtime_dir
+        now = self.clock.now()
+        try:
+            snap = now_mod.snapshot(self.config)
+            front = next((w for w in snap.windows if w.front), None)
+            game = (
+                front is not None and activity.classify_app(front.exe, front.exe_path) == "gaming"
+            )
+            if self.config.modes.auto_gaming:
+                change = modes.auto_gaming_step(rt, game, now)
+                if change == "entered" and self.llm is not None:
+                    with contextlib.suppress(Exception):
+                        self.llm.unload()  # free the GPU for the game
+                if change:
+                    _log.info("mode changed", extra={"fields": {"auto": change}})
+            fx = modes.effects(rt)
+            if fx.nudge_chill_min and (
+                self.last_nudge is None or now - self.last_nudge > timedelta(minutes=30)
+            ):
+                b = activity.breakdown(self.control_conn, now - timedelta(minutes=20), now,
+                                       activity.load_cache(self.config.data_dir))  # fmt: skip
+                chill = b.by_category.get("chill", 0)
+                if chill >= fx.nudge_chill_min * 60_000:
+                    self.last_nudge = now
+                    self._nudge(chill // 60_000, b)
+        except Exception as exc:  # never let this take the loop down
+            _log.warning("mode tick failed", extra={"fields": {"exc_type": type(exc).__name__}})
+
+    def _nudge(self, minutes: int, b: Any) -> None:
+        from personal_os.interfaces import alerts
+
+        top = max(b.by_site.items(), key=lambda kv: kv[1])[0] if b.by_site else "videos"
+        worked = max(b.by_project.items(), key=lambda kv: kv[1])[0] if b.by_project else ""
+        back = f" Back to {worked}?" if worked else ""
+        text = f"{minutes} min of chill ({top}) in work mode.{back}"
+        alerts.show(
+            self.config, f"nudge-{self.clock.now():%H%M}", "Work mode", text, self.clock.now()
+        )
+        self._speak(self._fresh_config(), text)
+
     def _sync_project_sources(self) -> None:
         """Pages added from the browser's "Add to Personal OS project" go to the project inbox;
         tab groups named like a project keep its sources in step (phase 9k). Each item is its own
@@ -585,15 +634,16 @@ class Daemon:
         from personal_os.interfaces.notify import toast
 
         cfg = self._fresh_config()
+        quiet = not modes.effects(cfg.runtime_dir).popup  # gaming: never a window over the game
         for r in due:
             shown_by = "popup"
-            if not alerts.show(cfg, r.id, "Reminder", r.text, self.clock.now()):
+            if quiet or not alerts.show(cfg, r.id, "Reminder", r.text, self.clock.now()):
                 shown_by = "toast" if toast("Reminder", r.text, reminder=True) else "none"
                 if shown_by == "none" and self.tray is not None:
                     self.tray.notify(r.text, "Reminder")
                     shown_by = "tray"
             _log.info("reminder fired", extra={"fields": {"shown": shown_by}})
-            if cfg.voice.enabled:
+            if cfg.voice.enabled and modes.effects(cfg.runtime_dir).speak_announcements:
                 self._speak(cfg, f"Reminder: {r.text}")
 
     def _speak(self, cfg: Any, text: str) -> None:

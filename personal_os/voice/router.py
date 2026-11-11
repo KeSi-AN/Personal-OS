@@ -284,6 +284,12 @@ _CLOSE = re.compile(
 _BROWSER = re.compile(
     r"(?:the\s+)?(?:brave|chrome|google chrome|edge|microsoft edge|firefox|(?:my\s+)?browser)", re.I
 )
+_MODE = re.compile(
+    r"(?:(?:switch|change|go|put me)\s+(?:in)?to|enter|start|turn on|enable|activate|set)?\s*"
+    r"(?:the\s+)?(work|working|focus|study|gaming|game|games|chill|leisure|relax|relaxing)\s+mode"
+    r"(?:\s+on)?",
+    re.I,
+)
 _APP_WORD = re.compile(r"\s+(app|application|program|browser)$", re.I)
 _KIND = re.compile(
     r"\s+(folder|directory|file|project|document|pdf|video|picture|photo|image)$", re.I
@@ -499,6 +505,13 @@ def _system(low: str, now: datetime | None) -> Intent | None:
     m = re.fullmatch(r"(?:set\s+(?:the\s+)?)?(?:screen\s+)?brightness\s+(?:to\s+|at\s+)?(.+)", low)
     if m and (n := _number(m[1])) is not None:
         return Intent([("set_brightness", {"percent": n})], f"Brightness {n}.")
+    m = _MODE.fullmatch(low)
+    if m:
+        from personal_os.core.modes import EFFECTS, normalize
+
+        mode = normalize(m[1])
+        if mode is not None:
+            return Intent([("set_mode", {"mode": mode})], f"{EFFECTS[mode].label} mode.")
     if re.fullmatch(r"lock(?:\s+(?:the|my))?(?:\s+(?:screen|computer|pc|laptop))?", low):
         return Intent([("lock_screen", {})], "Locking.")
     if re.fullmatch(

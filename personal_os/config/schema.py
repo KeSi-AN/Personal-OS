@@ -201,6 +201,19 @@ class ActionsConfig(_Section):
         return v
 
 
+class ModesConfig(_Section):
+    """Work, gaming and chill (core/modes.py)."""
+
+    auto_gaming: bool = True  # gaming mode while a game is in front, and back afterwards
+
+
+class BriefConfig(_Section):
+    """The 24-hour brief (web/brief.py)."""
+
+    on_start: bool = True  # open it in the browser when capture starts
+    min_gap_h: float = Field(6, ge=0, le=72)  # not again within this many hours (restarts)
+
+
 class AgentConfig(_Section):
     """Donna as one agent over general tools (docs/AGENT.md)."""
 
@@ -222,6 +235,8 @@ class Config(_Section):
     voice: VoiceConfig = VoiceConfig()
     briefings: BriefingsConfig = BriefingsConfig()
     agent: AgentConfig = AgentConfig()
+    modes: ModesConfig = ModesConfig()
+    brief: BriefConfig = BriefConfig()
 
     @property
     def db_path(self) -> Path:

@@ -57,6 +57,7 @@ Which tool:
 - what did I do / where did I leave off / how long did I spend -> recall
 - reminders -> list_reminders, set_reminder, update_reminder, cancel_reminder
 - about yourself (wake word, your voice, settings, what's connected) -> about_me
+- "gaming / work / chill / leisure mode" -> set_mode
 - projects: "add these tabs / this tab group to X" -> project_add_source; notes -> project_note; to-dos -> todo_add, todo_done; "what's in X" -> project_items; "resume X" / "pick X back up" -> project_resume
 - what we talked about / what you said earlier -> conversation
 - play a song or video by name -> play_media (never media: that only presses play/pause)

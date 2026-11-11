@@ -29,7 +29,7 @@ from typing import Any
 
 from personal_os.config.loader import load_config
 from personal_os.config.schema import Config
-from personal_os.core import runtime
+from personal_os.core import modes, runtime
 from personal_os.core.clock import SystemClock
 from personal_os.core.logging import get_logger, setup_logging
 from personal_os.voice import dialogue, tts
@@ -208,7 +208,9 @@ class Voice:
         from personal_os.voice import wake
 
         v = self.cfg.voice
-        want = v.wake_word_enabled and wake.available(self.cfg.data_dir)
+        mode_wake = modes.effects(self.cfg.runtime_dir).wake_word  # gaming: off; chill: on
+        enabled = v.wake_word_enabled if mode_wake is None else mode_wake
+        want = enabled and wake.available(self.cfg.data_dir)
         if want and self.wake is None:
             try:
                 self.wake = wake.VoskWake(
@@ -777,7 +779,10 @@ class Voice:
 
     def speak_queued(self) -> None:
         """Say what the daemon queued (a reminder, a briefing), while nothing else is going on."""
-        for text in take_speech(self.cfg.runtime_dir):
+        queued = take_speech(self.cfg.runtime_dir)
+        if not modes.effects(self.cfg.runtime_dir).speak_announcements:
+            return  # gaming: announcements are dropped, not said over the game later
+        for text in queued:
             self.interrupt.clear()  # a stopped turn earlier mustn't silence a reminder now
             self.stopped_by_you = False
             self.turn_trigger = "queued"
@@ -803,14 +808,15 @@ class Voice:
                 text, self.next_request = self.next_request, None
                 more = self.respond("followup", text=text)
                 continue
-            if not more or self.cfg.voice.followup_s <= 0:
+            followups = modes.effects(self.cfg.runtime_dir).followup
+            if not more or self.cfg.voice.followup_s <= 0 or not followups:
                 return
             more = self.respond("followup")
 
     def launch_popup(self) -> None:
         """Show the voice popup for this turn, off-thread: recording never waits on it, and a
         popup that fails to start never affects voice (the error is kept for `doctor`)."""
-        if not self.cfg.voice.popup:
+        if not self.cfg.voice.popup or not modes.effects(self.cfg.runtime_dir).popup:
             return
         threading.Thread(
             target=_launch_popup, args=(self.cfg,), name="pos-popup", daemon=True

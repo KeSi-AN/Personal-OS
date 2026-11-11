@@ -9,6 +9,7 @@ incognito never sent. The result is captured content: it taints what follows (AD
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sys
 import time
@@ -38,6 +39,8 @@ class Window:
     app: str
     title: str
     front: bool = False
+    exe: str = ""
+    exe_path: str = ""
 
 
 @dataclass
@@ -130,6 +133,7 @@ def windows(rules: PrivacyRules, redactor: TextRedactor) -> list[Window]:
     front = user32.GetForegroundWindow()
     found: list[Window] = []
     names: dict[int, str] = {}
+    paths: dict[int, str] = {}
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)  # type: ignore[untyped-decorator,misc,unused-ignore]
     def visit(hwnd: int, _lp: int) -> bool:
@@ -150,7 +154,10 @@ def windows(rules: PrivacyRules, redactor: TextRedactor) -> list[Window]:
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         if pid.value not in names:
             try:
-                names[pid.value] = psutil.Process(pid.value).name()
+                proc = psutil.Process(pid.value)
+                names[pid.value] = proc.name()
+                with contextlib.suppress(psutil.Error):
+                    paths[pid.value] = proc.exe()
             except psutil.Error:
                 names[pid.value] = ""
         exe = names[pid.value]
@@ -161,7 +168,10 @@ def windows(rules: PrivacyRules, redactor: TextRedactor) -> list[Window]:
             title = "(title hidden)"
         else:
             title, _ = redactor.redact(title[:200], "title")
-        found.append(Window(exe.removesuffix(".exe"), title, front=hwnd == front))
+        found.append(
+            Window(exe.removesuffix(".exe"), title, front=hwnd == front, exe=exe,
+                   exe_path=paths.get(pid.value, ""))
+        )  # fmt: skip
         return True
 
     user32.EnumWindows(visit, 0)

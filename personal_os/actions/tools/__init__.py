@@ -26,6 +26,7 @@ def build_registry(config: Config | None = None) -> Registry:
         agent.Memory(),
         agent.AboutMe(),
         agent.Conversation(),
+        agent.SetMode(),
         projects.ProjectCreate(),
         projects.ProjectAddSource(),
         projects.ProjectNote(),

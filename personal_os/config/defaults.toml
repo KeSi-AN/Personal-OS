@@ -199,3 +199,13 @@ enabled = true
 max_steps = 4              # model calls per request (each about 1-3 s)
 name = "Donna"
 user_name = ""             # how she addresses you; empty: no name
+
+[modes]
+# work: a nudge when chill takes over. gaming: model unloaded, background jobs paused, no wake
+# word, popups or spoken announcements. chill: wake word on, no nudges. Switch by voice
+# ("switch to gaming mode"), on the dashboard, or let gaming start by itself:
+auto_gaming = true         # gaming mode while a game is in front, and back 3 minutes after
+
+[brief]
+on_start = true            # open the 24-hour brief in the browser when capture starts
+min_gap_h = 6              # ... but not again within this many hours
