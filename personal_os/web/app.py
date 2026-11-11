@@ -46,6 +46,7 @@ DEVICE_COOKIE = "pos_device"
 PHONE_ROUTES = {
     ("GET", "/"),
     ("GET", "/p"),
+    ("GET", "/brief"),
     ("GET", "/timeline"),
     ("GET", "/projects"),
     ("GET", "/ask"),
@@ -202,12 +203,16 @@ def create_app(state: WebState, *, lan: bool = False) -> FastAPI:
     # --- login and pairing -----------------------------------------------------------------
 
     @app.get("/login")
-    def login(code: str = "") -> Response:
+    def login(code: str = "", next: str = "/") -> Response:
         with state.db() as conn:
             ok = not lan and auth.use_login_code(conn, state.clock, code)
         if not ok:
             return HTMLResponse(pages.login_needed(expired=bool(code)), status_code=401)
-        resp = RedirectResponse("/", status_code=303)
+        # Only a page of this dashboard: never another site ("//evil.example", "http://...").
+        safe = (
+            next if next.startswith("/") and not next.startswith("//") and "\\" not in next else "/"
+        )
+        resp = RedirectResponse(safe, status_code=303)
         resp.set_cookie(
             SESSION_COOKIE,
             state.sessions.create(),

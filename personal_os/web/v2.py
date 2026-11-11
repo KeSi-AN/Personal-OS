@@ -82,9 +82,9 @@ form.inline { display:flex; gap:8px; margin-top:10px; } form.inline input { flex
   .rail .brand, .rail .foot { display:none; } main { padding:16px; } }
 """
 
-NAV = [("/", "Today"), ("/p", "Projects"), ("/donna", "Donna"), ("/notes", "Notes"),
-       ("/settings", "Settings")]  # fmt: skip
-PHONE_PAGES = {"/", "/p"}
+NAV = [("/", "Today"), ("/brief", "Brief"), ("/p", "Projects"), ("/donna", "Donna"),
+       ("/notes", "Notes"), ("/settings", "Settings")]  # fmt: skip
+PHONE_PAGES = {"/", "/brief", "/p"}
 
 
 def shell(title: str, active: str, body: str, *, phone: bool = False) -> str:
@@ -304,7 +304,9 @@ def today(state: Any, conn: sqlite3.Connection, *, phone: bool = False) -> str:
         or "<p class='muted small'>Nothing yet today.</p>"
     )
     body = (
-        f"<h1>Today</h1><p class='sub'>{e(now.astimezone().strftime('%A %d %B'))}</p><div class='grid'>"
+        f"<h1>Today</h1><p class='sub'>{e(now.astimezone().strftime('%A %d %B'))} · <a href='/brief'>last 24 hours →</a></p>"
+        + ("" if phone else _mode_bar(state))
+        + "<div class='grid'>"
         f"<div class='card'><h2>Time</h2><div class='big'>{dur(total)}</div><div class='small muted'>on projects today</div>{_bars(mins, pn)}</div>"
         f"<div class='card'><h2>Next up</h2>{''.join(next_rows) or '<p class=\"muted small\">Nothing scheduled.</p>'}</div>"
         f"{now_card}{left}"
@@ -312,6 +314,20 @@ def today(state: Any, conn: sqlite3.Connection, *, phone: bool = False) -> str:
         + f"<div class='card wide'><h2>Timeline</h2>{timeline}</div></div>"
     )  # fmt: skip
     return shell("Today", "/", body, phone=phone)
+
+
+def _mode_bar(state: Any) -> str:
+    from personal_os.core import modes
+
+    st = modes.state(state.config.runtime_dir)
+    chips = "".join(
+        f"<button class='{'primary' if m == st['mode'] else ''}' title='{e(modes.EFFECTS[m].describe)}' "
+        f"onclick=\"act('/api/v2/mode', {{mode:'{m}'}})\">{e(modes.EFFECTS[m].label)}</button>"
+        for m in modes.MODES
+    )
+    auto = " <span class='small muted'>(automatic)</span>" if st.get("by") == "auto" else ""
+    return (f"<div class='row' style='border:none;margin:-8px 0 12px'><span class='small muted'>Mode:</span>{chips}{auto}"
+            f"<span class='small muted grow'>{e(modes.EFFECTS[st['mode']].describe)}</span></div>")  # fmt: skip
 
 
 def projects_page(state: Any, conn: sqlite3.Connection, *, phone: bool = False) -> str:
@@ -595,6 +611,10 @@ class ChatBody(BaseModel):
     text: str = Field(min_length=1, max_length=1000)
 
 
+class ModeBody(BaseModel):
+    mode: str = Field(min_length=2, max_length=20)
+
+
 class SettingBody(BaseModel):
     key: str
     value: bool | float | int
@@ -634,6 +654,23 @@ def register(
     def v2_notes() -> str:
         with state.db() as conn:
             return notes_page(state, conn)
+
+    @app.get("/brief", response_class=HTMLResponse)
+    def v2_brief(h: int = 24) -> str:
+        from personal_os.web import brief
+
+        with state.db() as conn:
+            return brief.page(state, conn, max(1, min(h, 24 * 7)), phone=lan)
+
+    @app.post("/api/v2/mode")
+    def v2_mode(body: ModeBody) -> dict[str, Any]:
+        from personal_os.core import modes
+
+        mode = modes.normalize(body.mode)
+        if mode is None:
+            raise HTTPException(400, "the modes are work, gaming and chill")
+        modes.set_mode(state.config.runtime_dir, mode, by="dashboard", now=state.clock.now())
+        return {"message": f"{modes.EFFECTS[mode].label} mode."}
 
     @app.get("/settings", response_class=HTMLResponse)
     def v2_settings() -> str:

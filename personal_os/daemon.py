@@ -278,9 +278,52 @@ class Daemon:
 
     # --- control loop ----------------------------------------------------------------------
 
+    def _startup_brief(self) -> None:
+        """A moment after capture starts: judge new videos, keep unclaimed research as R&D
+        projects, and open the 24-hour brief (at most every [brief] min_gap_h hours)."""
+        import time as _time
+
+        from personal_os.interfaces import alerts
+        from personal_os.web import auth, brief
+
+        _time.sleep(45)  # let the observers and the browser connection settle
+        cfg = self._fresh_config()
+        llm = self.llm if modes.effects(cfg.runtime_dir).background_jobs else None
+        prepared = brief.prepare(cfg, llm, self.clock)
+        made = [k for k in prepared.get("kept", []) if k.get("created")]
+        if made:
+            text = "; ".join(f"{k['project']} ({k['minutes']} min)" for k in made)
+            alerts.show(
+                cfg,
+                f"rnd-{self.clock.now():%Y%m%d%H%M}",
+                "Kept your research",
+                text,
+                self.clock.now(),
+            )
+        if not brief.due(cfg, self.clock) or not self.interfaces:
+            return
+        conn = connect(cfg.db_path)
+        try:
+            code = auth.new_login_code(conn, self.clock)
+        finally:
+            conn.close()
+        url = f"http://127.0.0.1:{cfg.api.port}/login?code={code}&next=/brief"
+        try:
+            from personal_os.browser import control
+
+            control.send(
+                cfg.runtime_dir, "tabs.open", {"url": url}, browser=cfg.actions.browser, timeout_s=5
+            )
+        except Exception:
+            open_url(url)
+        brief.mark_opened(cfg, self.clock)
+        _log.info("brief opened", extra={"fields": {"kept": len(prepared.get("kept", []))}})
+
     async def _control_loop(self) -> None:
         last_health = last_retention = last_stale = last_resolve = last_sessions = -1e18
         last_reminders = -1e18
+        if self.interfaces:
+            threading.Thread(target=self._startup_brief, name="pos-brief", daemon=True).start()
         while not self.stop_event.is_set():
             if runtime.stop_requested(self.config.runtime_dir):
                 runtime.clear_stop(self.config.runtime_dir)
