@@ -317,14 +317,23 @@ def breakdown(
         add(cat, s, e, r["project_id"])
         b.by_app[str(p.get("app") or exe)] += max(0, min(e, hi) - max(s, lo))
     # Pages can overlap (two windows, a page left playing): never count more page time than
-    # the browser was actually in front.
-    total_dwell = sum(int(json.loads(r["payload"]).get("active_dwell_ms") or 0) for r in pages)
+    # the browser was actually in front. Only where the window record exists, though: while
+    # capture was off the extension still kept pages, and those stand as they are.
+    any_spans = sorted((int(r["ts_start"]), int(r["ts_stop"])) for r in focus)
+
+    def covered(ts: int) -> bool:
+        """Is there a window record around this moment (capture was running)?"""
+        return any(a - 300_000 <= ts <= b + 300_000 for a, b in any_spans)
+
+    in_record = [r for r in pages if covered(int(r["ts_start"]))]
+    total_dwell = sum(int(json.loads(r["payload"]).get("active_dwell_ms") or 0) for r in in_record)
     scale = min(1.0, browser_ms / total_dwell) if total_dwell and browser_ms else 1.0
     page_ms = 0
     for r in pages:
         p = json.loads(r["payload"])
         url, title = str(p.get("url") or ""), str(p.get("title") or "")
-        dwell = int(int(p.get("active_dwell_ms") or 0) * scale)
+        factor = scale if covered(int(r["ts_start"])) else 1.0
+        dwell = int(int(p.get("active_dwell_ms") or 0) * factor)
         if dwell <= 0:
             continue
         cat, _why = classify_page(url, title, str(p.get("content_type") or ""), cache)
@@ -341,8 +350,11 @@ def breakdown(
                                "project": r["project_id"], "at": s})  # fmt: skip
         elif cat == "chill" and title:
             b.chill_titles[title] += dwell
-    if browser_ms > page_ms:  # browser in front, no page counted (new tab, settings...)
-        b.by_category["other"] += browser_ms - page_ms
+    covered_ms = sum(
+        int(int(json.loads(r["payload"]).get("active_dwell_ms") or 0) * scale) for r in in_record
+    )
+    if browser_ms > covered_ms:  # browser in front, no page counted (new tab, settings...)
+        b.by_category["other"] += browser_ms - covered_ms
     # Idle: short gaps between focused windows.
     spans = sorted((max(int(r["ts_start"]), lo), min(int(r["ts_stop"]), hi)) for r in focus)
     for (_a1, b1), (a2, _b2) in itertools.pairwise(spans):

@@ -163,3 +163,11 @@ def test_overlapping_pages_never_exceed_browser_time(conn: Any):
                {"url": f"https://example.com/{n}", "title": "x", "active_dwell_ms": 10 * 60_000})  # fmt: skip
     b = activity.breakdown(conn, T0 - timedelta(hours=1), T0 + timedelta(hours=1))
     assert b.active_ms == 10 * 60_000
+
+
+def test_pages_recorded_while_capture_was_off_still_count(conn: Any):
+    """From 11 Nov: the daemon was off, the extension kept pages; they were scaled to ~0."""
+    _event(conn, "browser", "page_visit", T0, 0,
+           {"url": "https://some-anime-site.example/watch/ep-1", "title": "Episode 1", "active_dwell_ms": 25 * 60_000})  # fmt: skip
+    b = activity.breakdown(conn, T0 - timedelta(hours=1), T0 + timedelta(hours=1))
+    assert b.by_category["chill"] == 25 * 60_000
