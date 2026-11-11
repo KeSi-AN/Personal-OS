@@ -84,6 +84,7 @@ class Voice:
         # A request to run next, without listening: "no, at 5 pm instead" or "I wanted X".
         self.next_request: str | None = None
         self.announced = ""  # said before an action ran: not said again after
+        self.last_trace: list[str] = []  # the agent's steps this turn, for "Show log"
         # The current turn's stop signal: set by the hotkey or "Donna" while thinking or
         # speaking (then a new turn listens), by "stop talking" and the popup's Stop / Esc
         # (then nothing more happens), and by talking over a reply. Listening, the model call
@@ -669,6 +670,7 @@ class Voice:
             cancelled=self.interrupt.is_set, progress=lambda note: self.turn_update(progress=note),
             max_steps=min(self.cfg.agent.max_steps, VOICE_MAX_STEPS),
         )  # fmt: skip
+        self.last_trace = result.trace[:40]
         if self.turn is not None and result.details:
             self.turn["details"] = result.details  # the popup shows it in full
         acted = [o for o in result.outcomes if o.tool in agent.ANNOUNCED]
@@ -924,6 +926,7 @@ class Voice:
             t1 = time.monotonic()
             self.asked = {}
             self.announced = ""
+            self.last_trace = []
             reply = None if given else self.fast(text)
             if self.asked:
                 entry["asked"] = self.asked
@@ -987,6 +990,8 @@ class Voice:
                     reply="Stopped." if stopped and self.stopped_by_you else said,
                     **({"error": "Something went wrong."} if "error" in entry else {}),
                 )  # fmt: skip
+            if self.last_trace:
+                entry["trace"] = self.last_trace
             if not entry.get("quiet"):
                 record_history(self.cfg.runtime_dir, entry)
             if self.stopped_by_you:

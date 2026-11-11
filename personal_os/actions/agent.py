@@ -141,6 +141,7 @@ class AgentReply:
     steps: int = 0
     error: str | None = None
     details: str = ""  # shown in the popup, not spoken: lists, links, evidence
+    trace: list[str] = field(default_factory=list)  # what happened, step by step ("Show log")
 
 
 def agent_prompt(executor: Executor) -> str:
@@ -215,6 +216,7 @@ def respond(
                     FinalAnswer, temperature=0.2, max_tokens=300,
                 )  # fmt: skip
                 out.steps = step
+                out.trace.append(f"step {step}: answer from the results")
                 out.reply = clean(answer.reply, 600)
                 out.details = answer.details
                 break
@@ -225,6 +227,9 @@ def respond(
             if stopped():
                 return out
             _log.warning("agent step unusable", extra={"fields": {"error": str(exc)[:300]}})
+            out.trace.append(
+                f"step {step}: the model's answer didn't pass the checks: {str(exc)[:300]}"
+            )
             # A tool call that wouldn't validate shouldn't cost the whole answer: answer from
             # what's known (results so far, the conversation, general knowledge) instead.
             try:
@@ -233,10 +238,13 @@ def respond(
                     FinalAnswer, temperature=0.2, max_tokens=300,
                 )  # fmt: skip
                 out.reply, out.details = clean(fallback.reply, 600), fallback.details
+                out.trace.append("answered from what's known instead of using tools")
             except LLMError:
                 out.error = "the local model's answer wasn't usable"
             break
         out.steps = step
+        calls_txt = ", ".join(f"{c.tool}({_brief(dict(c.args))})" for c in plan.calls)
+        out.trace.append(f"step {step}: {plan.decide}" + (f" -> {calls_txt}" if plan.calls else ""))
         if plan.decide == "answer" or not plan.calls:
             out.reply = clean(plan.reply or "", 600)
             out.details = getattr(plan, "details", "") or ""
@@ -269,6 +277,7 @@ def respond(
                 on_run=functools.partial(announce, line) if announce and line else None,
             )  # fmt: skip
             out.outcomes.append(o)
+            out.trace.append(f"  {o.tool}: {o.status}: {str(o.message)[:200]}")
             fresh.append(o)
             if o.result is not None and o.result.captured:
                 out.tainted = True
@@ -290,7 +299,12 @@ def respond(
         transcript = f"{user}\n\n" + CONTINUE.format(results="\n\n".join(gathered))
     from personal_os.context.route import route as kind_of
 
+    said = out.reply
     out.reply = grounded(out.reply, out.outcomes, executor, asking=kind_of(request) == "ask")
+    if said and out.reply != said:
+        out.trace.append(f"reply corrected (it claimed something no tool did): {said[:200]}")
+    if out.error:
+        out.trace.append(f"error: {out.error}")
     if not out.details:  # what the reply was built from, to read in full on screen
         shown = [_data(o) for o in out.outcomes if o.ok and o.tool in DETAIL_TOOLS]
         out.details = "\n\n".join(x for x in shown if x)[:DETAILS_MAX]
@@ -386,6 +400,10 @@ def _claim_matches(verb: str, acted: list[Outcome]) -> bool:
     return False
 
 
+def _brief(args: dict[str, Any]) -> str:
+    return ", ".join(f"{k}={str(v)[:60]!r}" for k, v in args.items())[:200]
+
+
 def grounded(
     reply: str, outcomes: list[Outcome], executor: Executor, *, asking: bool = False
 ) -> str:
@@ -435,7 +453,7 @@ def chat_turn(
         return AgentReply(reply="Anytime.")
     convo = dialogue.Conversation.from_history(runtime_dir)
     result = respond(request, executor, provider, context=convo.for_planner())
-    entry.update(route="agent", reply=result.reply)
+    entry.update(route="agent", reply=result.reply, trace=result.trace[:40])
     if result.error:
         entry["error"] = result.error
     record_history(runtime_dir, entry)

@@ -153,3 +153,39 @@ def test_the_phone_sees_today_and_projects_only(site: Site):  # noqa: F811
         ).status_code
         == 403
     )
+
+
+def test_show_log_under_each_reply(home: Path, config: Config):
+    import json as _json
+
+    calls = iter(
+        [
+            {
+                "decide": "act",
+                "calls": [{"tool": "no_such_tool", "args": {}}],
+                "reply": "",
+                "details": "",
+            },
+            {"decide": "answer", "calls": [], "reply": "Done <b>it</b>.", "details": ""},
+        ]
+    )
+
+    def responder(system: str, user: str, schema: Any) -> Any:
+        return next(calls, {"decide": "answer", "calls": [], "reply": "Done.", "details": ""})
+
+    s = Site(home, config, provider=FakeProvider(responder))
+    s.login()
+    r = s.post("/api/v2/chat", {"text": "do the thing"})
+    assert r.status_code == 200 and any("step 1" in t for t in r.json()["trace"])
+    logs = config.data_dir / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    at = s.clock.now().isoformat()
+    (logs / "personal_os.log").write_text(
+        _json.dumps({"ts": at, "level": "WARNING", "logger": "x.agent", "msg": "agent step unusable", "error": "<bad>"})
+        + "\n" + _json.dumps({"ts": at, "level": "INFO", "logger": "x", "msg": "fine"}) + "\n",
+        "utf-8",
+    )  # fmt: skip
+    page = s.client.get("/donna").text
+    assert "Show log" in page and "route: agent" in page and "step 1" in page
+    assert "agent step unusable" in page and "&lt;bad&gt;" in page and "<bad>" not in page
+    assert "fine" not in page.split("Show log", 1)[1]  # info lines are left out

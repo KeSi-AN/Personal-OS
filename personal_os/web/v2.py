@@ -241,6 +241,7 @@ async function ask(ev) {{
     const r = await api('/api/v2/chat', {{text: q.value}});
     let html = "<div class='msg her'><div class='meta'>Donna</div>" + esc(r.reply) + "</div>";
     if (r.details) html += "<div class='msg her small'>" + esc(r.details) + "</div>";
+    if ((r.trace || []).length) html += "<details class='small'><summary>Show log</summary><div style='font-family:Consolas,monospace;white-space:pre-wrap;color:var(--muted)'>" + r.trace.map(esc).join("<br>") + "</div></details>";
     for (const s of r.steps || []) {{
       html += "<div class='row small'><span class='chip'>" + esc(s.tool) + "</span><span class='grow'>" + esc(s.message) + "</span>";
       if (s.pending) html += "<button onclick=\\"act('/api/actions/approve', {{pending:'" + s.pending + "'}})\\">Approve</button>";
@@ -460,10 +461,69 @@ def project_page(
     return shell(p.name, "/p", body, phone=phone)
 
 
+def app_log(data_dir: Any, last: int = 3000) -> list[dict[str, Any]]:
+    """Warnings and errors from the app log (it holds no content: names and counts only)."""
+    out: list[dict[str, Any]] = []
+    path = data_dir / "logs" / "personal_os.log"
+    try:
+        lines = path.read_text("utf-8", errors="replace").splitlines()[-last:]
+    except OSError:
+        return out
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if rec.get("level") in ("WARNING", "ERROR", "CRITICAL"):
+            try:
+                rec["_at"] = datetime.fromisoformat(str(rec.get("ts")))
+            except ValueError:
+                continue
+            out.append(rec)
+    return out
+
+
+def turn_log(x: dict[str, Any], log: list[dict[str, Any]]) -> str:
+    """What happened in one exchange, for "Show log"."""
+    rows = []
+    times = ", ".join(
+        f"{k[:-2]} {x[k]} s" for k in ("listen_s", "handle_s", "speak_s", "total_s") if k in x
+    )
+    rows.append(
+        f"route: {x.get('route', '?')} · via {x.get('trigger', '?')}"
+        + (f" · {times}" if times else "")
+    )
+    if x.get("asked"):
+        a = x["asked"]
+        rows.append(
+            f"asked: {a.get('question', '')} · you: {a.get('answer', '')} · read as: {a.get('understood', '')}"
+        )
+    rows += [str(t) for t in x.get("trace") or []]
+    if x.get("error"):
+        rows.append(f"error: {x['error']}")
+    try:
+        start = datetime.fromisoformat(str(x.get("at")))
+        end = start + timedelta(seconds=float(x.get("total_s") or 60) + 10)
+        for rec in log:
+            if start - timedelta(seconds=5) <= rec["_at"] <= end:
+                extra = {
+                    k: v for k, v in rec.items() if k not in ("ts", "level", "logger", "msg", "_at")
+                }
+                rows.append(
+                    f"log {rec['level'].lower()}: {rec.get('logger', '')}: {rec.get('msg', '')} {extra or ''}".rstrip()
+                )
+    except (TypeError, ValueError):
+        pass
+    body = "".join(f"<div>{e(r)}</div>" for r in rows)
+    return (f"<details class='small' style='margin-top:6px'><summary>Show log</summary>"
+            f"<div style='font-family:Consolas,monospace;white-space:pre-wrap;color:var(--muted);margin-top:4px'>{body}</div></details>")  # fmt: skip
+
+
 def donna_page(state: Any, conn: sqlite3.Connection) -> str:
     from personal_os.voice.main import history, local_time
 
     entries = [x for x in history(state.config.runtime_dir, 60) if x.get("heard")]
+    log = app_log(state.config.data_dir)
     msgs = []
     for x in entries[-40:]:
         when = e(local_time(str(x.get("at", "")), "%d %b %H:%M"))
@@ -473,10 +533,15 @@ def donna_page(state: Any, conn: sqlite3.Connection) -> str:
         )
         if x.get("reply"):
             msgs.append(
-                f"<div class='msg her'><div class='meta'>Donna</div>{e(x.get('reply'))}</div>"
+                f"<div class='msg her'><div class='meta'>Donna</div>{e(x.get('reply'))}{turn_log(x, log)}</div>"
             )
-        elif x.get("error"):
-            msgs.append("<div class='msg her muted'>(something went wrong)</div>")
+        else:
+            what = (
+                "(something went wrong)"
+                if x.get("error")
+                else f"({e(x.get('route') or 'no reply')})"
+            )
+            msgs.append(f"<div class='msg her muted'>{what}{turn_log(x, log)}</div>")
     body = (
         "<h1>Donna</h1><p class='sub'>Your conversation, by voice and typed, with every answer in full.</p>"
         f"<div class='card'>{''.join(msgs) or '<p class=\"muted\">Nothing yet. Ask below, or press Ctrl+Alt+Shift+V.</p>'}</div>"
@@ -778,7 +843,7 @@ def register(
                                                        out.preview, first.tier, state.clock.now())  # fmt: skip
                     step["pending"] = pid
                 steps.append(step)
-        return {"reply": r.reply, "details": r.details, "steps": steps}
+        return {"reply": r.reply, "details": r.details, "steps": steps, "trace": r.trace}
 
     @app.post("/api/v2/setting")
     def v2_setting(body: SettingBody) -> dict[str, Any]:
