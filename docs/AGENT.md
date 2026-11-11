@@ -135,3 +135,49 @@ Shared memory works: follow-ups see both sides of the conversation, voice and ty
 
 - **She can repeat her own earlier mistake.** After the extension refused a command it didn't know yet ("unknown command tabs.group"), her reply copied her earlier wrong sentence word for word: "I can't group tabs… a feature of the browser itself". The prompt should say that earlier replies can be wrong, and that only this turn's tool results count. A false "I can't" should be corrected the way false "I did" claims already are.
 - **Copied context is guarded but noisy.** A call built from earlier words ("which: first three") needed a yes, as designed. It was declined, because the request had used "YouTube", not positions.
+
+## Phase 10: refinements (2026-11-11)
+
+**Fewer "Sorry, I couldn't work that out."** The logs showed the failures were tool calls that wouldn't validate, not the model giving up:
+- it wrote `project?` as an argument name, copied from the tool list;
+- it gave reminder times longer than 12 characters;
+- it used actions a tool doesn't have.
+
+The fixes:
+- argument names are cleaned before checking;
+- longer times ("tomorrow 9am", "this evening 7") parse;
+- a step that still won't validate gets an answer from what's known instead of an apology;
+- a question about the past is no longer taken for a false claim;
+- an action waiting for approval says so.
+
+**Where you left off / where to begin** now includes the project's open to-dos, latest notes and saved sources, cited, and leads with them.
+
+**How time was spent** (`context/activity.py`): every minute goes into one of these categories.
+
+| Category | Examples |
+|---|---|
+| Coding and building | VS Code, Cursor, terminals, Claude, GitHub, local dev servers |
+| Research and learning | docs, Stack Overflow, AI chats, job portals, YouTube tutorials and talks |
+| Chill | YouTube music, songs, episodes, Shorts, streaming and anime sites, social media |
+| Gaming | Steam, Riot and Epic games, anything in a games folder |
+| Messages and calls | mail, chat apps, meetings |
+| Other, idle | everything else; up to 30 minutes without input |
+
+YouTube is judged by the video, not the site, so learning there is research. Titles the rules can't place are asked of the local model once, and the verdict is cached.
+
+**R&D projects** (`projects/research.py`): learning that no project claims, with 10 or more minutes or 2 or more pages on one topic, becomes "R&D: <topic>". The videos and pages are attached so you can come back to them, or rename it into a real project. An existing project on the topic gets the links instead.
+
+**Modes** (`core/modes.py`):
+
+| Mode | Effects |
+|---|---|
+| Work | a nudge when chill takes 15 of the last 20 minutes (at most every 30) |
+| Gaming | local model unloaded, background jobs paused, no wake word, popups, follow-ups or spoken announcements; push-to-talk still works. Starts by itself while a game is in front and ends 3 minutes after. |
+| Chill | wake word on, no nudges |
+
+**The brief** (`/brief`):
+- a plain-language summary of the last 24 hours;
+- a category donut, an hour-by-hour chart, projects, apps and sites;
+- research and the R&D projects kept, what stood out, modes, and the next to-dos.
+
+It opens in the browser 45 seconds after capture starts, at most every 6 hours.

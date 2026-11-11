@@ -61,7 +61,7 @@ def legend(by_cat: dict[str, int]) -> str:
         if v:
             rows.append(
                 f"<div class='row'><span style='width:12px;height:12px;border-radius:3px;background:{COLORS[cat]};flex:none'></span>"
-                f"<span class='grow'>{LABELS[cat]}</span><b>{dur(v)}</b><span class='small muted' style='width:42px;text-align:right'>{round(100 * v / total)}%</span></div>"
+                f"<span class='grow clip'>{LABELS[cat]}</span><b style='white-space:nowrap'>{dur(v)}</b><span class='small muted' style='width:42px;text-align:right'>{round(100 * v / total)}%</span></div>"
             )
     return "".join(rows)
 
@@ -188,7 +188,7 @@ def page(state: Any, conn: sqlite3.Connection, hours: int = 24, *, phone: bool =
         f"<div class='card' style='margin-bottom:16px'>{e(narrative(b, pn))}</div>"
         f"<div class='grid' style='grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:16px'>{tiles}</div>"
         "<div class='grid'>"
-        f"<div class='card'><h2>Where the time went</h2><div style='display:flex;gap:18px;align-items:center;flex-wrap:wrap'>{donut(dict(b.by_category))}<div class='grow'>{legend(dict(b.by_category))}</div></div></div>"
+        f"<div class='card'><h2>Where the time went</h2><div style='display:flex;gap:18px;align-items:center;flex-wrap:wrap'>{donut(dict(b.by_category))}<div class='grow' style='min-width:240px'>{legend(dict(b.by_category))}</div></div></div>"
         f"<div class='card'><h2>Projects</h2>{bars(projects, COLORS['building'])}</div>"
         f"<div class='card wide'><h2>Hour by hour</h2>{hours_chart(b)}</div>"
         f"<div class='card'><h2>Research & learning</h2>{research_rows}"
