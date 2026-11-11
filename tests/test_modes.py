@@ -86,7 +86,7 @@ def test_voice_obeys_gaming_mode(home: Path, config: Config, monkeypatch: Any):
     assert h.said == []  # not said over the game
 
 
-def test_work_mode_nudges_when_chill_takes_over(home: Path, config: Config, monkeypatch: Any):
+def _nudge_world(home: Path, config: Config, monkeypatch: Any, front: Any) -> Any:
     from personal_os import daemon
     from personal_os.context import activity
     from personal_os.context import now as now_mod
@@ -95,22 +95,58 @@ def test_work_mode_nudges_when_chill_takes_over(home: Path, config: Config, monk
     env = Env(home, config)
     shown: list[str] = []
     monkeypatch.setattr(alerts, "show", lambda _c, _i, title, text, _at: shown.append(text) or True)
-    monkeypatch.setattr(now_mod, "snapshot", lambda *_a, **_k: now_mod.Now(at=T0))
+    windows, tabs = front
+    monkeypatch.setattr(
+        now_mod, "snapshot", lambda *_a, **_k: now_mod.Now(at=T0, windows=windows, tabs=tabs)
+    )
     b = activity.Breakdown(T0, T0)
     b.by_category["chill"] = 17 * 60_000
-    b.by_site["youtube.com"] = 17 * 60_000
+    b.by_site["anime-site.example"] = 17 * 60_000
     monkeypatch.setattr(activity, "breakdown", lambda *_a, **_k: b)
-    spoken: list[str] = []
     fake = SimpleNamespace(
         config=env.config, clock=env.clock, control_conn=env.conn, llm=None, last_nudge=None,
-        _fresh_config=lambda: env.config, _speak=lambda _c, t: spoken.append(t),
+        _fresh_config=lambda: env.config, _speak=lambda _c, _t: None,
     )  # fmt: skip
     fake._nudge = lambda m, bb: daemon.Daemon._nudge(fake, m, bb)  # type: ignore[attr-defined]
-    daemon.Daemon._mode_tick(fake)  # type: ignore[arg-type]
-    assert shown and "17 min of chill (youtube.com) in work mode" in shown[0]
-    daemon.Daemon._mode_tick(fake)  # type: ignore[arg-type]
+    fake._nudge_due = lambda rt, now: daemon.Daemon._nudge_due(fake, rt, now)  # type: ignore[attr-defined]
+    return env, fake, shown, lambda: daemon.Daemon._mode_tick(fake)  # type: ignore[arg-type]
+
+
+def _watching() -> Any:
+    from personal_os.context.now import Tab, Window
+
+    return (
+        [Window("brave", "Episode 27", front=True, exe="brave.exe")],
+        [Tab("brave", "Monster Episode 27", "https://anime-site.example/watch/ep-27", active=True)],
+    )
+
+
+def test_work_mode_nudges_while_chill_is_in_front(home: Path, config: Config, monkeypatch: Any):
+    env, fake, shown, tick = _nudge_world(home, config, monkeypatch, _watching())
+    tick()
+    assert shown and "17 min of chill (anime-site.example) in work mode" in shown[0]
+    assert "say 'chill mode'" in shown[0]
+    tick()
     assert len(shown) == 1  # not again within 30 minutes
-    modes.set_mode(env.config.runtime_dir, "chill", by="voice", now=T0)
+    modes.set_mode(env.config.runtime_dir, "chill", by="voice", now=T0 - timedelta(hours=1))
     fake.last_nudge = None
-    daemon.Daemon._mode_tick(fake)  # type: ignore[arg-type]
+    tick()
     assert len(shown) == 1  # chill mode: no nudges
+
+
+def test_no_nudge_once_you_are_back_at_work(home: Path, config: Config, monkeypatch: Any):
+    from personal_os.context.now import Window
+
+    _env, _fake, shown, tick = _nudge_world(
+        home, config, monkeypatch, ([Window("Code", "main.py", front=True, exe="Code.exe")], [])
+    )
+    tick()
+    assert shown == []  # 17 minutes of anime earlier, but VS Code is in front now
+
+
+def test_no_nudge_right_after_switching_to_work(home: Path, config: Config, monkeypatch: Any):
+    env, _fake, shown, tick = _nudge_world(home, config, monkeypatch, _watching())
+    modes.set_mode(env.config.runtime_dir, "chill", by="voice", now=T0 - timedelta(minutes=30))
+    modes.set_mode(env.config.runtime_dir, "work", by="voice", now=T0 - timedelta(minutes=3))
+    tick()
+    assert shown == []  # three minutes into work mode: a grace period

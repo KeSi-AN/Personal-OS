@@ -610,11 +610,14 @@ class Daemon:
                 if change:
                     _log.info("mode changed", extra={"fields": {"auto": change}})
             fx = modes.effects(rt)
-            if fx.nudge_chill_min and (
-                self.last_nudge is None or now - self.last_nudge > timedelta(minutes=30)
+            cache = activity.load_cache(self.config.data_dir)
+            if (
+                fx.nudge_chill_min
+                and self._nudge_due(rt, now)
+                and activity.in_front(snap, cache) == "chill"
             ):
-                b = activity.breakdown(self.control_conn, now - timedelta(minutes=20), now,
-                                       activity.load_cache(self.config.data_dir))  # fmt: skip
+                # Only while the chill is still in front: back at work already means no nudge.
+                b = activity.breakdown(self.control_conn, now - timedelta(minutes=20), now, cache)
                 chill = b.by_category.get("chill", 0)
                 if chill >= fx.nudge_chill_min * 60_000:
                     self.last_nudge = now
@@ -622,13 +625,29 @@ class Daemon:
         except Exception as exc:  # never let this take the loop down
             _log.warning("mode tick failed", extra={"fields": {"exc_type": type(exc).__name__}})
 
+    def _nudge_due(self, rt: Any, now: datetime) -> bool:
+        """Not twice within 30 minutes, and not in the first 10 minutes of work mode."""
+        if self.last_nudge is not None and now - self.last_nudge <= timedelta(minutes=30):
+            return False
+        since = str(modes.state(rt).get("since") or "")
+        try:
+            return not since or now - datetime.fromisoformat(since) >= timedelta(minutes=10)
+        except ValueError:
+            return True
+
     def _nudge(self, minutes: int, b: Any) -> None:
         from personal_os.interfaces import alerts
+        from personal_os.projects.registry import get_project
 
         top = max(b.by_site.items(), key=lambda kv: kv[1])[0] if b.by_site else "videos"
-        worked = max(b.by_project.items(), key=lambda kv: kv[1])[0] if b.by_project else ""
-        back = f" Back to {worked}?" if worked else ""
-        text = f"{minutes} min of chill ({top}) in work mode.{back}"
+        row = self.control_conn.execute(
+            "SELECT project_id FROM sessions WHERE project_id IS NOT NULL AND project_id != 'none' "
+            "ORDER BY ts_end DESC LIMIT 1"
+        ).fetchone()
+        project = get_project(self.control_conn, row[0]) if row else None
+        back = f" Back to {project.name}?" if project else ""
+        text = (f"{minutes} min of chill ({top}) in work mode.{back} "
+                "If it's a break, say 'chill mode'.")  # fmt: skip
         alerts.show(
             self.config, f"nudge-{self.clock.now():%H%M}", "Work mode", text, self.clock.now()
         )

@@ -386,3 +386,20 @@ def flag(b: Breakdown) -> list[str]:
     if b.by_category.get("gaming", 0) >= 60 * 60_000:
         out.append(f"Gaming: {b.by_category['gaming'] // 60_000} min.")
     return out
+
+
+def in_front(snap: Any, cache: dict[str, Any] | None = None) -> Category | None:
+    """The category of what's in front now: the app, or in a browser its current tab. None
+    when it can't be told (no window, an unknown video)."""
+    front = next((w for w in snap.windows if w.front), None)
+    if front is None:
+        return None
+    cat = classify_app(front.exe, front.exe_path)
+    if cat is not None:
+        return cat
+    name = front.exe.lower().removesuffix(".exe")
+    tabs = [t for t in snap.tabs if t.active and (t.browser in name or name in t.browser)]
+    tabs = tabs or [t for t in snap.tabs if t.active]
+    if not tabs:
+        return None
+    return classify_page(tabs[0].url, tabs[0].title, "", cache)[0]
