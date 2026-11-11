@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -110,7 +111,7 @@ def _event(
         "INSERT INTO events (id, source, type, ts_start, ts_end, project_id, privacy_class, retention, "
         "observer_version, payload, inserted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'normal', 'default', 't', ?, ?, ?)",
         (
-            f"{source}-{s}-{typ}",
+            f"{source}-{s}-{typ}-{uuid.uuid4().hex[:8]}",
             source,
             typ,
             s,
