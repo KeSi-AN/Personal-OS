@@ -281,6 +281,9 @@ _CLOSE = re.compile(
     r"(?:\s+(?:app|application|program|browser|windows?))?$",
     re.I,
 )
+_BROWSER = re.compile(
+    r"(?:the\s+)?(?:brave|chrome|google chrome|edge|microsoft edge|firefox|(?:my\s+)?browser)", re.I
+)
 _APP_WORD = re.compile(r"\s+(app|application|program|browser)$", re.I)
 _KIND = re.compile(
     r"\s+(folder|directory|file|project|document|pdf|video|picture|photo|image)$", re.I
@@ -308,6 +311,17 @@ def route(
         return None
     rest = m[1].strip()
     split = _IN.match(rest)
+    if split and _BROWSER.fullmatch(split[2].strip()):
+        # "open YouTube Music in Brave": a site, opened as a tab (not a file in an app).
+        from personal_os.browser import recipes
+
+        site = recipes.find(split[1])
+        name = split[1].strip()
+        if site is not None and site.home:
+            return Intent([("browser_open", {"url": site.home})], f"Opening {name}.")
+        if "." in name and " " not in name:  # "open github.com in brave"
+            return Intent([("browser_open", {"url": name})], f"Opening {name}.")
+        return Intent([("browser_open", {"query": name})], f"Searching for {name}.")
     if split:
         app, guesses = _decide(split[2], index.of("app"), threshold)
         if app is not None or guesses:

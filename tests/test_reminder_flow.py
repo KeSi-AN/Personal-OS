@@ -287,3 +287,19 @@ def test_a_pause_before_the_message_keeps_listening():
     assert reminder_parse.needs_more("Remind me in a minute.")
     assert not reminder_parse.needs_more("remind me in a minute to stretch")
     assert not reminder_parse.needs_more("open brave")
+
+
+@pytest.mark.parametrize(
+    ("at", "when"),
+    [("tomorrow 9am", ("tomorrow", "09:00")), ("tomorrow morning 9", ("tomorrow", "09:00")),
+     ("9:30 tomorrow", ("tomorrow", "09:30")), ("this evening 7", (None, "19:00"))],
+)  # fmt: skip
+def test_longer_spoken_times(at: str, when: tuple[str | None, str]):
+    from datetime import UTC, datetime
+
+    now = datetime(2026, 11, 11, 3, 0, tzinfo=UTC)
+    due = reminders.due_time(now, None, at).astimezone()
+    day, hhmm = when
+    assert f"{due:%H:%M}" == hhmm
+    if day == "tomorrow":
+        assert due.date() > now.astimezone().date()

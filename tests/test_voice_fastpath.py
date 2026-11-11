@@ -420,3 +420,17 @@ def test_the_index_has_apps_folders_and_openable_files_only(
     assert ("file", "resume") in names and ("file", "holiday.jpg") in names
     assert not any(n in ("tool", "tool.exe", "id_rsa", "x", "node_modules") for _, n in names)
     assert "Brave" in index.names_for_hints()
+
+
+@pytest.mark.parametrize(
+    ("said", "args"),
+    [
+        ("Open YouTube music on Brave.", {"url": "https://music.youtube.com/"}),
+        ("open github.com in chrome", {"url": "github.com"}),
+        ("open lofi beats in my browser", {"query": "lofi beats"}),
+    ],
+)
+def test_sites_open_as_tabs_in_the_browser(said: str, args: dict[str, Any]):
+    """From the log: 'Open YouTube music on Brave' went to the file-opening path and failed."""
+    intent = router.route(said, INDEX)
+    assert intent is not None and intent.calls == [("browser_open", args)]

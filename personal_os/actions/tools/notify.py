@@ -13,7 +13,7 @@ from personal_os.actions.base import ActionError, Args, Result, Tier, Tool, Tool
 class ReminderArgs(Args):
     text: str = Field(min_length=1, max_length=300)
     minutes: int | None = Field(None, ge=1, le=60 * 24 * 7)
-    at: str | None = Field(None, max_length=12)  # "17:30", "5pm", "5 p.m."
+    at: str | None = Field(None, max_length=40)  # "17:30", "5pm", "5 p.m."
 
 
 def _due(minutes: int | None, at: str | None, ctx: ToolContext) -> datetime:
@@ -58,7 +58,7 @@ class UpdateArgs(Args):
     reminder_id: str = Field("", max_length=40)
     text: str | None = Field(None, min_length=1, max_length=300)
     minutes: int | None = Field(None, ge=1, le=60 * 24 * 7, description="due N minutes from now")
-    at: str | None = Field(None, max_length=12)
+    at: str | None = Field(None, max_length=40)
     delay_minutes: int | None = Field(None, ge=1, le=60 * 24, description="push back by N minutes")
     due_iso: str | None = Field(None, max_length=40)  # undo only: the exact time it had
 

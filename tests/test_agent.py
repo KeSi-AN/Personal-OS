@@ -404,3 +404,41 @@ def test_a_muted_mic_is_said_not_heard_as_silence(home: Path, config: Config, mo
     assert h.said == [voice_main.MIC_MUTED]
     assert h.phrases == ["this should never be heard"]  # it didn't listen
     assert history(env.config.runtime_dir)[-1]["route"] == "mic muted"
+
+
+# --- refine (2026-11-11): fewer "couldn't work that out" ---------------------------------------
+
+
+def test_optional_marker_in_argument_names_is_forgiven(home: Path, config: Config):
+    """From the log: 'where should I start on chordus' failed on {"project?": "chordus"}."""
+    from personal_os.projects.registry import add_project
+
+    env = Env(home, config)
+    add_project(env.conn, env.clock, "Chordus", [], [])
+    script = Script(
+        use(("project_items", {"project?": "Chordus"})), answer("Start with the analyzer.")
+    )
+    r = agent.respond("where should I start on chordus", env.ex, FakeProvider(script))
+    assert [o.tool for o in r.outcomes] == ["project_items"] and r.outcomes[0].ok
+    assert r.reply == "Start with the analyzer."
+
+
+def test_a_bad_tool_call_still_gets_an_answer(home: Path, config: Config):
+    """From the log: 'what should I prioritise' became 'Sorry, I couldn't work that out.'"""
+    env = Env(home, config)
+
+    def responder(system: str, user: str, schema: Any) -> Any:
+        if schema.__name__ == "FinalAnswer":
+            return {"reply": "Finish the chord accuracy fix first, then the analyzer."}
+        return use(("window", {"title": "x", "action": "close"}))  # never valid
+
+    r = agent.respond("what should I prioritise?", env.ex, FakeProvider(responder))
+    assert r.reply == "Finish the chord accuracy fix first, then the analyzer."
+    assert "couldn't work that out" not in r.reply
+
+
+def test_a_question_about_the_past_is_not_a_false_claim(home: Path, config: Config):
+    env = Env(home, config)
+    script = Script(answer("I closed the 'Chordus - analyzer' tab."))
+    r = agent.respond("which tab did you close exactly?", env.ex, FakeProvider(script))
+    assert r.reply == "I closed the 'Chordus - analyzer' tab."

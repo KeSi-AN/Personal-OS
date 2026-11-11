@@ -34,6 +34,14 @@ def due_time(now: datetime, minutes: int | None, at: str | None) -> datetime:
     """`minutes` from now, or the next occurrence of a clock time like '17:30' or '5pm'."""
     if minutes is not None:
         return now + timedelta(minutes=minutes)
+    text = (at or "").lower()
+    tomorrow = bool(re.search(r"\btomorrow\b", text))
+    text = re.sub(r"\b(tomorrow|today|tonight|this)\b", " ", text)
+    text = re.sub(r"\b(morning|evening|afternoon)\b", lambda m: {"morning": "am", "evening": "pm",
+                  "afternoon": "pm"}[m[1]], text)  # fmt: skip
+    text = re.sub(r"(\d)\s+(am|pm)\b", r"\1\2", re.sub(r"\s+", " ", text)).strip()
+    text = re.sub(r"\b(am|pm) (\d{1,2}(?::\d{2})?)\b", r"\2\1", text)  # "morning 9" -> 9am
+    at = text or at
     m = _AT.match(_spoken_time(at or ""))
     if not m:
         raise ValueError("give minutes, or a time like 17:30 or 5pm")
@@ -46,6 +54,8 @@ def due_time(now: datetime, minutes: int | None, at: str | None) -> datetime:
         raise ValueError("that isn't a time of day")
     local = now.astimezone()
     due = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if tomorrow:
+        return due + timedelta(days=1) if due.date() == local.date() else due
     return due if due > local else due + timedelta(days=1)
 
 

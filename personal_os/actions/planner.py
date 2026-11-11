@@ -233,6 +233,8 @@ def plan_checker(
     def check(plan: Any) -> None:
         problems = []
         for call in plan.calls:
+            # The tool list marks optional arguments "name?"; a small model copies the "?".
+            call.args = {str(k).strip().rstrip("?").strip(): v for k, v in call.args.items()}
             tool = executor.registry.get(call.tool)
             if tool is None:
                 continue
