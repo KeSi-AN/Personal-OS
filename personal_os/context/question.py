@@ -108,7 +108,10 @@ _INTENTS: list[tuple[Intent, re.Pattern[str]]] = [
         "leave_off",
         re.compile(
             r"\b(left off|leave off|where was i|where am i|pick (it )?(back )?up|resume|"
-            r"last (thing|time) i (did|worked|was))\b"
+            r"last (thing|time) i (did|worked|was)|"
+            r"where (do|should|can|shall) i (begin|start|continue|pick up)|"
+            r"where to (begin|start|continue)|what('s| is| should be) next|what do i do next|"
+            r"how do i (continue|get back into)|get back (into|to))\b"
         ),
     ),
     (

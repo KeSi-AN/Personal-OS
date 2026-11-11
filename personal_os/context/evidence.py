@@ -40,6 +40,9 @@ OWN_COMMIT_SQL = (
 
 # Higher = kept first when a pack is over its line budget.
 PRIORITY = {
+    "your to-do": 100,
+    "your note": 100,
+    "saved source": 90,
     "commit": 9,
     "pulled": 6,
     "failed_command": 8,

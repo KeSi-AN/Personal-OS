@@ -248,7 +248,12 @@ def gather_leave_off(conn: sqlite3.Connection, q: ParsedQuestion, now: datetime)
     pid = q.project.id if q.project else None
     last = _last_session(conn, pid, now, before=None)
     who = q.project.id if q.project else "any project"
+    own = project_item_lines(conn, pid) if pid else []
     if last is None:
+        if own:  # nothing tracked lately, but what you wrote down for it is still there
+            return Gathered(
+                finalize(own, 45), [OWN_ITEMS_FACT], scope=f"your notes and to-dos for {who}"
+            )
         return Gathered(EvidencePack(), scope=f"no work sessions on {who} in the last 90 days")
     pid = last.project_id
     facts = [
@@ -280,7 +285,39 @@ def gather_leave_off(conn: sqlite3.Connection, q: ParsedQuestion, now: datetime)
             _recent(conn, pid, "terminal", "command", 1, failed_only=True),
         ):
             lines += [x for x in extra if not set(x.event_ids) & known]
+    if pid:
+        own = project_item_lines(conn, pid)
+        lines += own
+        if own:
+            facts.append(OWN_ITEMS_FACT)
     return Gathered(finalize(lines, 45), facts, scope=f"your last session on {pid}")
+
+
+OWN_ITEMS_FACT = (
+    "Records marked 'your to-do', 'your note' and 'saved source' are things you wrote down or "
+    "saved for this project yourself: when asked where to begin or continue, lead with the "
+    "open to-dos and the latest note, then say what the last session was doing."
+)
+
+
+def project_item_lines(conn: sqlite3.Connection, project_id: str) -> list[EvidenceLine]:
+    """A project's open to-dos, latest notes and saved sources, as citable evidence."""
+    from personal_os.projects import items
+
+    out: list[EvidenceLine] = []
+    for t in items.items(conn, project_id, ("todo",), open_only=True, limit=8):
+        due = f" (due {t.due.astimezone():%a %d %b %H:%M})" if t.due else ""
+        out.append(EvidenceLine(t.created, "your to-do", t.title + due, [], weight=10**9))
+    for n in items.items(conn, project_id, ("note",), limit=4):
+        out.append(EvidenceLine(n.created, "your note", n.body[:400], [], weight=10**9))
+    for s in items.items(conn, project_id, ("link", "tab", "file"), limit=6):
+        note = f" - {s.body}" if s.body else ""
+        out.append(
+            EvidenceLine(
+                s.created, "saved source", f"{s.title or s.url}{note}", [], s.url, weight=10**8
+            )
+        )
+    return out
 
 
 def gather_changed_since(conn: sqlite3.Connection, q: ParsedQuestion, now: datetime) -> Gathered:

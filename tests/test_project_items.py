@@ -268,3 +268,24 @@ def test_the_daemon_syncs_a_matching_tab_group(home: Path, config: Config):
         "Agent design",
         "MV3 docs",
     ]
+
+
+def test_where_to_begin_uses_your_notes_and_todos(home: Path, config: Config):
+    from personal_os.context.ask import gather_leave_off, project_item_lines
+    from personal_os.context.question import parse_question
+    from personal_os.projects.registry import load_projects
+
+    env = Env(home, config)
+    pid = project(env, "Chordus")
+    items.add(env.conn, env.clock, pid, "todo", title="fix chord recognition accuracy first")
+    items.add(env.conn, env.clock, pid, "note", body="analyzer service works; tune the model next")
+    items.add(
+        env.conn, env.clock, pid, "link", url="https://example.com/chords", title="chord dataset"
+    )
+    kinds = [x.kind for x in project_item_lines(env.conn, pid)]
+    assert kinds == ["your to-do", "your note", "saved source"]
+    q = parse_question("where should I start on chordus", load_projects(env.conn), T0)
+    assert q.intent == "leave_off" and q.project is not None
+    g = gather_leave_off(env.conn, q, T0)  # no sessions yet: your own items still answer it
+    assert {x.kind for x in g.pack.lines} == {"your to-do", "your note", "saved source"}
+    assert any("lead with the open to-dos" in f for f in g.facts)
