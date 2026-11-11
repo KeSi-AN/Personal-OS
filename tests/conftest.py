@@ -60,6 +60,17 @@ def no_real_popup(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
     return launched
 
 
+@pytest.fixture(autouse=True)
+def no_real_app(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Tests never open the desktop app or a browser; what would open is recorded here."""
+    from personal_os.interfaces import app, tray
+
+    opened: list[str] = []
+    monkeypatch.setattr(app, "_spawn", lambda path: opened.append(f"app {path}"))
+    monkeypatch.setattr(tray, "open_url", lambda url: opened.append(f"browser {url}"))
+    return opened
+
+
 @pytest.fixture
 def config(home: Path) -> Config:
     from personal_os.config.loader import load_config

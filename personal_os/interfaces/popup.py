@@ -385,20 +385,11 @@ class Api:
             pass
 
     def open_dashboard(self) -> str:
-        from personal_os.interfaces.tray import open_url
-
         if not runtime.daemon_info(self._cfg.runtime_dir).running:
             return "Capture isn't running, so the dashboard isn't either."
-        from personal_os.core.clock import SystemClock
-        from personal_os.storage.db import connect
-        from personal_os.web import auth
+        from personal_os.interfaces import app
 
-        conn = connect(self._cfg.db_path)
-        try:
-            code = auth.new_login_code(conn, SystemClock())
-        finally:
-            conn.close()
-        open_url(f"http://127.0.0.1:{self._cfg.api.port}/login?code={code}")
+        app.open_app(self._cfg, "/donna")
         return ""
 
 

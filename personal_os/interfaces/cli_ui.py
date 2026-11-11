@@ -29,6 +29,22 @@ DbOption = Annotated[
 SETUP_KEY = "setup.reviewed"
 
 
+@app.command("app")
+def desktop_app(
+    page: Annotated[str, typer.Argument(help="Page to show: /, /donna, /brief, /p ...")] = "/",
+) -> None:
+    """Open the dashboard in its own window (the desktop app)."""
+    from personal_os.interfaces import app as desktop
+
+    cfg = _config()
+    if not runtime.daemon_info(cfg.runtime_dir).running:
+        typer.echo("Capture isn't running; start it with `personal-os daemon start`.")
+        raise typer.Exit(1)
+    how = desktop.open_app(cfg, page)
+    said = {"shown": "Shown in the open app.", "opened": "Opening the app."}
+    typer.echo(said.get(how, "No app runtime here (WebView2), so it opened in your browser."))
+
+
 @app.command("dashboard")
 def dashboard(
     print_only: Annotated[bool, typer.Option("--print", help="Print the link only.")] = False,

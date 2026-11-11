@@ -165,13 +165,13 @@ The fixes:
 
 YouTube is judged by the video, not the site, so learning there is research. Titles the rules can't place are asked of the local model once, and the verdict is cached.
 
-**R&D projects** (`projects/research.py`): learning that no project claims, with 10 or more minutes or 2 or more pages on one topic, becomes "R&D: <topic>". The videos and pages are attached so you can come back to them, or rename it into a real project. An existing project on the topic gets the links instead.
+**R&D projects** (`projects/research.py`): learning that no project claims becomes "R&D: <topic>". Anything studied for a minute or more is noted. A topic with 10 or more minutes, or 2 or more pages, is kept automatically. For smaller finds, such as a video opened to watch later, the local model decides whether to keep each one; without the model, videos are kept and pages aren't. The videos and pages are attached so you can come back to them, or rename it into a real project. An existing project on the topic gets the links instead.
 
 **Modes** (`core/modes.py`):
 
 | Mode | Effects |
 |---|---|
-| Work | a nudge when chill takes 15 of the last 20 minutes (at most every 30) |
+| Work | a nudge when chill takes 15 of the last 20 minutes and is still in front. It names the project you last worked on and offers "chill mode" if it's a break. It waits 10 minutes after you switch to work mode, and comes at most every 30 minutes. |
 | Gaming | local model unloaded, background jobs paused, no wake word, popups, follow-ups or spoken announcements; push-to-talk still works. Starts by itself while a game is in front and ends 3 minutes after. |
 | Chill | wake word on, no nudges |
 
@@ -180,4 +180,8 @@ YouTube is judged by the video, not the site, so learning there is research. Tit
 - a category donut, an hour-by-hour chart, projects, apps and sites;
 - research and the R&D projects kept, what stood out, modes, and the next to-dos.
 
-It opens in the browser 45 seconds after capture starts, at most every 6 hours.
+It opens in the desktop app 45 seconds after capture starts, at most every 6 hours.
+
+**Show log** (Donna page): under each reply, the exchange's route and timings, each agent step (the tool calls, their results, checks that failed, corrections) and the app log's warnings and errors from that moment. The app log holds names and counts only, never content, so this shows what went wrong without adding anything new to disk. Typed chat on the dashboard shows the same steps under its answer.
+
+**The desktop app** (`interfaces/app.py`, ADR-079): the dashboard in its own window (pywebview on WebView2, like the popup) instead of a browser tab. The tray's "Open dashboard", the startup brief, the popup and `personal-os app [page]` open it. Only one window runs at a time; opening it again shows the page there and brings the window to the front. Links to other sites open in your browser. If WebView2 isn't available, the dashboard opens in the browser as before. `personal-os dashboard` still opens the browser.

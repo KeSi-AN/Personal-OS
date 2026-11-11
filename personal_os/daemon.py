@@ -33,7 +33,7 @@ from personal_os.core.events import Event, SystemEvent
 from personal_os.core.logging import get_logger, setup_logging
 from personal_os.core.observer import BaseObserver, ObserverContext, Supervisor
 from personal_os.core.wiring import build_pipeline
-from personal_os.interfaces.tray import Tray, TrayActions, open_url, spawn_module, spawn_overlay
+from personal_os.interfaces.tray import Tray, TrayActions, spawn_module, spawn_overlay
 from personal_os.llm import LLMProvider, LLMUnavailable, make_provider
 from personal_os.observers.browser import BrowserObserver
 from personal_os.observers.fs import FsObserver
@@ -284,7 +284,7 @@ class Daemon:
         import time as _time
 
         from personal_os.interfaces import alerts
-        from personal_os.web import auth, brief
+        from personal_os.web import brief
 
         _time.sleep(45)  # let the observers and the browser connection settle
         cfg = self._fresh_config()
@@ -302,22 +302,13 @@ class Daemon:
             )
         if not brief.due(cfg, self.clock) or not self.interfaces:
             return
-        conn = connect(cfg.db_path)
-        try:
-            code = auth.new_login_code(conn, self.clock)
-        finally:
-            conn.close()
-        url = f"http://127.0.0.1:{cfg.api.port}/login?code={code}&next=/brief"
-        try:
-            from personal_os.browser import control
+        from personal_os.interfaces import app
 
-            control.send(
-                cfg.runtime_dir, "tabs.open", {"url": url}, browser=cfg.actions.browser, timeout_s=5
-            )
-        except Exception:
-            open_url(url)
+        how = app.open_app(cfg, "/brief")
         brief.mark_opened(cfg, self.clock)
-        _log.info("brief opened", extra={"fields": {"kept": len(prepared.get("kept", []))}})
+        _log.info(
+            "brief opened", extra={"fields": {"kept": len(prepared.get("kept", [])), "in": how}}
+        )
 
     async def _control_loop(self) -> None:
         last_health = last_retention = last_stale = last_resolve = last_sessions = -1e18
@@ -495,14 +486,10 @@ class Daemon:
         self.stop_event.set()
 
     def open_dashboard(self) -> None:
-        from personal_os.web import auth
+        """The tray's "Open dashboard": the desktop app (ADR-079)."""
+        from personal_os.interfaces import app
 
-        conn = connect(self.config.db_path)
-        try:
-            code = auth.new_login_code(conn, self.clock)
-        finally:
-            conn.close()
-        open_url(f"http://127.0.0.1:{self.config.api.port}/login?code={code}")
+        app.open_app(self.config, "/")
 
     def open_overlay(self) -> None:
         try:
