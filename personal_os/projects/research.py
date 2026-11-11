@@ -18,8 +18,10 @@ from personal_os.core.clock import Clock
 from personal_os.projects import items
 from personal_os.projects.registry import add_project, load_projects
 
-MIN_MS = 10 * 60_000  # this much learning on a topic is worth keeping
+MIN_MS = 10 * 60_000  # this much learning on a topic is kept, no questions asked
 MIN_ITEMS = 2  # ... or this many separate videos/pages about it
+NOTE_MS = 60_000  # anything under a minute isn't noted at all
+# Smaller than that ("a video opened to come back to later"): Donna decides whether to keep it.
 PREFIX = "R&D: "
 
 
@@ -64,6 +66,45 @@ def topics_for(provider: Any, titles: list[str]) -> dict[str, str]:
     }
 
 
+KEEP_SYSTEM = """Someone briefly opened these pages or videos while learning. For each numbered
+item decide whether it's worth keeping in a list to come back to later: yes for tutorials, talks,
+courses, docs, papers and videos they likely meant to watch properly; no for quick lookups,
+error searches, job portals, logins and anything already done with. Reply with JSON only."""
+
+
+def worth_keeping(provider: Any, small: dict[str, list[dict[str, Any]]]) -> set[str]:
+    """Which of these short finds (one item, under 10 minutes) to keep: the local model
+    decides; without one, videos are kept (likely "watch later") and pages are not."""
+    if not small:
+        return set()
+    topics = list(small)
+    fallback = {t for t in topics if any(_is_video(r["url"]) for r in small[t])}
+    if provider is None:
+        return fallback
+    from pydantic import BaseModel
+
+    class Item(BaseModel):
+        i: int
+        keep: bool
+
+    class Out(BaseModel):
+        items: list[Item]
+
+    lines = [f"{n}. {small[t][0]['title'][:150]} ({round(small[t][0]['ms'] / 60_000)} min)"
+             for n, t in enumerate(topics, start=1)]  # fmt: skip
+    try:
+        got = provider.chat_json(KEEP_SYSTEM, "\n".join(lines), Out, temperature=0,
+                                 max_tokens=20 * len(topics) + 40)  # fmt: skip
+    except Exception:
+        return fallback
+    return {topics[x.i - 1] for x in got.items if x.keep and 1 <= x.i <= len(topics)}
+
+
+def _is_video(url: str) -> bool:
+    u = url.lower()
+    return "youtube.com/watch" in u or "youtu.be/" in u or "vimeo.com/" in u
+
+
 def _match(conn: sqlite3.Connection, topic: str) -> str | None:
     """An existing project about this topic, by name or keywords."""
     from rapidfuzz import fuzz
@@ -85,7 +126,10 @@ def keep_research(
     conn: sqlite3.Connection, clock: Clock, research: list[dict[str, Any]], provider: Any = None
 ) -> list[Kept]:
     """File unclaimed learning into R&D projects. `research` is activity.Breakdown.research."""
-    free = [r for r in research if not r.get("project") or r.get("project") == "none"]
+    free = [
+        r for r in research
+        if (not r.get("project") or r.get("project") == "none") and r.get("ms", 0) >= NOTE_MS
+    ]  # fmt: skip
     missing = [r["title"] for r in free if not r.get("topic")]
     named = topics_for(provider, missing) if missing else {}
     by_topic: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -93,10 +137,15 @@ def keep_research(
         topic = (r.get("topic") or named.get(r["title"]) or "").strip()
         if topic:
             by_topic[topic.title()].append(r)
+    small = {
+        topic: rs for topic, rs in by_topic.items()
+        if sum(r["ms"] for r in rs) < MIN_MS and len({r["url"] for r in rs}) < MIN_ITEMS
+    }  # fmt: skip
+    keep_small = worth_keeping(provider, small)
     out: list[Kept] = []
     for topic, rs in sorted(by_topic.items(), key=lambda kv: -sum(r["ms"] for r in kv[1])):
         ms = sum(r["ms"] for r in rs)
-        if ms < MIN_MS and len({r["url"] for r in rs}) < MIN_ITEMS:
+        if topic in small and topic not in keep_small:
             continue
         pid = _match(conn, topic)
         created = pid is None

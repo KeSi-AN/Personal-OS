@@ -32,7 +32,7 @@ def test_unclaimed_learning_becomes_an_rnd_project(home: Path, config: Config):
     got = research.keep_research(env.conn, env.clock, [
         r("REA with Claude, part 1", "https://youtu.be/1", 12, "REA on Claude"),
         r("REA with Claude, part 2", "https://youtu.be/2", 9, "REA on Claude"),
-        r("Random tip", "https://youtu.be/3", 3, "Excel tips"),  # too little: not kept
+        r("Quick lookup", "https://example.com/q", 3, "Excel tips"),  # a short page: not kept
         r("Chordus fix", "https://youtu.be/4", 30, "Chords", project="chordus"),  # already claimed
     ])  # fmt: skip
     assert [(k.project, k.created, k.added, k.minutes) for k in got] == [
@@ -69,3 +69,30 @@ def test_titles_without_a_topic_ask_the_model(home: Path, config: Config):
         r("Bed levelling guide", "https://example.com/b", 6),
     ], FakeProvider(responder))  # fmt: skip
     assert [k.project for k in got] == ["R&D: 3D Printing"]
+
+
+def test_a_short_video_is_noted_and_donna_decides(home: Path, config: Config):
+    """'If I open a video to come back to later and watch under 10 min, it should still count.'"""
+    env = Env(home, config)
+    asked: list[str] = []
+
+    def responder(system: str, user: str, schema: Any) -> Any:
+        asked.append(user)
+        return {"items": [{"i": 1, "keep": True}, {"i": 2, "keep": False}]}
+
+    got = research.keep_research(env.conn, env.clock, [
+        r("Agentic RAG explained (watch later)", "https://youtu.be/x", 2, "Agentic RAG"),
+        r("How to fix pip error", "https://stackoverflow.com/q/1", 2, "Pip errors"),
+        r("Barely opened", "https://youtu.be/y", 0, "Something"),  # under a minute: not noted
+    ], FakeProvider(responder))  # fmt: skip
+    assert [k.project for k in got] == ["R&D: Agentic Rag"]
+    assert "Barely opened" not in asked[0]
+
+
+def test_without_the_model_videos_are_kept_and_pages_are_not(home: Path, config: Config):
+    env = Env(home, config)
+    got = research.keep_research(env.conn, env.clock, [
+        r("Talk on agents", "https://www.youtube.com/watch?v=t", 3, "Agents talk"),
+        r("A docs page", "https://docs.example.com/x", 3, "Some docs"),
+    ])  # fmt: skip
+    assert [k.project for k in got] == ["R&D: Agents Talk"]
