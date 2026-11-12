@@ -23,6 +23,7 @@ import re
 import sys
 import threading
 import time
+from collections.abc import Callable
 from ctypes import wintypes
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,12 @@ class Voice:
         self.streamed = ""  # said while the model was still writing the reply
         self.first_said_s: float | None = None  # when that began, from the turn's start
         self.turn_t0 = time.monotonic()  # when the current turn started
+        from personal_os.voice.beats import Beats
+
+        # "One sec." before a slow lookup, made once in this voice and kept (voice/beats.py).
+        self.beats = Beats(self.speaker, cfg.data_dir / "voice" / "beats")
+        self.beat_said = ""  # the beat played this turn, if any (one at most)
+        self.beat_thread: threading.Thread | None = None
         self.last_trace: list[str] = []  # the agent's steps this turn, for "Show log"
         # The current turn's stop signal: set by the hotkey or "Donna" while thinking or
         # speaking (then a new turn listens), by "stop talking" and the popup's Stop / Esc
@@ -301,12 +308,42 @@ class Voice:
 
     # --- handling --------------------------------------------------------------------------------
 
+    def beat(self) -> None:
+        """Say a beat ("One sec.") now, on its own thread, so the slow work starts at once:
+        one per turn at most, and only while nothing has been said this turn."""
+        if (
+            not self.cfg.voice.beats or self.beat_said or self.announced or self.streamed
+            or self.interrupt.is_set() or self.speaker.player.playing.is_set()
+        ):  # fmt: skip
+            return
+        picked = self.beats.pick()
+        if picked is None:
+            return  # not made yet (the first minute after setup): silence, as before
+        phrase, audio, rate = picked
+        self.beat_said = phrase
+
+        def play() -> None:
+            try:
+                self.speaker.player.play(audio, rate, self.interrupt)
+            except Exception as exc:  # no beat is better than a failed turn
+                _log.warning("beat failed", extra={"fields": {"exc_type": type(exc).__name__}})
+
+        self.beat_thread = threading.Thread(target=play, name="pos-beat", daemon=True)
+        self.beat_thread.start()
+
+    def finish_beat(self) -> None:
+        """Speech waits for a beat still playing, so the two never overlap."""
+        if self.beat_thread is not None:
+            self.beat_thread.join(timeout=3)
+            self.beat_thread = None
+
     def say(self, text: str) -> None:
         """Speak, stoppable: by the hotkey, "Donna", "stop talking", the popup, or by talking
         over it (voice.barge_in = voice). A reply to a turn that itself began by talking over
         a reply isn't stopped by just any speech (the wake word and the rest still work), so
         her own voice leaking past the echo canceller can never keep her answering herself
         (seen: "I'm here to help" heard back as "I'm here", answered, heard again...)."""
+        self.finish_beat()
         self.said_last = text  # what a "barge-in" is compared with: was it her own voice?
         try:
             clean = self.engine is not None and self.engine.aec_active
@@ -652,6 +689,7 @@ class Voice:
 
         if not self.convo.active():
             self.previous = None  # "and yesterday?" means nothing after a long gap
+        self.beat()  # a cited answer takes a few seconds
         answer = ask(conn, self.provider(), request, self.clock.now(), previous=self.previous)
         self.previous = answer.question
         evidence = [x.render() for x in answer.cited()]
@@ -676,6 +714,7 @@ class Voice:
                 progress=lambda note: self.turn_update(progress=note),
                 max_steps=min(self.cfg.agent.max_steps, VOICE_MAX_STEPS),
                 on_sentence=early.add if early is not None else None,
+                before_tool=lambda tool: self.beat() if tool in SLOW_TOOLS else None,
             )  # fmt: skip
         finally:
             if early is not None:
@@ -837,7 +876,12 @@ class Voice:
 
     def warm(self) -> None:
         """Load speech in and out and build the index now, so the first command is fast."""
-        for step in (self.index.refresh, self.stt_fast.warm, self.speaker.warm, self.stt.warm):
+        steps: list[Callable[[], object]] = [
+            self.index.refresh, self.stt_fast.warm, self.speaker.warm, self.stt.warm
+        ]  # fmt: skip
+        if self.cfg.voice.beats:
+            steps.insert(3, self.beats.prepare)  # made once per voice, then just loaded
+        for step in steps:
             try:
                 step()
             except Exception as exc:
@@ -938,6 +982,7 @@ class Voice:
             self.asked = {}
             self.announced = ""
             self.streamed, self.first_said_s = "", None
+            self.beat_said = ""
             self.turn_t0 = t0
             self.last_trace = []
             reply = None if given else self.fast(text)
@@ -971,6 +1016,8 @@ class Voice:
                 return False
             if self.streamed:
                 entry["first_words_s"] = self.first_said_s
+            if self.beat_said:
+                entry["beat"] = self.beat_said
             if reply and reply == self.announced:
                 spoke = True  # already said before the action ran
             elif reply:
@@ -1046,6 +1093,12 @@ _STOP_WORDS = re.compile(
     re.I,
 )
 VOICE_MAX_STEPS = 3  # model calls per spoken request (each 5-15 s on this laptop)
+# Lookups slow enough to be worth a beat first: a model call (recall), the database, or a
+# round trip to the browser or Google.
+SLOW_TOOLS = frozenset(
+    {"recall", "search_context", "browser_read", "whats_playing", "calendar_today",
+     "mail_unread", "project_items"}
+)  # fmt: skip
 ACTIVE = ("listening", "thinking", "speaking")
 
 

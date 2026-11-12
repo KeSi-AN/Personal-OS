@@ -116,6 +116,43 @@ class Speaker:
     def warm(self) -> None:
         self.piper()
 
+    def voice_key(self) -> str:
+        """Names the voice speech is made in: a recording made in another voice or at another
+        speed would sound wrong next to the replies."""
+        voice = self.piper()
+        path = self.voice_file()
+        if voice is not None and path is not None:
+            return f"piper-{path.stem}-{self.cfg.piper_length_scale:g}"
+        return f"windows-{self.cfg.windows_voice}"
+
+    def render(self, text: str) -> tuple[np.ndarray, int]:
+        """`text` as float32 mono audio and its sample rate, in the voice replies use (never a
+        cloud voice: a recording is kept, and nothing is sent anywhere to make it)."""
+        voice = self.piper()
+        if voice is not None:
+            from piper import SynthesisConfig
+
+            config = SynthesisConfig(length_scale=self.cfg.piper_length_scale)
+            chunks = list(voice.synthesize(text, syn_config=config))
+            if chunks:
+                audio = np.concatenate([c.audio_float_array for c in chunks]).astype(np.float32)
+                return audio, int(chunks[0].sample_rate)
+        import tempfile
+        import wave
+
+        out = Path(tempfile.gettempdir()) / f"pos-render-{threading.get_ident()}.wav"
+        try:
+            tts.WindowsVoice(self.cfg.windows_voice).synthesize(text, out)
+            with wave.open(str(out), "rb") as w:
+                rate, frames = w.getframerate(), w.readframes(w.getnframes())
+                width, channels = w.getsampwidth(), w.getnchannels()
+        finally:
+            out.unlink(missing_ok=True)
+        if width != 2:
+            raise tts.TTSError("the Windows voice made audio that isn't 16-bit")
+        pcm = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+        return pcm.reshape(-1, channels).mean(axis=1).astype(np.float32), rate
+
     def earcon(self, kind: str) -> None:
         try:
             self.player.play(EARCONS[kind], 22_050)

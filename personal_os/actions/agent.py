@@ -230,6 +230,7 @@ def respond(
     cancelled: Callable[[], bool] | None = None,
     progress: Callable[[str], None] | None = None,
     on_sentence: Callable[[str], None] | None = None,
+    before_tool: Callable[[str], None] | None = None,
 ) -> AgentReply:
     """`announce`: called with a short spoken line ("Playing Circles.") just before an action
     that changes something runs (after any confirmation), so voice says it first and then it
@@ -237,7 +238,8 @@ def respond(
     nothing more is done and the reply is empty ("stop" while she's thinking). `progress`:
     a short note of what she's doing now, for the screen. `on_sentence`: each finished
     sentence of the answer while the model is still writing it, so voice can start speaking;
-    `AgentReply.streamed` says what was handed on."""
+    `AgentReply.streamed` says what was handed on. `before_tool`: the tool's name, just
+    before it's asked to run (voice plays a beat before a slow lookup)."""
     out = AgentReply(reply="")
     from personal_os.context.route import route as kind_of
 
@@ -361,6 +363,8 @@ def respond(
             line = announcement(call.tool, args) if call.tool in ANNOUNCED else ""
             if progress is not None:
                 progress(f"Using {call.tool.replace('_', ' ')}…")
+            if before_tool is not None:
+                before_tool(call.tool)
             o = executor.request(
                 call.tool, args, origin=Origin.PLANNED, tainted=out.tainted or from_context,
                 request_text=request, read_so_far=read_texts,

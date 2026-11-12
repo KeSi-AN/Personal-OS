@@ -206,3 +206,11 @@ So the full list stays, and anything that changes per request goes after it. Oth
 - nothing is said early once the turn is interrupted, or after an action was announced.
 
 `voice.speak_while_writing` turns it off. Measured with qwen3:4b, after the prompt has been read: the first sentence is ready 1.6–2.8 s after the request and the whole reply 1.9–3.2 s. Donna's answers are one to three short sentences, so speaking starts 0.1–0.8 s sooner. The gain grows with longer answers, and Piper now makes the first sentence's audio while the model writes the next.
+
+**Beats** (`voice/beats.py`). A slow lookup (recall, search, reading a page, what's playing, the calendar, mail, a project's items) is preceded by one short line, such as "One sec." or "Let me check.", so a question isn't met with silence. This is phase 9f's "thinking sound", done the way Roamies does it:
+- Nine fixed phrases are made once in the voice replies use (Piper, or the Windows voice, never a cloud voice), kept as WAVs under `<data>/voice/beats/<voice>/`, and held in memory, so a beat plays at once.
+- Changing the voice or its speed makes a new set.
+- A beat plays on its own thread, so the lookup starts at the same moment. Speech waits for it to finish, so the two never overlap.
+- There's at most one per turn, and none once something has been said (an announced action, or a sentence spoken while the reply was written), after an interrupt, or with `voice.beats` off.
+
+Measured with en_US-hfc_female-medium: making the set takes about 7.6 s once, in the background at start-up; loading it later takes 0.01 s, and each beat lasts 0.53–0.95 s.

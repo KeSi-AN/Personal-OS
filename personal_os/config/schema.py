@@ -146,6 +146,8 @@ class VoiceConfig(_Section):
     max_spoken_chars: int = Field(600, ge=100, le=2000)
     # Say an answer's first sentences while the model is still writing the rest (phase 11).
     speak_while_writing: bool = True
+    # A short "One sec." before a slow lookup, made once in your voice (voice/beats.py).
+    beats: bool = True
 
 
 class BriefingsConfig(_Section):
