@@ -41,6 +41,7 @@ from personal_os.actions.planner import RULES as PLANNER_RULES
 from personal_os.context.evidence import clean
 from personal_os.core.logging import get_logger
 from personal_os.llm.provider import LLMError, LLMProvider
+from personal_os.llm.replystream import ReplyStream
 
 _log = get_logger("actions.agent")
 
@@ -193,6 +194,7 @@ class AgentReply:
     error: str | None = None
     details: str = ""  # shown in the popup, not spoken: lists, links, evidence
     trace: list[str] = field(default_factory=list)  # what happened, step by step ("Show log")
+    streamed: str = ""  # sentences handed to `on_sentence` while the model was writing
 
 
 def agent_prompt(executor: Executor) -> str:
@@ -227,13 +229,40 @@ def respond(
     announce: Callable[[str], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
     progress: Callable[[str], None] | None = None,
+    on_sentence: Callable[[str], None] | None = None,
 ) -> AgentReply:
     """`announce`: called with a short spoken line ("Playing Circles.") just before an action
     that changes something runs (after any confirmation), so voice says it first and then it
     happens. `cancelled`: checked before each model call and each action; once it's true,
     nothing more is done and the reply is empty ("stop" while she's thinking). `progress`:
-    a short note of what she's doing now, for the screen."""
+    a short note of what she's doing now, for the screen. `on_sentence`: each finished
+    sentence of the answer while the model is still writing it, so voice can start speaking;
+    `AgentReply.streamed` says what was handed on."""
     out = AgentReply(reply="")
+    from personal_os.context.route import route as kind_of
+
+    asking = kind_of(request) == "ask"
+    streamed: list[str] = []
+    held = False  # a sentence failed the claim check: nothing more is handed on
+
+    def sentence(text: str) -> None:
+        """Handed on only if it claims nothing the tools didn't do (as `grounded` checks the
+        whole reply), so a false "I've paused it" is never said before it can be corrected."""
+        nonlocal held
+        if held or on_sentence is None:
+            return
+        if grounded(text, out.outcomes, executor, asking=asking) != text:
+            held = True
+            out.trace.append(f"stopped speaking early (a claim no tool made): {text[:120]}")
+            return
+        streamed.append(text)
+        on_sentence(text)
+
+    def stream(gate: str | None) -> tuple[Callable[[str], None] | None, ReplyStream | None]:
+        if on_sentence is None or held:
+            return None, None
+        rs = ReplyStream(sentence, gate=gate)
+        return rs.feed, rs
 
     def stopped() -> bool:
         if cancelled is not None and cancelled():
@@ -264,18 +293,25 @@ def respond(
             progress("Thinking…" if step == 1 else "Putting the answer together…")
         try:
             if final_only or (step == steps and gathered):
+                feed, rs = stream(None)  # an answer-only step: all of its reply is the answer
                 answer = provider.chat_json(
                     system, user + "\n\n" + FINAL.format(results="\n\n".join(gathered)),
-                    FinalAnswer, temperature=0.2, max_tokens=300,
+                    FinalAnswer, temperature=0.2, max_tokens=300, on_text=feed,
                 )  # fmt: skip
+                if rs is not None:
+                    rs.finish()
                 out.steps = step
                 out.trace.append(f"step {step}: answer from the results")
                 out.reply = clean(answer.reply, 600)
                 out.details = answer.details
                 break
+            feed, rs = stream("answer")  # said only once the step has decided to answer
             plan: Any = provider.chat_json(
-                system, transcript, schema, validate=check, temperature=0.2, max_tokens=700
-            )
+                system, transcript, schema, validate=check, temperature=0.2, max_tokens=700,
+                on_text=feed,
+            )  # fmt: skip
+            if rs is not None:
+                rs.finish()
         except LLMError as exc:
             if stopped():
                 return out
@@ -286,10 +322,13 @@ def respond(
             # A tool call that wouldn't validate shouldn't cost the whole answer: answer from
             # what's known (results so far, the conversation, general knowledge) instead.
             try:
+                feed, rs = stream(None) if not streamed else (None, None)
                 fallback = provider.chat_json(
                     system, user + "\n\n" + RESCUE.format(results="\n\n".join(gathered) or "(none)"),
-                    FinalAnswer, temperature=0.2, max_tokens=300,
+                    FinalAnswer, temperature=0.2, max_tokens=300, on_text=feed,
                 )  # fmt: skip
+                if rs is not None:
+                    rs.finish()
                 out.reply, out.details = clean(fallback.reply, 600), fallback.details
                 out.trace.append("answered from what's known instead of using tools")
             except LLMError:
@@ -350,10 +389,11 @@ def respond(
             continue
         gathered.extend(results)
         transcript = f"{user}\n\n" + CONTINUE.format(results="\n\n".join(gathered))
-    from personal_os.context.route import route as kind_of
-
+    out.streamed = " ".join(streamed)
+    if streamed:
+        out.trace.append(f"spoke while writing: {len(streamed)} sentence(s)")
     said = out.reply
-    out.reply = grounded(out.reply, out.outcomes, executor, asking=kind_of(request) == "ask")
+    out.reply = grounded(out.reply, out.outcomes, executor, asking=asking)
     if said and out.reply != said:
         out.trace.append(f"reply corrected (it claimed something no tool did): {said[:200]}")
     if out.error:

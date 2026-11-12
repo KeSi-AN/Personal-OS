@@ -377,8 +377,10 @@ def test_voice_actions_confirm_by_voice(
     assert target.exists()
     fake2 = agent_fake(("set_reminder", {"text": "stretch", "minutes": 2}))
     v, h = voice_for(env, provider=fake2)
-    v.handle("please set something to remind me to stretch")
-    assert h.said == []  # tier 1, asked directly: no confirmation needed
+    reply = v.handle("please set something to remind me to stretch")
+    # Tier 1, asked directly: no confirmation needed. The only thing said is the answer
+    # itself, spoken while it was written (phase 11), not a question.
+    assert h.said in ([], [reply]) and not any("?" in s for s in h.said)
     from personal_os.actions import reminders
     from personal_os.storage.db import open_db
 

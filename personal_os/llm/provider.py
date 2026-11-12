@@ -51,9 +51,12 @@ class LLMProvider(Protocol):
         validate: Callable[[T], None] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        on_text: Callable[[str], None] | None = None,
     ) -> T:
         """Structured output: the reply must parse as `schema`, then pass `validate` (which
-        raises ValueError with a reason). One retry shows the model what was wrong."""
+        raises ValueError with a reason). One retry shows the model what was wrong.
+        `on_text`: called with each piece of the raw JSON as it's written (first attempt
+        only), so a reply can be spoken before it's finished (llm/replystream.py)."""
         ...
 
     def embed(self, texts: Sequence[str], *, query: bool = False) -> list[list[float]]:

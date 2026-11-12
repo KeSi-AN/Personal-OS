@@ -84,6 +84,9 @@ class Voice:
         # A request to run next, without listening: "no, at 5 pm instead" or "I wanted X".
         self.next_request: str | None = None
         self.announced = ""  # said before an action ran: not said again after
+        self.streamed = ""  # said while the model was still writing the reply
+        self.first_said_s: float | None = None  # when that began, from the turn's start
+        self.turn_t0 = time.monotonic()  # when the current turn started
         self.last_trace: list[str] = []  # the agent's steps this turn, for "Show log"
         # The current turn's stop signal: set by the hotkey or "Donna" while thinking or
         # speaking (then a new turn listens), by "stop talking" and the popup's Stop / Esc
@@ -665,11 +668,19 @@ class Voice:
         provider = self.provider()
         ex = self.executor(conn, provider)
         context = self.convo.for_planner()
-        result = agent.respond(
-            request, ex, provider, context=context, announce=self.announce,
-            cancelled=self.interrupt.is_set, progress=lambda note: self.turn_update(progress=note),
-            max_steps=min(self.cfg.agent.max_steps, VOICE_MAX_STEPS),
-        )  # fmt: skip
+        early = SentenceSpeaker(self) if self.cfg.voice.speak_while_writing else None
+        try:
+            result = agent.respond(
+                request, ex, provider, context=context, announce=self.announce,
+                cancelled=self.interrupt.is_set,
+                progress=lambda note: self.turn_update(progress=note),
+                max_steps=min(self.cfg.agent.max_steps, VOICE_MAX_STEPS),
+                on_sentence=early.add if early is not None else None,
+            )  # fmt: skip
+        finally:
+            if early is not None:
+                early.close()  # what's queued is said before the rest of the turn
+                self.streamed, self.first_said_s = early.said, early.first_s
         self.last_trace = result.trace[:40]
         if self.turn is not None and result.details:
             self.turn["details"] = result.details  # the popup shows it in full
@@ -926,6 +937,8 @@ class Voice:
             t1 = time.monotonic()
             self.asked = {}
             self.announced = ""
+            self.streamed, self.first_said_s = "", None
+            self.turn_t0 = t0
             self.last_trace = []
             reply = None if given else self.fast(text)
             if self.asked:
@@ -956,14 +969,18 @@ class Voice:
             entry["handle_s"] = round(time.monotonic() - t1, 1)
             if self.interrupt.is_set():
                 return False
+            if self.streamed:
+                entry["first_words_s"] = self.first_said_s
             if reply and reply == self.announced:
                 spoke = True  # already said before the action ran
             elif reply:
                 self.turn.update(reply=reply, state="speaking", progress="")
                 self.write_status("speaking")
-                self.wait_for_popup(reply)
+                rest = unsaid(spoken(reply), self.streamed)
                 t2 = time.monotonic()
-                self.say(spoken(reply))
+                if rest:
+                    self.wait_for_popup(reply)
+                    self.say(rest)
                 entry["speak_s"] = round(time.monotonic() - t2, 1)
                 spoke = not self.interrupt.is_set()
         except Exception as exc:  # never let one request kill the voice process
@@ -1133,6 +1150,64 @@ def _launch_popup(cfg: Config) -> None:
 
 SPOKEN_SENTENCES = 2
 MAX_FOLLOWUPS = 8  # a conversation ends after this many follow-ups without a press
+
+
+class SentenceSpeaker:
+    """Says the agent's sentences as they're written (docs/AGENT.md, phase 11), on its own
+    thread, in order, at most SPOKEN_SENTENCES of them (the rest is on screen). Each one is
+    shown in the popup before it's said. Nothing is said once the turn is interrupted, or
+    when an action was already announced (its reply would repeat the announcement)."""
+
+    def __init__(self, voice: Voice) -> None:
+        self.voice = voice
+        self.queue: queue.Queue[str | None] = queue.Queue()
+        self.taken: list[str] = []  # handed to the thread
+        self.spoken: list[str] = []  # said in full
+        self.thread: threading.Thread | None = None
+        self.first_s: float | None = None
+
+    def add(self, sentence: str) -> None:
+        v = self.voice
+        if v.announced or v.interrupt.is_set() or len(self.taken) >= SPOKEN_SENTENCES:
+            return
+        self.taken.append(sentence)
+        self.queue.put(sentence)
+        if self.thread is None:
+            self.thread = threading.Thread(target=self._run, name="pos-say-early", daemon=True)
+            self.thread.start()
+
+    def _run(self) -> None:
+        v = self.voice
+        while (sentence := self.queue.get()) is not None:
+            if v.interrupt.is_set():
+                continue  # drained, never said
+            shown = " ".join([*self.spoken, sentence])
+            v.show("speaking", reply=shown, progress="")
+            v.wait_for_popup(shown)
+            if self.first_s is None:
+                self.first_s = round(time.monotonic() - v.turn_t0, 1)
+            v.say(sentence)
+            if not v.interrupt.is_set():
+                self.spoken.append(sentence)
+
+    def close(self) -> None:
+        """Wait until what's queued is said (or the turn is stopped)."""
+        if self.thread is not None:
+            self.queue.put(None)
+            self.thread.join()
+
+    @property
+    def said(self) -> str:
+        return " ".join(self.spoken)
+
+
+def unsaid(text: str, said: str) -> str:
+    """What's left to say of `text` once `said` (its start) has been said. If what was said
+    isn't its start (the reply was corrected after a sentence went out), all of it."""
+    whole, done = " ".join(text.split()), " ".join(said.split())
+    if not done:
+        return whole
+    return whole[len(done) :].strip() if whole.startswith(done) else whole
 
 
 def spoken(reply: str) -> str:

@@ -24,6 +24,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from personal_os.config.schema import LLMConfig
+from personal_os.core.logging import get_logger
 from personal_os.llm.provider import (
     Health,
     LLMCancelled,
@@ -32,6 +33,8 @@ from personal_os.llm.provider import (
     T,
     normalize,
 )
+
+_log = get_logger("llm.ollama")
 
 QUERY_INSTRUCTION = (
     "Instruct: Given a question about the user's past computer activity, retrieve the records "
@@ -75,9 +78,15 @@ class OllamaProvider:
         except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
             raise LLMUnavailable(f"ollama not reachable at {self.cfg.base_url}: {exc}") from None
 
-    def _chat_cancellable(self, body: dict[str, Any], cancel: threading.Event) -> dict[str, Any]:
+    def _chat_cancellable(
+        self,
+        body: dict[str, Any],
+        cancel: threading.Event,
+        on_text: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
         """/api/chat, streamed, given up the moment `cancel` is set. Returns what the
-        unstreamed call would: the whole message, and the final counts."""
+        unstreamed call would: the whole message, and the final counts. `on_text` gets each
+        piece of the message as it arrives."""
         url = urllib.parse.urlsplit(self.cfg.base_url)
         https = url.scheme == "https"
         conn_cls = http.client.HTTPSConnection if https else http.client.HTTPConnection
@@ -131,7 +140,17 @@ class OllamaProvider:
                 chunk = json.loads(value)
                 if chunk.get("error"):
                     raise LLMError(f"ollama: {chunk['error']}"[:300])
-                content.append(chunk.get("message", {}).get("content", ""))
+                piece = chunk.get("message", {}).get("content", "")
+                content.append(piece)
+                if on_text is not None and piece:
+                    try:
+                        on_text(piece)
+                    except Exception as exc:  # a listener's bug never costs the answer
+                        on_text = None
+                        _log.warning(
+                            "reply stream listener failed",
+                            extra={"fields": {"exc_type": type(exc).__name__}},
+                        )
                 if chunk.get("done"):
                     whole = {"role": "assistant", "content": "".join(content)}
                     final: dict[str, Any] = {**chunk, "message": whole}
@@ -144,10 +163,12 @@ class OllamaProvider:
             with contextlib.suppress(Exception):
                 conn.close()
 
-    def _send(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+    def _send(
+        self, path: str, body: dict[str, Any], on_text: Callable[[str], None] | None = None
+    ) -> dict[str, Any]:
         cancel = self.cancel
-        if path == "/api/chat" and cancel is not None:
-            return self._chat_cancellable(body, cancel)
+        if path == "/api/chat" and (cancel is not None or on_text is not None):
+            return self._chat_cancellable(body, cancel or threading.Event(), on_text)
         return self._request(path, body, self.cfg.timeout_s)
 
     def _options(self, *, gpu: bool, num_ctx: int, temperature: float) -> dict[str, Any]:
@@ -158,9 +179,11 @@ class OllamaProvider:
             opts["num_gpu"] = self._gpu_layers
         return opts
 
-    def _with_gpu_fallback(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+    def _with_gpu_fallback(
+        self, path: str, body: dict[str, Any], on_text: Callable[[str], None] | None = None
+    ) -> dict[str, Any]:
         try:
-            return self._send(path, body)
+            return self._send(path, body, on_text)
         except (LLMUnavailable, LLMCancelled):
             raise
         except LLMError:
@@ -168,7 +191,7 @@ class OllamaProvider:
                 raise
             self._gpu_layers = None  # e.g. out of VRAM: let Ollama choose from now on
             body["options"].pop("num_gpu")
-            return self._send(path, body)
+            return self._send(path, body)  # not streamed again: some of it may have been said
 
     # --- chat ----------------------------------------------------------------------------------
 
@@ -182,6 +205,7 @@ class OllamaProvider:
         validate: Callable[[T], None] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        on_text: Callable[[str], None] | None = None,
     ) -> T:
         messages: list[dict[str, str]] = [
             {"role": "system", "content": system},
@@ -210,7 +234,10 @@ class OllamaProvider:
                 # A cap on output: a small model can loop forever (seen at temperature 0).
                 | {"num_predict": max_tokens or (4096 if think else 1024)},
             }
-            reply = self._with_gpu_fallback("/api/chat", body)
+            # Streamed on the first attempt only: a retry's text would repeat what was said.
+            reply = self._with_gpu_fallback(
+                "/api/chat", body, on_text if stats["attempts"] == 1 else None
+            )
             stats["prompt_tokens"] += int(reply.get("prompt_eval_count") or 0)
             stats["output_tokens"] += int(reply.get("eval_count") or 0)
             stats["seconds"] += int(reply.get("total_duration") or 0) / 1e9

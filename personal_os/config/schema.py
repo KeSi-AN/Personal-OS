@@ -144,6 +144,8 @@ class VoiceConfig(_Section):
     speechify_voice: str = "geffen_32"
     speechify_model: str = "simba-3.5"
     max_spoken_chars: int = Field(600, ge=100, le=2000)
+    # Say an answer's first sentences while the model is still writing the rest (phase 11).
+    speak_while_writing: bool = True
 
 
 class BriefingsConfig(_Section):

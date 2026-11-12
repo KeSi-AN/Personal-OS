@@ -12,6 +12,7 @@ from personal_os.llm.provider import Health, LLMError, LLMUnavailable, T, normal
 
 Responder = Callable[[str, str, type[Any]], dict[str, Any] | str]
 _WORD = re.compile(r"[a-z0-9]+")
+STREAM_CHUNK = 7  # characters per streamed piece: splits words, keys and escapes
 
 
 class FakeProvider:
@@ -40,12 +41,16 @@ class FakeProvider:
         validate: Callable[[T], None] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        on_text: Callable[[str], None] | None = None,
     ) -> T:
         if not self.available or self.responder is None:
             raise LLMUnavailable("fake provider has no responder")
         self.calls.append((system, user))
         reply = self.responder(system, user, schema)
         text = reply if isinstance(reply, str) else json.dumps(reply)
+        if on_text is not None:  # written a few characters at a time, as a model would
+            for i in range(0, len(text), STREAM_CHUNK):
+                on_text(text[i : i + STREAM_CHUNK])
         try:
             obj = schema.model_validate_json(text)
             if validate is not None:

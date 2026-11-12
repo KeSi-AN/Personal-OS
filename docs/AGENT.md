@@ -199,3 +199,10 @@ It opens in the desktop app 45 seconds after capture starts, at most every 6 hou
 | Only the request's tools (8–32), new each time | 4.8–7.5 s | 7–11 s |
 
 So the full list stays, and anything that changes per request goes after it. Other model calls with a different prompt (recall, summaries, the video sorter) replace what Ollama has kept, so the next agent step reads its prompt afresh.
+
+**Speaking while the answer is written.** Each answer step now streams from Ollama. `llm/replystream.py` follows the JSON as it arrives, finds the top-level `reply` and hands on each finished sentence, but only once the step has decided `"answer"`: a step that uses tools says nothing from its JSON. Voice (`SentenceSpeaker`) shows each sentence in the popup and says it on its own thread while the model carries on, at most two sentences as before. When the reply is complete, only what's left is said ("The rest is on screen."). The safety rules still hold:
+- each sentence passes the same claim check as the whole reply, and the first one that fails stops early speech, so a false "I've paused it" is never said;
+- a step retried after a bad answer isn't streamed again;
+- nothing is said early once the turn is interrupted, or after an action was announced.
+
+`voice.speak_while_writing` turns it off. Measured with qwen3:4b, after the prompt has been read: the first sentence is ready 1.6–2.8 s after the request and the whole reply 1.9–3.2 s. Donna's answers are one to three short sentences, so speaking starts 0.1–0.8 s sooner. The gain grows with longer answers, and Piper now makes the first sentence's audio while the model writes the next.
