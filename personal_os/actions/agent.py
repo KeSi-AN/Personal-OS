@@ -20,12 +20,13 @@ import functools
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, Field, ValidationError, create_model
+from pydantic import BaseModel, BeforeValidator, Field, ValidationError, create_model
+from pydantic.json_schema import WithJsonSchema
 
 from personal_os.actions import killswitch
-from personal_os.actions.base import Origin, Tier
+from personal_os.actions.base import Origin, Tier, Tool
 from personal_os.actions.executor import Executor, Outcome
 from personal_os.actions.planner import (
     DATA_MAX,
@@ -34,13 +35,16 @@ from personal_os.actions.planner import (
     merge_opens,
     plan_checker,
     route_app_names,
-    system_prompt,
+    tools_block,
 )
+from personal_os.actions.planner import RULES as PLANNER_RULES
 from personal_os.context.evidence import clean
 from personal_os.core.logging import get_logger
 from personal_os.llm.provider import LLMError, LLMProvider
 
 _log = get_logger("actions.agent")
+
+INTRO = "You reply in JSON: a decision, tool calls (or none), and what you say.\n"
 
 RULES = """
 You are {name}, a personal assistant running entirely on {user}'s laptop. You talk with them, \
@@ -117,12 +121,59 @@ class FinalAnswer(BaseModel):
     details: str = ""
 
 
-def agent_schema(executor: Executor) -> type[BaseModel]:
-    names = tuple(t.name for t in executor.registry.for_planner())
-    tool_type: Any = Literal[names]
-    call: Any = create_model(
-        "AgentCall", tool=(tool_type, ...), args=(dict[str, Any], Field(default_factory=dict))
+def _tidy_args(args: Any, allowed: frozenset[str]) -> Any:
+    """Argument names as the tool spells them: the tool list marks optional ones "name?" and a
+    small model copies the "?"; names the tool doesn't have are dropped (constrained decoding
+    can't produce them, so they only come from a hand-written or replayed step)."""
+    if not isinstance(args, dict):
+        return args
+    tidy = {str(k).strip().rstrip("?").strip(): v for k, v in args.items()}
+    return {k: v for k, v in tidy.items() if k in allowed}
+
+
+# Ollama turns a length limit into a repeated grammar rule; a long one (a note's 5,000
+# characters, a URL's 2,000) makes the grammar fail to build ("failed to parse grammar",
+# seen on 0.32.6). Longer limits are left to the tool's own validation when it runs.
+GRAMMAR_MAX_LENGTH = 300
+
+
+def _grammar_safe(schema: Any) -> Any:
+    if isinstance(schema, dict):
+        out = {k: _grammar_safe(v) for k, v in schema.items()}
+        if isinstance(out.get("maxLength"), int) and out["maxLength"] > GRAMMAR_MAX_LENGTH:
+            del out["maxLength"]
+        return out
+    if isinstance(schema, list):
+        return [_grammar_safe(v) for v in schema]
+    return schema
+
+
+def _call_model(tool: Tool) -> Any:
+    """One call shape per tool: its name as a constant and its own argument schema, so the
+    model's JSON grammar can only produce argument names and value types the tool accepts.
+    The value stays a plain dict (the executor validates it against the tool, as before)."""
+    allowed = frozenset(tool.args_model.model_fields)
+    schema = _grammar_safe(tool.args_model.model_json_schema(mode="validation"))
+    schema["additionalProperties"] = False  # also for argument-less tools
+    args_type: Any = Annotated[
+        dict[str, Any],
+        WithJsonSchema(schema),
+        BeforeValidator(functools.partial(_tidy_args, allowed=allowed)),
+    ]
+    required = any(f.is_required() for f in tool.args_model.model_fields.values())
+    name_type: Any = Literal[tool.name]  # a constant made at runtime, one per tool
+    model: Any = create_model(
+        f"Call_{tool.name}",
+        tool=(name_type, ...),
+        args=(args_type, ... if required else Field(default_factory=dict)),
     )
+    return model
+
+
+def agent_schema(executor: Executor) -> type[BaseModel]:
+    """The step's JSON shape, with one call shape per tool (ADR-080)."""
+    calls = [_call_model(t) for t in executor.registry.for_planner()]
+    call: Any = calls[0] if len(calls) == 1 else Union[tuple(calls)]  # noqa: UP007
     model: type[BaseModel] = create_model(
         "AgentStep",
         decide=(DECISION, ...),
@@ -145,14 +196,16 @@ class AgentReply:
 
 
 def agent_prompt(executor: Executor) -> str:
+    """Built from the planner's shared parts (its rules and tool list), not by editing the
+    planner's finished prompt, so a change there can't silently stop applying here.
+
+    The same for every request: Ollama reuses the work of reading a prompt whose start hasn't
+    changed, and on the GTX 1650 reading the ~3,000 tokens afresh costs about 8 s (ADR-080)."""
     cfg = executor.config.agent
-    base = system_prompt(executor).replace(
-        "You turn the user's request into calls to the tools below, as JSON.\n",
-        "You reply in JSON: a decision, tool calls (or none), and what you say.\n",
-        1,
-    )
-    base = base.replace("- reply: one short sentence telling the user what you're doing.\n", "")
-    return base + RULES.format(name=cfg.name, user=cfg.user_name or "the user")
+    return (
+        INTRO + "\n" + PLANNER_RULES + tools_block(executor)
+        + RULES.format(name=cfg.name, user=cfg.user_name or "the user")
+    )  # fmt: skip
 
 
 def _key(executor: Executor, tool: str, args: dict[str, Any]) -> str:

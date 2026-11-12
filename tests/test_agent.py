@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -146,6 +147,61 @@ def test_the_prompt_puts_rules_and_examples_last(home: Path, config: Config):
     assert prompt.index("Tools (name") < prompt.index("Decide first:")
     assert prompt.rstrip().endswith("}")  # ends on a worked example
     assert '"decide": "answer"' in prompt and "-> now" in prompt
+
+
+def test_the_prompt_is_built_from_the_planner_parts_not_edited_from_it(home: Path, config: Config):
+    from personal_os.actions import planner
+
+    env = Env(home, config)
+    prompt = agent.agent_prompt(env.ex)
+    assert prompt.startswith(agent.INTRO)
+    assert planner.RULES in prompt and planner.tools_block(env.ex) in prompt
+    # The planner's own lines don't leak in: the agent's step has no `steps` field.
+    assert planner.INTRO not in prompt and "- steps:" not in prompt
+    assert "- reply: one short sentence" not in prompt
+
+
+def test_the_prompt_is_the_same_for_every_request(home: Path, config: Config):
+    """Ollama reuses a prompt start it has already read (about 8 s saved on the GTX 1650)."""
+    env = Env(home, config)
+    provider = FakeProvider(Script(answer("Tokyo."), answer("Paris.")))
+    agent.respond("capital of Japan?", env.ex, provider)
+    agent.respond("remind me to stretch", env.ex, provider)
+    assert provider.calls[0][0] == provider.calls[1][0]
+
+
+def test_each_call_carries_its_own_tools_argument_schema(home: Path, config: Config):
+    env = Env(home, config)
+    schema = agent.agent_schema(env.ex).model_json_schema()
+    calls = {name: d for name, d in schema["$defs"].items() if name.startswith("Call_")}
+    assert len(calls) == len(env.ex.registry.for_planner())
+    volume = calls["Call_set_volume"]
+    assert volume["properties"]["tool"]["const"] == "set_volume"
+    args = volume["properties"]["args"]
+    assert set(args["properties"]) == {"percent"} and args["additionalProperties"] is False
+    assert "args" in volume["required"]  # percent is required, so args can't be left out
+    assert "args" not in calls["Call_now"].get("required", [])  # now() takes nothing
+    # Long length limits break Ollama's grammar; they're left to the tool's own check.
+    limits = [int(x) for x in re.findall(r'"maxLength": (\d+)', json.dumps(schema))]
+    assert limits and max(limits) <= agent.GRAMMAR_MAX_LENGTH
+
+
+def test_argument_names_are_tidied_and_unknown_ones_dropped(home: Path, config: Config):
+    env = Env(home, config)
+    step = agent.agent_schema(env.ex).model_validate(
+        use(("set_reminder", {"text?": "stretch", "minutes": 5, "project": "x"}))
+    )
+    call = step.calls[0]
+    assert call.tool == "set_reminder" and call.args == {"text": "stretch", "minutes": 5}
+    assert isinstance(call.args, dict)  # the executor still gets a plain dict
+
+
+def test_a_call_to_an_unknown_tool_is_not_valid(home: Path, config: Config):
+    env = Env(home, config)
+    r = agent.respond(
+        "delete everything", env.ex, FakeProvider(lambda *_a: use(("format_disk", {})))
+    )
+    assert r.outcomes == []
 
 
 # --- open tabs: extension -> host -> observer -> now ------------------------------------------

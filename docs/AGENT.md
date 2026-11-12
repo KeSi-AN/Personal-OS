@@ -185,3 +185,17 @@ It opens in the desktop app 45 seconds after capture starts, at most every 6 hou
 **Show log** (Donna page): under each reply, the exchange's route and timings, each agent step (the tool calls, their results, checks that failed, corrections) and the app log's warnings and errors from that moment. The app log holds names and counts only, never content, so this shows what went wrong without adding anything new to disk. Typed chat on the dashboard shows the same steps under its answer.
 
 **The desktop app** (`interfaces/app.py`, ADR-079): the dashboard in its own window (pywebview on WebView2, like the popup) instead of a browser tab. The tray's "Open dashboard", the startup brief, the popup and `personal-os app [page]` open it. Only one window runs at a time; opening it again shows the page there and brings the window to the front. Links to other sites open in your browser. If WebView2 isn't available, the dashboard opens in the browser as before. `personal-os dashboard` still opens the browser.
+
+## Phase 11: lessons from Roamies (2026-11-12)
+
+**Arguments the grammar can't get wrong** (ADR-080). Each tool call in the agent's step schema has its own shape: the tool's name and its own argument schema. Ollama's grammar then only produces argument names and value types the tool accepts, which removes the validation slips Phase 10 worked around. Length limits over 300 characters are left out of the grammar, because Ollama 0.32.6 can't build it with them, and the tool still checks them when it runs.
+
+**One prompt for every request.** The agent's prompt is built from the planner's shared parts and doesn't change between requests, because Ollama reuses a prompt start it has already read. Measured here:
+
+| Prompt | Reading it | A whole step |
+|---|---|---|
+| All 51 tools, read for the first time | about 8.7 s (3,000 tokens) | about 11 s |
+| All 51 tools, same start as the last call | about 0.06 s | about 2–3 s |
+| Only the request's tools (8–32), new each time | 4.8–7.5 s | 7–11 s |
+
+So the full list stays, and anything that changes per request goes after it. Other model calls with a different prompt (recall, summaries, the video sorter) replace what Ollama has kept, so the next agent step reads its prompt afresh.
