@@ -64,6 +64,7 @@ Which tool:
 - about yourself (wake word, your voice, settings, what's connected) -> about_me
 - "gaming / work / chill / leisure mode" -> set_mode
 - projects: "add these tabs / this tab group to X" -> project_add_source; notes -> project_note; to-dos -> todo_add, todo_done; "what's in X" -> project_items; "resume X" / "pick X back up" -> project_resume
+- "hold me to it" / "keep me to that" -> commit_to; "what did I say I'd do" / "what's due" -> answer from the list of what they said they'd do, if one is shown; "I did it" / "done with X" -> todo_done
 - what we talked about / what you said earlier -> conversation
 - play a song or video by name -> play_media (never media: that only presses play/pause)
 - search the web, open a site -> browser_open; this page / summarise this tab -> browser_read
@@ -273,6 +274,15 @@ def respond(
         return False
 
     killed = killswitch.engaged(executor.runtime_dir)
+    offered = commitment_offer(request, executor, out)
+    if offered:
+        return offered
+    from personal_os.context import commitments
+
+    if commitments.asked_about(request):  # by rules: instant, and an overdue one is overdue
+        out.reply, out.details = commitments.answer(executor.conn, executor.clock.now())
+        out.trace.append("answered from the commitments list (no model)")
+        return out
     steps = max_steps or executor.config.agent.max_steps
     schema = agent_schema(executor)
     system = agent_prompt(executor)
@@ -283,6 +293,9 @@ def respond(
             "Earlier in this conversation (for words like 'it' or 'instead'; act only on what "
             f"the user says now):\n{context}\n\n{user}"
         )
+    owed = _commitments_block(executor)
+    if owed:  # after the fixed system prompt, so Ollama still reuses what it read (ADR-080)
+        user = f"{owed}\n\n{user}"
     transcript = user
     read_texts: list[str] = []
     seen: dict[str, str] = {}
@@ -417,6 +430,49 @@ def respond(
             out.reply = "Sorry, I couldn't work that out."
         else:
             out.reply = "I'm not sure how to help with that."
+    return out
+
+
+def _commitments_block(executor: Executor) -> str:
+    from personal_os.context import commitments
+
+    try:
+        return commitments.prompt_block(executor.conn, executor.clock.now())
+    except Exception as exc:  # never costs the answer
+        _log.warning("commitments unavailable", extra={"fields": {"exc": type(exc).__name__}})
+        return ""
+
+
+def commitment_offer(request: str, executor: Executor, out: AgentReply) -> AgentReply | None:
+    """ "I'll finish the deck tonight": offered as a commitment straight away, without the
+    model. It's a proactive call, so the policy asks first (a spoken yes, a confirmation or
+    an Approve card); nothing is kept without that yes. None when it isn't one."""
+    from personal_os.context import commitments
+
+    if executor.registry.get("commit_to") is None:
+        return None
+    proposal = commitments.detect(request)
+    if proposal is None:
+        return None
+    args = proposal.args()
+    try:
+        commitments.due_from(proposal.when, executor.clock.now())
+    except ValueError:
+        args["when"] = ""  # a time it can't read is left out rather than guessed
+    out.trace.append(f"commitment offered: {args}")
+    o = executor.request(
+        "commit_to", args, origin=Origin.PROACTIVE, request_text=request
+    )  # fmt: skip
+    out.outcomes.append(o)
+    out.trace.append(f"  commit_to: {o.status}: {str(o.message)[:200]}")
+    if o.ok:
+        out.reply = f"Got it. {str(o.message).rstrip('.')}."
+    elif o.status == "pending":
+        out.reply = f"Want me to hold you to that? {o.preview[:1].upper()}{o.preview[1:]}. Approve it below."
+    elif o.status in ("declined", "cancelled", "stopped"):
+        out.reply = "Okay, I won't keep track of it."
+    else:
+        out.reply = f"I couldn't keep that: {str(o.message).rstrip('.')}."
     return out
 
 

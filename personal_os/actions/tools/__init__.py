@@ -33,6 +33,8 @@ def build_registry(config: Config | None = None) -> Registry:
         projects.TodoAdd(),
         projects.TodoDone(),
         projects.TodoReopen(),
+        projects.CommitTo(),
+        projects.TodoRemove(),
         projects.ProjectItems(),
         projects.ProjectFileInbox(),
         projects.ProjectResume(),

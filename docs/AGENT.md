@@ -227,3 +227,15 @@ Measured with en_US-hfc_female-medium: making the set takes about 7.6 s once, in
 - once you close it, the page makes no more calls into Python.
 
 **Keep model loaded on GPU** (tray checkbox, `llm.keep_on_gpu`). Ticking it loads the chat model onto the GPU (all layers) and sends `keep_alive: -1` on every chat call and warm-up, so no call ("2m", the overlay's "15m") can start an unload countdown. The tray reports when the model is loaded, with its VRAM use and load time. Gaming mode still unloads it for a game and loads it again when the game ends. Unticking unloads it at once. The embedding model isn't pinned.
+
+**Commitments** (`context/commitments.py`, ADR-081). Say "I'll finish the deck tonight" and Donna offers to hold you to it ("Hold you to 'finish the deck', at 21:00 today? Say yes or no"). With your yes, it's kept as a to-do with that due time, so it shows wherever to-dos do.
+- **Spotting them:** rules, no model.
+  - Covered: "I'll …", "I need to …", "I have to …", "I'm going to …", "I must …", "I should …".
+  - Times: tonight, this evening, tomorrow morning, by Friday, next Monday, at 5pm, by 5 (5 pm), in 2 hours, by end of day.
+  - Left out: questions, "I'll be back" and "I'll let you know", and computer commands with no time ("I need to open Chrome").
+- **Asking about them:** "what did I say I'd do?", "anything overdue?" and "what's on my list?" are answered from the list by rules: the overdue items, what's next, and the rest on screen.
+- **Each request:** Donna sees your open commitments, overdue first, and your next reminders, so "I've sent the invoice" ticks it off with `todo_done`.
+- **When one is due:** once its time passes, she says it once, in the popup and aloud: "You said you'd call mum. It's due now."
+- **Undo:** removes it.
+
+Measured with qwen3:4b: offering one and answering about them take no model call (0.0 s), and "I've sent the invoice to Ravi" ticked off the right one.

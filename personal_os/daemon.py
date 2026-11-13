@@ -719,12 +719,22 @@ class Daemon:
 
     def _fire_reminders(self) -> None:
         from personal_os.actions import reminders
+        from personal_os.context import commitments
 
         due = reminders.take_due(self.control_conn, self.clock)
         if due:
             threading.Thread(target=self._announce_reminders, args=(due,), daemon=True).start()
+        # Something you said you'd do whose time has come: said once (phase 11).
+        held = commitments.take_due(self.control_conn, self.clock)
+        if held:
+            said = {"title": "You said you'd", "spoken": "You said you'd {text}. It's due now."}
+            threading.Thread(
+                target=self._announce_reminders, args=(held,), kwargs=said, daemon=True
+            ).start()
 
-    def _announce_reminders(self, due: list[Any]) -> None:
+    def _announce_reminders(
+        self, due: list[Any], *, title: str = "Reminder", spoken: str = "Reminder: {text}"
+    ) -> None:
         """Each in the popup, which stays on top until dismissed (Windows hides toast banners
         during full-screen apps and Do Not Disturb). A Windows notification if the popup can't
         open, the tray balloon if that fails too. Spoken if voice is on."""
@@ -735,14 +745,14 @@ class Daemon:
         quiet = not modes.effects(cfg.runtime_dir).popup  # gaming: never a window over the game
         for r in due:
             shown_by = "popup"
-            if quiet or not alerts.show(cfg, r.id, "Reminder", r.text, self.clock.now()):
-                shown_by = "toast" if toast("Reminder", r.text, reminder=True) else "none"
+            if quiet or not alerts.show(cfg, r.id, title, r.text, self.clock.now()):
+                shown_by = "toast" if toast(title, r.text, reminder=True) else "none"
                 if shown_by == "none" and self.tray is not None:
-                    self.tray.notify(r.text, "Reminder")
+                    self.tray.notify(r.text, title)
                     shown_by = "tray"
-            _log.info("reminder fired", extra={"fields": {"shown": shown_by}})
+            _log.info("reminder fired", extra={"fields": {"shown": shown_by, "kind": title}})
             if cfg.voice.enabled and modes.effects(cfg.runtime_dir).speak_announcements:
-                self._speak(cfg, f"Reminder: {r.text}")
+                self._speak(cfg, spoken.format(text=r.text))
 
     def _speak(self, cfg: Any, text: str) -> None:
         """Through the voice process when it runs (one voice, never over a conversation, no

@@ -4,7 +4,9 @@ project_create      a new project by name                                   tier
 project_add_source  the current tab, a tab group, matching tabs or a link   tier 1
 project_note        a quick note                                            tier 1
 todo_add / todo_done                                                         tier 1
-project_items       a project's sources, notes and to-dos                   tier 0
+commit_to           something you said you'd do, with when (asks first      tier 1
+                    when Donna offers it: context/commitments.py)
+project_items      a project's sources, notes and to-dos                   tier 0
 project_file_inbox  file things added from the browser into a project       tier 1
 project_resume      reopen a project's sources as a tab group, with its     tier 1
                     last note and open to-dos
@@ -245,6 +247,71 @@ class TodoReopen(Tool):
         if not items.set_done(ctx.conn, ctx.clock, args.item_id, False):
             raise ActionError("that to-do is gone")
         return Result("Reopened the to-do")
+
+
+class CommitArgs(Args):
+    text: str = Field(min_length=1, max_length=300, description="what they'll do, their words")
+    when: str = Field("", max_length=40, description="as they said it: tonight, by friday, 5pm")
+    project: str = Field("", max_length=80, description="empty: the inbox")
+
+
+class CommitTo(Tool):
+    """A commitment (context/commitments.py): a to-do with a due time Donna holds you to.
+    Offered by Donna herself when you say "I'll …", so the policy asks you first."""
+
+    name = "commit_to"
+    summary = (
+        "they said they'll do something ('I'll finish the deck tonight'): keep it as a "
+        "commitment, with when it's due as they said it"
+    )
+    tier = Tier.LOW
+    reversible = True
+    args_model = CommitArgs
+
+    def _due(self, args: CommitArgs, ctx: ToolContext) -> datetime | None:
+        from personal_os.context import commitments
+
+        try:
+            return commitments.due_from(args.when, ctx.clock.now())
+        except ValueError:
+            raise ActionError(f'I can\'t tell when "{args.when}" is') from None
+
+    def _label(self, due: datetime | None, ctx: ToolContext) -> str:
+        if due is None:
+            return ""
+        from personal_os.actions import reminders
+
+        return f", {reminders.when(due, ctx.clock.now())}"
+
+    def preview(self, args: CommitArgs, ctx: ToolContext) -> str:
+        where = f" in {_project(ctx, args.project).name}" if args.project else ""
+        return f'hold you to "{args.text}"{self._label(self._due(args, ctx), ctx)}{where}'
+
+    def run(self, args: CommitArgs, ctx: ToolContext) -> Result:
+        p = _project(ctx, args.project) if args.project else None
+        due = self._due(args, ctx)
+        iid = items.add(ctx.conn, ctx.clock, p.id if p else None, "todo", title=args.text,
+                        due=due, source="chat")  # fmt: skip
+        return Result(
+            f'I\'ll hold you to "{args.text}"{self._label(due, ctx)}',
+            undo={"tool": "todo_remove", "args": {"item_id": iid}},
+        )
+
+
+class TodoRemove(Tool):
+    name = "todo_remove"
+    summary = "(undo) remove a to-do Donna just kept"
+    tier = Tier.LOW
+    internal = True
+    args_model = ReopenArgs
+
+    def preview(self, args: ReopenArgs, ctx: ToolContext) -> str:
+        return "remove that to-do"
+
+    def run(self, args: ReopenArgs, ctx: ToolContext) -> Result:
+        if not items.delete(ctx.conn, args.item_id):
+            raise ActionError("that to-do is gone")
+        return Result("Removed it")
 
 
 class ItemsArgs(Args):
