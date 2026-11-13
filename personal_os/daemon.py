@@ -14,6 +14,7 @@ import os
 import sqlite3
 import sys
 import threading
+import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
@@ -168,6 +169,8 @@ class Daemon:
         llm_task = asyncio.create_task(self._llm_loop(), name="llm-jobs")
         self._loop = asyncio.get_running_loop()
         servers = self._start_interfaces() if self.interfaces else []
+        if cfg.llm.keep_on_gpu and self.interfaces:  # kept on the GPU from the start
+            threading.Thread(target=self._apply_gpu, kwargs={"quiet": True}, daemon=True).start()
         try:
             await self._control_loop()
         finally:
@@ -447,6 +450,8 @@ class Daemon:
                     voice_state=self._voice_state,
                     toggle_voice=lambda: self._toggle_setting("voice.enabled"),
                     toggle_wake=lambda: self._toggle_setting("voice.wake_word_enabled"),
+                    gpu_state=self._gpu_state,
+                    toggle_gpu=self._toggle_gpu,
                 ))  # fmt: skip
                 self.tray.start()
             except Exception as exc:
@@ -515,6 +520,45 @@ class Daemon:
         section, name = key.split(".")
         current = getattr(getattr(self._fresh_config(), section), name)
         set_value(key, not current)
+
+    # --- keeping the model on the GPU (the tray's checkbox) ------------------------------------
+
+    def _gpu_state(self) -> bool:
+        return bool(self._fresh_config().llm.keep_on_gpu)
+
+    def _toggle_gpu(self) -> None:
+        self._toggle_setting("llm.keep_on_gpu")
+        threading.Thread(target=self._apply_gpu, name="pos-gpu", daemon=True).start()
+
+    def _apply_gpu(self, *, quiet: bool = False) -> None:
+        """Load the chat model onto the GPU and keep it there, or let it go (unloaded now, to
+        give the GPU back). In gaming mode it waits: the game has the GPU until it ends.
+        Off the tray's thread: a cold load takes several seconds."""
+        if self.llm is None:
+            return
+        cfg = self._fresh_config()
+        with contextlib.suppress(AttributeError):
+            self.llm.cfg = cfg.llm  # type: ignore[attr-defined]  # its calls now keep it loaded
+        try:
+            if not cfg.llm.keep_on_gpu:
+                self.llm.unload()
+                message = "The model was unloaded from the GPU."
+            elif modes.current(cfg.runtime_dir) == "gaming":
+                message = "The model will load onto the GPU when gaming mode ends."
+            else:
+                started = time.monotonic()
+                self.llm.warm()
+                vram = sum(b for _n, b in self.llm.health().loaded) / 1e9
+                message = (
+                    f"{cfg.llm.fast_model} is on the GPU and stays loaded "
+                    f"({vram:.1f} GB, {time.monotonic() - started:.0f} s to load)."
+                )
+            _log.info("keep on gpu", extra={"fields": {"on": cfg.llm.keep_on_gpu}})
+        except Exception as exc:
+            _log.warning("keep on gpu failed", extra={"fields": {"exc_type": type(exc).__name__}})
+            message = "Couldn't load the model onto the GPU. Is Ollama running?"
+        if self.tray is not None and not quiet:
+            self.tray.notify(message, "Model on GPU")
 
     def _sync_voice(self) -> None:
         """Keep the voice process running while voice is on (it exits by itself when off)."""
@@ -594,6 +638,11 @@ class Daemon:
                 if change == "entered" and self.llm is not None:
                     with contextlib.suppress(Exception):
                         self.llm.unload()  # free the GPU for the game
+                if change == "left" and self._gpu_state():
+                    # back from the game: the model you asked to keep goes back on the GPU
+                    threading.Thread(
+                        target=self._apply_gpu, kwargs={"quiet": True}, daemon=True
+                    ).start()
                 if change:
                     _log.info("mode changed", extra={"fields": {"auto": change}})
             fx = modes.effects(rt)

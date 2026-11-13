@@ -12,7 +12,18 @@ from pathlib import Path
 from typing import Any
 
 READ_S = 20.0  # an answer with details stays up at least this long
+READ_MAX_S = 120.0  # however long the answer, it closes on its own after this
+WORDS_PER_S = 3.5  # about 210 words a minute: unhurried reading
 ACTIVE = ("listening", "thinking", "speaking")
+
+
+def reading_s(view: View) -> float:
+    """Time to read what's on screen once she's finished talking: the reply and the details,
+    at an unhurried pace, plus a moment to look up. A short reply needs none of it."""
+    words = len(view.reply.split()) + len(view.details.split())
+    if words <= 12:
+        return 0.0
+    return min(READ_MAX_S, 2.0 + words / WORDS_PER_S)
 
 
 @dataclass(frozen=True)
@@ -100,12 +111,15 @@ def read_view(runtime_dir: Path, now: datetime) -> View:
 
 
 class AutoClose:
-    """Closes `seconds` after a turn finishes, unless pinned. A new turn (a new id) while open
-    starts over, so the same window is reused. Voice stopping also closes it."""
+    """Closes once a turn has finished and there's been time to read it, unless pinned or held
+    (the mouse is over it, or you're typing the next prompt), or expanded to read. A new turn
+    (a new id) while open starts over, so the same window is reused. Voice stopping also
+    closes it."""
 
     def __init__(self, seconds: float) -> None:
         self.seconds = seconds
         self.pinned = False
+        self.held = False
         self.turn_id = ""
         self.done_since: float | None = None
 
@@ -113,6 +127,12 @@ class AutoClose:
         self.pinned = on
         if not on and self.done_since is not None:
             self.done_since = None  # unpinning gives the full delay again
+
+    def hold(self, on: bool) -> None:
+        """Kept open while held; letting go gives the full delay again, from then."""
+        if self.held and not on:
+            self.done_since = None
+        self.held = on
 
     def step(self, view: View, now: float) -> tuple[bool, bool]:
         """(close now?, is this a new turn?) for the latest view at monotonic time `now`."""
@@ -126,9 +146,14 @@ class AutoClose:
             return False, new_turn
         if self.done_since is None:
             self.done_since = now
+        if view.state == "not running":  # voice is gone: nothing to show or ask, pinned or not
+            return now - self.done_since >= self.seconds, new_turn
         if self.pinned:
             return False, new_turn
         if view.dismissed:  # stopped: gone at once, not after the usual few seconds
             return True, new_turn
-        wait = max(self.seconds, READ_S) if view.details else self.seconds  # time to read it
+        if self.held:
+            self.done_since = now  # the delay counts from when you let go
+            return False, new_turn
+        wait = max(self.seconds, READ_S if view.details else 0.0, reading_s(view))
         return now - self.done_since >= wait, new_turn

@@ -214,3 +214,16 @@ So the full list stays, and anything that changes per request goes after it. Oth
 - There's at most one per turn, and none once something has been said (an announced action, or a sentence spoken while the reply was written), after an interrupt, or with `voice.beats` off.
 
 Measured with en_US-hfc_female-medium: making the set takes about 7.6 s once, in the background at start-up; loading it later takes 0.01 s, and each beat lasts 0.53–0.95 s.
+
+**The popup on standby** (inspired by Roamies' bubble, panel and ask bar). Long answers used to vanish 5 s after Donna stopped talking (20 s with details), so "the rest is on screen" sent you to the dashboard. Now:
+- **Time to read:** it stays up for as long as the answer takes to read at about 210 words a minute (at most 2 minutes), and never less than before.
+- **Held while used:** it stays open while the mouse is over it or you're typing in it. Letting go starts the delay again.
+- **Expand / Shrink:** the big window shows the whole answer, its details and the earlier exchanges from this window (kept in the page only, never stored). Expanding also pins it.
+- **The next prompt:** a box at the bottom takes a typed prompt (Enter sends) and **Talk** starts listening, like the push-to-talk key. Both go to the voice process as request files (`voice_ask.json`, checked every 0.15 s), so a typed prompt is a turn of the same conversation: quick commands, the agent, the same policy, confirmations and memory. Typing interrupts a reply or a follow-up listen, and only the newest typed prompt waits. A typed turn's reply is spoken as usual, but the mic isn't opened afterwards.
+
+**A popup can't block the next one.** Seen on 13 Nov: a popup opened just before Personal OS restarted ended up hidden and never closed. It kept the popup lock, so no popup opened afterwards, although voice worked. Closing depended on the page asking for updates, and a hidden WebView2 window pauses its timers. Now:
+- a watchdog thread ends the process 3 s after closing starts, or when the page hasn't asked for an update in 90 s;
+- with voice gone, the popup closes even when pinned or held;
+- once you close it, the page makes no more calls into Python.
+
+**Keep model loaded on GPU** (tray checkbox, `llm.keep_on_gpu`). Ticking it loads the chat model onto the GPU (all layers) and sends `keep_alive: -1` on every chat call and warm-up, so no call ("2m", the overlay's "15m") can start an unload countdown. The tray reports when the model is loaded, with its VRAM use and load time. Gaming mode still unloads it for a game and loads it again when the game ends. Unticking unloads it at once. The embedding model isn't pinned.

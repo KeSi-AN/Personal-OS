@@ -35,6 +35,7 @@ from personal_os.llm.provider import (
 )
 
 _log = get_logger("llm.ollama")
+KEEP_FOREVER = -1  # Ollama's keep_alive for "never unload"
 
 QUERY_INSTRUCTION = (
     "Instruct: Given a question about the user's past computer activity, retrieve the records "
@@ -225,7 +226,7 @@ class OllamaProvider:
                 "stream": False,
                 "think": think,
                 "format": schema.model_json_schema(),
-                "keep_alive": self.cfg.keep_alive,
+                "keep_alive": self._keep(self.cfg.keep_alive),
                 "options": self._options(
                     gpu=True,
                     num_ctx=self.cfg.num_ctx,
@@ -281,10 +282,15 @@ class OllamaProvider:
 
     # --- health --------------------------------------------------------------------------------
 
+    def _keep(self, wanted: str) -> str | int:
+        """How long Ollama keeps the chat model after this call. With `keep_on_gpu` it's for
+        good (-1): any call that said "2m" or "15m" would otherwise start the countdown again."""
+        return KEEP_FOREVER if self.cfg.keep_on_gpu else wanted
+
     def warm(self, keep_alive: str = "15m") -> None:
         body = {
             "model": self.chat_model,
-            "keep_alive": keep_alive,
+            "keep_alive": self._keep(keep_alive),
             "options": self._options(gpu=True, num_ctx=self.cfg.num_ctx, temperature=0),
         }
         self._with_gpu_fallback("/api/generate", body)  # no prompt: just loads the model

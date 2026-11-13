@@ -12,6 +12,7 @@
 * { box-sizing: border-box; }
 html, body { margin:0; height:100%; background:var(--card); color:var(--ink);
   font:14px/1.4 "Segoe UI", system-ui, sans-serif; overflow:hidden; user-select:none; }
+main, input { user-select:text; }  /* answers can be selected and copied */
 body { display:flex; flex-direction:column; border:1px solid var(--line); }
 header { display:flex; align-items:center; gap:10px; padding:10px 12px 6px; }
 #label { font-weight:600; flex:1; }
@@ -30,9 +31,22 @@ main { flex:1; padding:0 12px; overflow-y:auto; scrollbar-width:thin;
 #stop { border-color:var(--bad); }
 #error { color:var(--bad); }
 #notice { color:var(--warn); font-size:12px; }
-footer { display:flex; gap:6px; padding:6px 12px 10px; align-items:center; }
-#note { color:var(--muted); font-size:12px; flex:1; }
+footer { display:flex; gap:6px; padding:4px 12px 10px; align-items:center; }
+#note { color:var(--muted); font-size:12px; flex:1; min-width:0; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; }
 .hidden { display:none; }
+/* Earlier exchanges in this window: the conversation so far, quieter than the current one. */
+#earlier .ex { margin:0 0 8px; padding-bottom:8px; border-bottom:1px solid var(--line);
+  color:var(--muted); font-size:13px; }
+#earlier .ex .q { font-style:italic; }
+#earlier .ex .a { white-space:pre-wrap; word-wrap:break-word; }
+/* Standby: the next prompt, typed or spoken. */
+#askform { display:flex; gap:6px; padding:6px 12px 0; }
+#prompt { flex:1; min-width:0; background:var(--bg); color:var(--ink); border:1px solid var(--line);
+  border-radius:6px; font:inherit; font-size:13px; padding:5px 8px; }
+#prompt:focus { outline:none; border-color:var(--accent); }
+#prompt::placeholder { color:var(--muted); }
+button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
 #details { margin:8px 0; padding:8px 10px; border:1px solid var(--line); border-radius:8px;
   background:var(--bg); font-size:13px; }
 #details .row { margin:2px 0; white-space:pre-wrap; word-wrap:break-word; }
@@ -70,7 +84,8 @@ footer { display:flex; gap:6px; padding:6px 12px 10px; align-items:center; }
   <div id="label" role="status" aria-live="polite">Starting…</div>
   <span id="trigger"></span>
 </header>
-<main>
+<main id="main">
+  <div id="earlier" class="hidden" aria-label="Earlier in this conversation"></div>
   <div id="alerts"></div>
   <div id="notice" class="line hidden"></div>
   <div id="heardbox" class="hidden"><span class="who">You</span><div id="heard" class="line"></div></div>
@@ -80,9 +95,15 @@ footer { display:flex; gap:6px; padding:6px 12px 10px; align-items:center; }
   <div id="details" class="hidden"></div>
   <div id="error" class="line hidden"></div>
 </main>
+<form id="askform" autocomplete="off">
+  <input id="prompt" type="text" maxlength="2000" placeholder="Ask Donna… (Enter)"
+    aria-label="Type your next question for Donna">
+  <button id="talk" type="button" title="Start listening, like the push-to-talk key">Talk</button>
+</form>
 <footer>
-  <span id="note">Esc stops and closes</span>
+  <span id="note">Esc closes</span>
   <button id="stop" class="hidden" title="Stop listening, thinking or talking (Esc)">Stop</button>
+  <button id="expand" aria-pressed="false" title="Show the whole answer and the conversation">Expand</button>
   <button id="pin" aria-pressed="false" title="Keep open">Pin</button>
   <button id="dash" title="Open the dashboard">Dashboard</button>
   <button id="close" title="Stop and close (Esc)">✕</button>
@@ -172,7 +193,55 @@ function renderDetails(text) {
   }
 }
 
+// The conversation while this window is open: each finished exchange moves up into "earlier"
+// when the next one starts. Kept in the page only; nothing is stored.
+const EARLIER_MAX = 6;
+const earlier = [];
+let current = { id: "", heard: "", reply: "" };
+
+function track(v) {
+  if (v.turn_id && v.turn_id !== current.id) {
+    if (current.id && (current.heard || current.reply)) {
+      earlier.push({ heard: current.heard, reply: current.reply });
+      if (earlier.length > EARLIER_MAX) earlier.shift();
+      renderEarlier();
+    }
+    current = { id: v.turn_id, heard: "", reply: "" };
+    return true;
+  }
+  if (v.heard) current.heard = v.heard;
+  if (v.reply) current.reply = v.reply;
+  return false;
+}
+
+function renderEarlier() {
+  const box = $("earlier");
+  box.replaceChildren();
+  for (const ex of earlier) {  // built with textContent: nothing said is parsed as HTML
+    const item = document.createElement("div");
+    item.className = "ex";
+    if (ex.heard) {
+      const q = document.createElement("div");
+      q.className = "q";
+      q.textContent = "You: " + ex.heard;
+      item.append(q);
+    }
+    if (ex.reply) {
+      const a = document.createElement("div");
+      a.className = "a";
+      a.textContent = ex.reply;
+      item.append(a);
+    }
+    box.append(item);
+  }
+}
+
 function render(v) {
+  const turnChanged = track(v);
+  $("earlier").classList.toggle("hidden", !(v.expanded && earlier.length));
+  $("expand").setAttribute("aria-pressed", v.expanded ? "true" : "false");
+  $("expand").textContent = v.expanded ? "Shrink" : "Expand";
+  if (turnChanged) requestAnimationFrame(() => { $("main").scrollTop = $("main").scrollHeight; });
   const alerts = v.alerts || [];
   const alertOnly = alerts.length > 0 && !ACTIVE.includes(v.state);
   renderAlerts(alerts);
@@ -198,16 +267,61 @@ function render(v) {
   $("pin").setAttribute("aria-pressed", v.pinned ? "true" : "false");
 }
 
+// Once you've closed it, the page calls nothing more: tearing the window down fires mouse and
+// focus events, and a call into Python then could hold the teardown up.
+let closing = false;
+function closeNow() { closing = true; window.pywebview.api.stop(true); }
+
 async function tick() {
-  if (!window.pywebview || !window.pywebview.api) return;
+  if (closing || !window.pywebview || !window.pywebview.api) return;
   try { render(await window.pywebview.api.view()); } catch (e) { /* the next poll retries */ }
 }
 
 window.addEventListener("pywebviewready", () => { tick(); setInterval(tick, 220); });
-// Esc and ✕ stop whatever voice is doing as well as closing the window.
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") window.pywebview.api.stop(true); });
-document.addEventListener("pointerdown", () => { window.pywebview && window.pywebview.api.focus(); });
-$("close").onclick = () => window.pywebview.api.stop(true);
+// Esc and ✕ stop whatever voice is doing as well as closing the window. With text in the
+// box, Esc clears it first.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (document.activeElement === $("prompt") && $("prompt").value) { $("prompt").value = ""; holdNow(); return; }
+  closeNow();
+});
+
+// Standing by: the window stays open while the mouse is over it or you're typing in it.
+let hovering = false;
+let held = null;
+function holdNow() {
+  const on = hovering || document.activeElement === $("prompt") || $("prompt").value.trim() !== "";
+  if (closing || on === held || !window.pywebview) return;
+  held = on;
+  window.pywebview.api.hold(on);
+}
+document.body.addEventListener("mouseenter", () => { hovering = true; holdNow(); });
+document.body.addEventListener("mouseleave", () => { hovering = false; holdNow(); });
+$("prompt").addEventListener("focus", holdNow);
+$("prompt").addEventListener("blur", holdNow);
+$("prompt").addEventListener("input", holdNow);
+$("askform").addEventListener("submit", async (e) => {
+  e.preventDefault();  // nothing is submitted anywhere: the text goes to Donna through the API
+  const text = $("prompt").value.trim();
+  if (!text) return;
+  const why = await window.pywebview.api.ask(text);
+  if (why) { $("note").textContent = why; return; }
+  $("prompt").value = "";
+  $("note").textContent = "Sent to Donna.";
+  holdNow();
+  tick();
+});
+$("talk").onclick = async () => {
+  const why = await window.pywebview.api.talk();
+  $("note").textContent = why || "Listening…";
+};
+$("expand").onclick = async () => {
+  const on = $("expand").getAttribute("aria-pressed") !== "true";
+  await window.pywebview.api.expand(on);
+  tick();
+};
+document.addEventListener("pointerdown", () => { !closing && window.pywebview && window.pywebview.api.focus(); });
+$("close").onclick = closeNow;
 $("stop").onclick = () => window.pywebview.api.stop(false).then(tick);
 $("pin").onclick = async () => {
   const on = $("pin").getAttribute("aria-pressed") !== "true";

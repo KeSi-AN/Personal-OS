@@ -91,6 +91,9 @@ class LLMConfig(_Section):
     embedding_dims: int = Field(512, ge=32, le=1024)
     timeout_s: float = Field(180, gt=0)
     keep_alive: str = "2m"
+    # The tray's "Keep model loaded on GPU": the chat model is loaded now and Ollama is told
+    # never to unload it (every call says so). Gaming mode still frees the GPU for a game.
+    keep_on_gpu: bool = False
     only_on_ac_power: bool = True
     min_user_idle_s: int = 120
     skip_when_fullscreen: bool = True

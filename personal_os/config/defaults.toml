@@ -110,6 +110,7 @@ gpu_layers = 99            # every layer on the GPU (-1 = let Ollama decide; it 
 embedding_dims = 512       # first N dims of the embedding, renormalised (the model supports this)
 timeout_s = 180
 keep_alive = "2m"          # free the VRAM this long after the last call
+keep_on_gpu = false        # the tray's "Keep model loaded on GPU": loaded now and never freed (gaming mode still frees it)
 # Background summaries and embeddings run only when all of these hold:
 only_on_ac_power = true
 min_user_idle_s = 120
@@ -179,12 +180,14 @@ piper_length_scale = 0.95  # under 1 speaks a little faster
 windows_voice = "Microsoft Zira Desktop"   # `personal-os voice voices` lists them; Hazel is UK English
 popup = true               # a small window shows each turn live: transcript, reply, state
 popup_position = "bottom-right"   # bottom-right | top-right | bottom-left | top-left
-popup_autoclose_s = 5.0    # closes this long after the reply is spoken, unless pinned
+popup_autoclose_s = 5.0    # at least this long after the reply is spoken (longer answers: time to read), unless pinned
 duck = 0.2                 # music and videos play this loud while she listens and talks (1 = off)
 followup_s = 10.0          # after a reply, listen this long for a follow-up (no wake word), as in JARVIS; 0 = off
 speechify_voice = "geffen_32"
 speechify_model = "simba-3.5"
 max_spoken_chars = 600
+speak_while_writing = true  # say an answer's first sentences while the model is still writing it
+beats = true               # a short "One sec." before a slow lookup, made once in your voice
 
 [briefings]
 enabled = false            # a morning briefing and an end-of-day summary, once a day each

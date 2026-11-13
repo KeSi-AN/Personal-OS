@@ -53,6 +53,8 @@ class TrayActions:
     voice_state: Callable[[], tuple[bool, bool]] = lambda: (False, False)  # voice on, wake on
     toggle_voice: Callable[[], None] = lambda: None
     toggle_wake: Callable[[], None] = lambda: None
+    gpu_state: Callable[[], bool] = lambda: False  # the model kept loaded on the GPU
+    toggle_gpu: Callable[[], None] = lambda: None
 
 
 class Tray:
@@ -98,6 +100,11 @@ class Tray:
                     ),
                     self._wrap(actions.toggle_wake),
                 ),
+                item(
+                    "Keep model loaded on GPU",
+                    self._wrap(actions.toggle_gpu),
+                    checked=lambda _i: self._gpu_on(),
+                ),
                 pystray.Menu.SEPARATOR,
                 item("Restart capture", self._wrap(actions.restart)),
                 item(
@@ -106,6 +113,12 @@ class Tray:
             ),
         )
         self._thread: threading.Thread | None = None
+
+    def _gpu_on(self) -> bool:
+        try:
+            return bool(self.actions.gpu_state())
+        except Exception:
+            return False
 
     def _is(self, state: str) -> bool:
         try:

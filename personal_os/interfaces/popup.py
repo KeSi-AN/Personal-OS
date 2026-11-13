@@ -45,8 +45,24 @@ def recently_launched(runtime_dir: Path, within_s: float = 8.0) -> bool:
 
 
 STATE = "popup.json"  # last launch, last error: for doctor
-WIDTH, HEIGHT = 360, 240
-BIG_WIDTH, BIG_HEIGHT = 480, 560  # when there's a full answer to read
+WIDTH, HEIGHT = 360, 290  # room for the box to type the next prompt in
+BIG_WIDTH, BIG_HEIGHT = 480, 600  # when there's a full answer to read, or you expanded it
+ASK_MAX = 2000  # characters in a typed prompt
+# The window's process must never outlive its use: a popup that's left holding the lock (seen:
+# hidden, never closed, after voice restarted) stops every later one from opening.
+EXIT_AFTER_CLOSE_S = 3.0  # closing hung (WebView2 teardown): leave anyway
+STALL_S = 90.0  # the page stopped asking for updates (a hidden window pauses its timers)
+
+
+def exit_reason(now: float, last_poll: float, closing_at: float | None) -> str | None:
+    """Why the popup's process should end now, whatever its window is doing (None: keep on)."""
+    if closing_at is not None and now - closing_at >= EXIT_AFTER_CLOSE_S:
+        return "closing took too long"
+    if now - last_poll >= STALL_S:
+        return "the window stopped updating"
+    return None
+
+
 LONG_REPLY = 240  # characters: longer replies get the big window too
 MARGIN = 20
 TASKBAR = 56  # logical pixels kept clear at the bottom of the screen
@@ -273,8 +289,10 @@ def demo_view(elapsed: float, *, loop: bool = False) -> View:
 
 
 class Api:
-    """What the page may call. Only harmless things: read the view, pin, close, stop what
-    voice is doing, open the dashboard through the usual one-time login link."""
+    """What the page may call. Only harmless things: read the view, pin, hold, expand, close,
+    stop what voice is doing, open the dashboard through the usual one-time login link, and
+    pass a prompt you typed (or a Talk press) to the voice process, which handles it like
+    anything you say: the same policy, confirmations and audit."""
 
     def __init__(self, cfg: Config, *, demo: bool, pinned: bool = False) -> None:
         self._cfg = cfg
@@ -285,25 +303,29 @@ class Api:
         self._window: Any = None
         self._seen = ""
         self._big = False
+        self._expanded: bool | None = None  # your Expand / Shrink; None: by the answer's size
         self.screen = (1280, 800)
         self._closing = False
+        self.closing_at: float | None = None
+        self.last_poll = time.monotonic()  # the page's last request for the view
 
     def view(self) -> dict[str, Any]:
         now = time.monotonic()
+        self.last_poll = now
         if self._demo:
             v = demo_view(now - self._started, loop=self._auto.pinned)
         else:
             v = read_view(self._cfg.runtime_dir, datetime.now(UTC))
         close, new_turn = self._auto.step(v, now)
         data = v.as_dict()
-        data.update(pinned=self._auto.pinned, new_turn=new_turn)
+        big = self._expanded if self._expanded is not None else wants_big(v)
+        data.update(pinned=self._auto.pinned, new_turn=new_turn, expanded=big)
         if v.reply and v.turn_id and not self._demo:
             key = reply_key(v.turn_id, v.reply)
             if key != self._seen:  # the page draws this reply now: tell voice it may speak
                 self._seen = key
                 with contextlib.suppress(OSError):
                     runtime.write_json_atomic(self._cfg.runtime_dir / SEEN, {"key": key})
-        big = wants_big(v)
         if big != self._big:
             self._big = big
             threading.Thread(target=self._resize, args=(big,), daemon=True).start()
@@ -348,6 +370,54 @@ class Api:
         self._auto.pin(bool(on))
         return self._auto.pinned
 
+    def hold(self, on: bool) -> bool:
+        """The mouse is over the window, or you're typing in it: it stays open. Ignored once
+        closing (tearing the window down fires mouse and focus events)."""
+        if self._closing:
+            return False
+        self._auto.hold(bool(on))
+        return self._auto.held
+
+    def expand(self, on: bool) -> bool:
+        """Expand to read the whole answer and the earlier exchanges, or shrink back. Your
+        choice holds for the rest of this window's life. Expanding also pins it (the Pin
+        button shows it), so it waits for you to finish reading; shrinking leaves Pin as is."""
+        self._expanded = bool(on)
+        if self._expanded:
+            self._auto.pin(True)
+        return self._expanded
+
+    def ask(self, text: str) -> str:
+        """A typed prompt for Donna: handled by the voice process as a turn of the same
+        conversation (same tools, confirmations and memory), shown here as it happens.
+        Returns "" when sent, or why not."""
+        text = " ".join(str(text or "").split())[:ASK_MAX]
+        if not text:
+            return ""
+        if self._demo:
+            return "This is the demo: nothing is sent."
+        from personal_os.voice.main import request_ask, status
+
+        if not status(self._cfg.runtime_dir).get("running"):
+            return "Voice isn't running, so Donna can't take this here."
+        try:
+            request_ask(self._cfg.runtime_dir, text=text)
+        except OSError:
+            return "Couldn't pass that on. Try again."
+        return ""
+
+    def talk(self) -> str:
+        """Start listening, as the push-to-talk key does."""
+        if self._demo:
+            return ""
+        from personal_os.voice.main import request_ask
+
+        try:
+            request_ask(self._cfg.runtime_dir, talk=True)
+        except OSError:
+            return "Couldn't start listening. Try the hotkey."
+        return ""
+
     def stop(self, close: bool = False) -> bool:
         """Stop what voice is doing now: listening, thinking or speaking (Stop, Esc, ✕).
         Nothing is said or done after it; `close` also closes the window."""
@@ -364,6 +434,7 @@ class Api:
         if self._closing or self._window is None:
             return
         self._closing = True
+        self.closing_at = time.monotonic()  # the watchdog ends the process if this hangs
         # A moment later, so the page's call returns before the window goes away.
         timer = threading.Timer(0.25, self._window.destroy)
         timer.daemon = True
@@ -458,8 +529,24 @@ def _run(cfg: Config, *, demo: bool, pinned: bool = False) -> int:
     )
     api._window = window
     api.screen = (sw, sh)
+    threading.Thread(target=_watchdog, args=(cfg, api), name="pos-popup-watch", daemon=True).start()
     webview.start(gui="edgechromium", private_mode=True, debug=False)
     return 0
+
+
+def _watchdog(cfg: Config, api: Api) -> None:
+    """Ends the process when the window can't: closing hung, or the page stopped updating.
+    The lock is the operating system's, so it goes with the process."""
+    import os
+
+    while True:
+        time.sleep(1.0)
+        why = exit_reason(time.monotonic(), api.last_poll, api.closing_at)
+        if why is None:
+            continue
+        if why != "closing took too long":
+            record_error(cfg.runtime_dir, f"closed: {why}")
+        os._exit(0)
 
 
 if __name__ == "__main__":

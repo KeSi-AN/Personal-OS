@@ -74,6 +74,7 @@ class Voice:
         self.turn_trigger = ""  # what started the current turn: hotkey, wake or barge
         self.asked: dict[str, str] = {}  # a "Did you mean ...?" and its answer, for the log
         self.triggers: queue.Queue[str] = queue.Queue()
+        self.typed: queue.Queue[str] = queue.Queue()  # prompts typed in the popup
         self.previous: Any = None
         self.wake: Any = None  # the wake word (Vosk, as in JARVIS: voice/wake.py)
         self.stop = threading.Event()
@@ -207,12 +208,31 @@ class Voice:
         self.interrupt.set()
 
     def watch_stop(self) -> None:
-        """The popup's Stop button and Esc: a request file in the runtime folder."""
+        """The popup's Stop button and Esc, its typed prompts and its Talk button: request
+        files in the runtime folder."""
         while not self.stop.is_set():
             if take_stop(self.cfg.runtime_dir) and self.state in ACTIVE:
                 _log.info("stopped from the popup")
                 self.cancel_turn()
+            asked = take_ask(self.cfg.runtime_dir)
+            if asked is not None:
+                self.from_popup(asked)
             self.stop.wait(0.15)
+
+    def from_popup(self, asked: dict[str, Any]) -> None:
+        """A typed prompt replaces whatever is going on (a follow-up listen, a reply being
+        said), as a press does; only the newest one waits. Talk is the push-to-talk key."""
+        if "text" not in asked:
+            self.pressed("hotkey")
+            return
+        with contextlib.suppress(queue.Empty):
+            while True:
+                self.typed.get_nowait()  # an older typed prompt not yet taken: superseded
+        self.typed.put(asked["text"])
+        if self.state in ACTIVE:
+            self.interrupt.set()
+        if self.triggers.empty():
+            self.triggers.put("typed")
 
     def sync_wake(self) -> None:
         """Start or stop the wake word (Vosk, as in JARVIS) to match the (re-read) config."""
@@ -237,9 +257,16 @@ class Voice:
             self.wake.close()
             self.wake = None
 
-    def listen(self, preroll: list[Any] | None = None, start_timeout_s: float | None = None) -> str:
+    def listen(
+        self,
+        preroll: list[Any] | None = None,
+        start_timeout_s: float | None = None,
+        *,
+        wake: bool = False,
+    ) -> str:
         """Record one turn and transcribe it. If what was said is clearly unfinished ("open
-        ..."), keep listening a moment for the rest instead of acting on half a sentence."""
+        ..."), keep listening a moment for the rest instead of acting on half a sentence.
+        `wake`: the recording starts with the wake word, so Whisper is told the name."""
         import numpy as np
 
         from personal_os.actions.reminder_parse import needs_more
@@ -268,27 +295,29 @@ class Voice:
             if audio is None:
                 self.last_audio = None
                 return ""
-            text = self.transcribe(audio)
+            text = self.transcribe(audio, wake=wake)
             # Cut off ("open the-"), or a reminder whose message hasn't come yet ("remind me
             # in a minute ... to stretch"): a pause isn't the end, so listen a moment more.
             if incomplete(text) or needs_more(text):
                 more = record(None, 2.0)
                 if more is not None:
                     audio = np.concatenate([audio, more])
-                    text = self.transcribe(audio)
+                    text = self.transcribe(audio, wake=wake)
         finally:
             self.recording.clear()
         self.last_audio = audio
         return text
 
-    def transcribe(self, audio: Any, *, accurate: bool = False) -> str:
+    def transcribe(self, audio: Any, *, accurate: bool = False, wake: bool = False) -> str:
+        """`wake`: the audio starts with the wake word. Whisper is then given her name as a
+        prompt ("Hey Donna,"), so it writes "Donna" rather than "Don't know"."""
         model = self.stt if accurate else self.stt_fast
+        name = f"Hey {self.cfg.agent.name}," if wake else ""
         if not self.cfg.voice.stt_hints:  # as in JARVIS: no prompt, just English
-            return model.transcribe(audio)
+            return model.transcribe(audio, vocabulary=name) if name else model.transcribe(audio)
         names = self.index.current().names_for_hints(40)
-        return model.transcribe(
-            audio, vocabulary=self.vocabulary(names), hotwords=", ".join(names[:25])
-        )
+        vocabulary = f"{name} {self.vocabulary(names)}".strip()
+        return model.transcribe(audio, vocabulary=vocabulary, hotwords=", ".join(names[:25]))
 
     def accurate_text(self) -> str | None:
         """The last utterance as the accurate model hears it (once per utterance), or None
@@ -808,7 +837,9 @@ class Voice:
                     self.write_status("ready")
                 continue
             while not self.triggers.empty():  # presses made while busy count once
-                self.triggers.get_nowait()
+                trigger = "typed" if self.triggers.get_nowait() == "typed" else trigger
+            if not self.typed.empty():
+                trigger = "typed"  # a typed prompt is never lost behind a press
             self.converse(trigger)
         self.shutdown()
 
@@ -852,7 +883,14 @@ class Voice:
             self._converse(trigger)
 
     def _converse(self, trigger: str) -> None:
-        more = self.respond(trigger)
+        typed = trigger == "typed"
+        if typed:
+            try:
+                more = self.respond("typed", text=self.typed.get_nowait())
+            except queue.Empty:
+                return
+        else:
+            more = self.respond(trigger)
         for _ in range(MAX_FOLLOWUPS):
             if self.stop.is_set() or not self.triggers.empty():
                 return
@@ -861,8 +899,8 @@ class Voice:
                 more = self.respond("followup", text=text)
                 continue
             followups = modes.effects(self.cfg.runtime_dir).followup
-            if not more or self.cfg.voice.followup_s <= 0 or not followups:
-                return
+            if typed or not more or self.cfg.voice.followup_s <= 0 or not followups:
+                return  # typed: the next prompt is typed too, so the mic isn't opened
             more = self.respond("followup")
 
     def launch_popup(self) -> None:
@@ -932,7 +970,7 @@ class Voice:
                 if trigger != "barge":  # when you interrupted, you're already talking
                     self.speaker.earcon("listen")  # the canceller keeps it out of the mic
                 carry = trigger in ("barge", "wake") and bool(preroll)
-                text = self.listen(preroll) if carry else self.listen()
+                text = self.listen(preroll, wake=trigger == "wake") if carry else self.listen()
                 if trigger == "barge" and text and own_words(text, self.said_last):
                     # Her own voice, leaking past the echo canceller ("Did you mean?" while
                     # she asked "Did you mean vscode?"): not you, so nothing is done.
@@ -985,7 +1023,8 @@ class Voice:
             self.beat_said = ""
             self.turn_t0 = t0
             self.last_trace = []
-            reply = None if given else self.fast(text)
+            # A typed prompt gets the quick commands too ("open brave"), as speech does.
+            reply = None if given and trigger != "typed" else self.fast(text)
             if self.asked:
                 entry["asked"] = self.asked
             if reply is not None:
@@ -1076,13 +1115,20 @@ class Voice:
         return spoke
 
 
-_WAKE_ONLY = re.compile(
-    r"^\W*(?:(?:hey|hi|hello|ok|okay|oh)\W+)?(?:donna|dona|donnah|donah|dawna|danna)\W*", re.I
+# "Donna" as Whisper writes it. Seen on 13 Nov: the wake word engine heard "donna" every time,
+# and Whisper wrote "Don't know", "Done now", "Done up", so every wake was thrown away as "no
+# wake word in it". Multi-word sound-alikes count anywhere near the start; a bare "done" only
+# as the very first word (that's where the wake word is).
+_DONNA = (
+    r"(?:donna|dona|donnah|donah|dawna|danna|donner|doner|donor|"
+    r"don'?t\s+know|dunno|done\s+(?:now|up|a)|don\s+a)"
 )
+_WAKE_ONLY = re.compile(
+    rf"^\W*(?:(?:hey|hi|hello|ok|okay|oh)\W+)?(?:{_DONNA}|done|dana|i'?m\s+done)\b\W*", re.I
+)  # "I'm done": "Hi Donna" run together (seen 13 Nov), only as the very first words
 # The wake word within the first few words: "so yeah, hey Donna, open Brave".
 _WAKE_NEAR_START = re.compile(
-    r"^(?:\W*[\w']+){0,6}?\W*(?:(?:hey|hi|hello|ok|okay|oh)\W+)?"
-    r"(?:donna|dona|donnah|donah|dawna|danna)\b\W*",
+    rf"^(?:\W*[\w']+){{0,6}}?\W*(?:(?:hey|hi|hello|ok|okay|oh)\W+)?{_DONNA}\b\W*",
     re.I,
 )
 # Said as the whole request: stop everything and close (media has "pause the music").
@@ -1118,6 +1164,8 @@ def mentions_wake(text: str, words: list[str]) -> bool:
     from rapidfuzz import fuzz
 
     wanted = [w.strip().lower() for w in words if w.strip()] or ["donna"]
+    if "donna" in wanted and (_WAKE_ONLY.match(text) or _WAKE_NEAR_START.match(text)):
+        return True  # "Don't know, open Brave": Whisper's spelling of it, where it's said
     for token in re.findall(r"[a-z']+", text.lower()):
         if len(token) >= 4 and any(fuzz.ratio(token, w) >= 65 for w in wanted):
             return True
@@ -1313,6 +1361,40 @@ def take_stop(runtime_dir: Path, max_age_s: float = 3.0) -> bool:
         return time.time() - float(data.get("at", 0)) <= max_age_s
     except (TypeError, ValueError):
         return False
+
+
+ASK_FILE = "voice_ask.json"
+
+
+def request_ask(runtime_dir: Path, *, text: str = "", talk: bool = False) -> None:
+    """From the popup: a prompt you typed, or Talk (start listening, as the hotkey does)."""
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    data: dict[str, Any] = {"at": time.time()}
+    if text:
+        data["text"] = text
+    if talk:
+        data["talk"] = True
+    runtime.write_json_atomic(runtime_dir / ASK_FILE, data)
+
+
+def take_ask(runtime_dir: Path, max_age_s: float = 10.0) -> dict[str, Any] | None:
+    """A fresh prompt or Talk press from the popup, removed once read. An old one (voice was
+    restarting) is dropped rather than acted on late."""
+    path = runtime_dir / ASK_FILE
+    if not path.exists():
+        return None
+    data = runtime.read_json(path) or {}
+    path.unlink(missing_ok=True)
+    try:
+        fresh = time.time() - float(data.get("at", 0)) <= max_age_s
+    except (TypeError, ValueError):
+        return None
+    if not fresh:
+        return None
+    text = " ".join(str(data.get("text") or "").split())
+    if text:
+        return {"text": text}
+    return {"talk": True} if data.get("talk") else None
 
 
 def queue_speech(runtime_dir: Path, text: str) -> bool:
