@@ -76,6 +76,16 @@ Donna lives at the top of the screen, like the Mac's Dynamic Island. Nothing is 
 
 The cards are read from your history only while you look at them; the pill shows nothing from it. `voice.popup_style = "corner"` brings back the corner popup below, opened only during a turn. Set `POS_ISLAND_DEBUG=1` before running `python -m personal_os.interfaces.island` to see its decisions.
 
+## Taking a break
+
+Say **"Donna, take 10"**, **"take five"**, **"rest up for 20 minutes"**, **"take a breather"** or **"be quiet for half an hour"**, and Donna stops listening for that long: the wake word is off and she doesn't listen for a follow-up after replies. "Take a break" with no time is 10 minutes, and the longest rest is 4 hours. On their own, "be quiet" and "stop listening" still just stop her talking.
+
+To wake her early, press the **hotkey** or **Talk** on the island (it says **Wake & talk** while she rests): she's awake again and listening at once. When the time is up she's back by herself. Reminders still pop up and are said while she rests. The pill shows **Resting · 8 min** with a grey dot.
+
+## The island after you use it
+
+Once you've clicked, typed or scrolled in the island, it closes **5 seconds** after you're done (your last click or keystroke, or the pointer leaving, whichever is later), unless the pointer is still on it, it's pinned, or she's listening, thinking or speaking. Before, using it could keep it open for a whole reply's reading time.
+
 ## Your music
 
 Donna plays, pauses and skips **your music source only**, set in the `[music]` section of the config or on the dashboard's Settings page (**Music from**). A video playing in another tab, or a lecture, is left alone.

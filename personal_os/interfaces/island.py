@@ -399,6 +399,12 @@ class IslandApi(popup.Api):
         self._island.poke()
         return True
 
+    def used(self) -> bool:
+        """You clicked, typed or scrolled in it: it closes 5 s after you're done (ADR-085)."""
+        self._island.used_at = time.monotonic()
+        self._island.poke()
+        return True
+
     def cards(self, name: str) -> dict[str, Any]:
         """The data for a page while it's shown (Donna's comes from the voice status)."""
         from personal_os.interfaces import island_data
@@ -520,6 +526,8 @@ class Island:
         self.target = L.Target("hidden", "today", "start")  # nothing shown until wanted
         self.ghost = False  # a pill over an app: see-through, clicks go to the app (ADR-083)
         self.pointer_on = False
+        self.used_at: float | None = None  # you last clicked, typed or scrolled in it (open)
+        self.rest_min = 0  # "take 10": minutes of rest left (voice/rest.py, ADR-085)
         self._pushed = ""
         self._poke = threading.Event()
 
@@ -650,6 +658,9 @@ class Island:
                 self.monitor = mon
                 self._place(jump=True)
         self.fullscreen = fullscreen_on(self.monitor[0], self.monitor[1], self.hwnd)
+        from personal_os.voice import rest
+
+        self.rest_min = rest.left_min(self.cfg.runtime_dir)  # "Resting · 8 min" on the pill
         if self.cfg.music.source == "any":  # any app making sound, as before
             voice_pid = int(self.view.get("pid") or 0) if isinstance(self.view, dict) else 0
             self.music = music_playing({os.getpid(), voice_pid})
@@ -671,6 +682,10 @@ class Island:
 
     def inputs(self, now: float) -> L.Inputs:
         v = self.view
+        used_s = None
+        if self.used_at is not None and self.hover_since is None:
+            # From the later of your last use and the pointer leaving.
+            used_s = now - max(self.used_at, self.left_at or 0.0)
         return L.Inputs(
             turn_active=self.turn_up,
             alerts=len(v.get("alerts") or []),
@@ -685,11 +700,21 @@ class Island:
             voice_running=bool(v.get("voice_running")),
             idle_pill=self.cfg.voice.island_idle == "pill",
             ghost=self.ghost,
+            used_s=used_s,
+            voice_busy=v.get("state") in ACTIVE,
         )
 
     def _decide(self, now: float) -> None:
         i = self.inputs(now)
+        if L.done_with(i):
+            # Used and left: close now, rather than wait out a turn's reading time, a page's
+            # 14 s or a box that still has the keyboard.
+            self.collapse()
+            self.used_at, self.typing, self.opened_by = None, False, None
+            i = self.inputs(now)
         target, by = L.decide(i, self.page, self.opened_by)
+        if target.mode != "open":
+            self.used_at = None  # closed: the next time it opens starts fresh
         if target.mode != "open" and self.request:
             self.request = None  # its time is up
         opening = target.mode == "open" and self.target.mode != "open"
@@ -733,7 +758,7 @@ class Island:
     def _push(self, i: L.Inputs) -> None:
         state = {
             "mode": self.target.mode, "page": self.page, "view": self.view,
-            "music": i.music, "opened_by": self.opened_by,
+            "music": i.music, "opened_by": self.opened_by, "rest": self.rest_min,
         }  # fmt: skip
         data = json.dumps(state, ensure_ascii=False, default=str)
         if data == self._pushed or self.window is None:

@@ -38,6 +38,7 @@ body.gone #pill { opacity:0; transition:opacity .08s ease; }  /* sliding up out 
 .state.think { background:var(--accent); animation:breathe .8s ease-in-out infinite; }
 .state.speak { background:var(--accent); }
 .state.alert { background:var(--warn); animation:breathe 1.4s ease-in-out infinite; }
+.state.rest { background:#6b7280; box-shadow:none; }  /* resting: not listening */
 @keyframes breathe { 50% { transform:scale(1.5); opacity:.6; } }
 .bars { display:flex; gap:2px; align-items:center; height:14px; }
 .bars i { width:3px; height:14px; border-radius:2px; background:var(--ok);
@@ -254,9 +255,11 @@ function stateClass(v) {
 
 function renderPill() {
   const v = S.view || {};
-  $("pstate").className = "state " + stateClass(v);
+  const resting = S.rest > 0 && !ACTIVE.includes(v.state);
+  $("pstate").className = "state " + (resting ? "rest" : stateClass(v));
   const alerts = v.alerts || [];
-  const what = alerts.length ? alerts[alerts.length - 1].text : (S.music ? "Playing" : "");
+  const what = alerts.length ? alerts[alerts.length - 1].text
+    : resting ? `Resting · ${S.rest} min` : (S.music ? "Playing" : "");
   show("pwhat", what);
   $("pbars").classList.toggle("hidden", !S.music || alerts.length > 0);
   document.querySelector("#pill .sep").classList.toggle("hidden", !what && !S.music);
@@ -540,8 +543,12 @@ function renderDonna(v) {
   renderAlerts(alerts);
   $("vstate").className = "state " + stateClass(v);
   const followup = v.trigger === "followup";
+  const resting = S.rest > 0 && !ACTIVE.includes(v.state);
   $("vlabel").textContent = alertOnly ? alerts[alerts.length - 1].title
-    : followup && v.state === "listening" && !v.question ? "Anything else?" : (LABELS[v.state] || "Ready");
+    : followup && v.state === "listening" && !v.question ? "Anything else?"
+    : resting ? `Resting · ${S.rest} min left` : (LABELS[v.state] || "Ready");
+  if (resting && !alertOnly) $("vstate").className = "state rest";
+  $("talk").textContent = resting ? "Wake & talk" : "Talk";
   $("trigger").textContent = v.trigger && !followup && !alertOnly ? "via " + v.trigger : "";
   if (alertOnly) v = Object.assign({}, v, { heard: "", reply: "", question: "", error: "" });
   const notices = [];
@@ -618,6 +625,18 @@ $("note-form").addEventListener("submit", (e) => {
   addFrom("note", $("note-text"), $("note-why"), "notes", $("note-project").value);
 });
 document.addEventListener("pointerdown", () => { if (S.mode === "open" && api()) api().focus(); });
+// Using it (a click, a key, typing, a scroll or swipe) is told to Python, which closes the
+// island 5 s after you're done with it unless the pointer is still on it. At most 3 a second.
+let usedAt = 0;
+function used() {
+  const now = performance.now();
+  if (S.mode !== "open" || !api() || now - usedAt < 300) return;
+  usedAt = now;
+  api().used();
+}
+for (const ev of ["pointerdown", "keydown", "input", "wheel"]) {
+  document.addEventListener(ev, used, { passive: true, capture: true });
+}
 $("askform").addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = $("prompt").value.trim();

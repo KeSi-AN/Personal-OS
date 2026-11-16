@@ -42,6 +42,9 @@ GHOST_ALPHA = 105  # see-through enough to read the tab under it
 NEAR_ALPHA = 40  # the pointer is on it: nearly gone, so you see what you're clicking
 EDGE_OPEN_S = 0.45  # held against the top edge on it this long opens it
 EDGE_PX = 3  # "against the top edge": within this many logical pixels of it
+# Once you've used it (a click, a key, a scroll), it closes this long after you last did, or
+# after the pointer left, whichever is later, unless the pointer is on it (ADR-085).
+USED_CLOSE_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,19 @@ class Inputs:
     # A ghost pill (over an app): hovered_s counts only time held against the top edge,
     # and opening takes EDGE_OPEN_S of it.
     ghost: bool = False
+    # Since you last used the open island (or the pointer left, if later); None if unused.
+    used_s: float | None = None
+    voice_busy: bool = False  # listening, thinking or speaking right now
+
+
+def done_with(i: Inputs) -> bool:
+    """You used it and moved on: close it now, whatever opened it (a turn being read, a page
+    you asked for, a box you typed in). Never while the pointer is on it, it's pinned, or
+    she's listening, thinking or speaking."""
+    return (
+        i.used_s is not None and i.used_s >= USED_CLOSE_S and i.hovered_s is None
+        and not i.pinned and not i.voice_busy
+    )  # fmt: skip
 
 
 @dataclass(frozen=True)

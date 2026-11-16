@@ -86,6 +86,7 @@ class Voice:
         # A request to run next, without listening: "no, at 5 pm instead" or "I wanted X".
         self.next_request: str | None = None
         self.announced = ""  # said before an action ran: not said again after
+        self.wake_dirty = False  # a press ended a rest: restart the wake word after the turn
         self.streamed = ""  # said while the model was still writing the reply
         self.first_said_s: float | None = None  # when that began, from the turn's start
         self.turn_t0 = time.monotonic()  # when the current turn started
@@ -173,6 +174,14 @@ class Voice:
         At most one press waits, so presses never pile up and fire later."""
         if self.state == "listening":
             return
+        if trigger == "hotkey":  # the hotkey or the island's Talk button: awake again
+            from personal_os.voice import rest
+
+            if rest.end_rest(self.cfg.runtime_dir):
+                _log.info("rest ended by a press")
+                self.wake_dirty = True  # the wake word comes back after this turn
+        elif self.resting():
+            return  # the wake word heard while resting (it was just stopping): ignored
         if self.state in ("thinking", "speaking"):
             self.interrupt.set()
         if self.triggers.empty():
@@ -266,7 +275,8 @@ class Voice:
         v = self.cfg.voice
         mode_wake = modes.effects(self.cfg.runtime_dir).wake_word  # gaming: off; chill: on
         enabled = v.wake_word_enabled if mode_wake is None else mode_wake
-        want = enabled and wake.available(self.cfg.data_dir)
+        # Resting ("take 10"): nothing she hears starts a turn, the wake word included.
+        want = enabled and wake.available(self.cfg.data_dir) and not self.resting()
         if want and self.wake is None:
             try:
                 self.wake = wake.VoskWake(
@@ -469,10 +479,28 @@ class Voice:
         except Exception as exc:
             _log.warning("island not started", extra={"error": type(exc).__name__})
 
+    def take_rest(self, minutes: int) -> str:
+        """Listening on hold for `minutes`: the wake word stops and no follow-up is listened
+        for, until the hotkey or the island's Talk button (or the time running out)."""
+        from personal_os.voice import rest
+
+        rest.start(self.cfg.runtime_dir, minutes)
+        self.sync_wake()
+        _log.info("resting", extra={"fields": {"minutes": minutes}})
+        return rest.reply(minutes)
+
+    def resting(self) -> bool:
+        from personal_os.voice import rest
+
+        return rest.resting(self.cfg.runtime_dir)
+
     def fast(self, text: str) -> str | None:
         """A command the router can run without the LLM; the reply to say, or None."""
-        from personal_os.voice import router
+        from personal_os.voice import rest, router
 
+        minutes = rest.parse(text)
+        if minutes is not None:  # "take 10", "rest up for 20 minutes" (ADR-085)
+            return self.take_rest(minutes)
         shown = self.show_page(text)
         if shown is not None:
             return shown
@@ -952,6 +980,9 @@ class Voice:
             if not self.typed.empty():
                 trigger = "typed"  # a typed prompt is never lost behind a press
             self.converse(trigger)
+            if self.wake_dirty or self.resting():  # a rest ended or began this turn
+                self.wake_dirty = False
+                self.sync_wake()
         self.shutdown()
 
     def restart_audio(self) -> None:
@@ -1012,6 +1043,8 @@ class Voice:
             followups = modes.effects(self.cfg.runtime_dir).followup
             if typed or not more or self.cfg.voice.followup_s <= 0 or not followups:
                 return  # typed: the next prompt is typed too, so the mic isn't opened
+            if self.resting():
+                return  # "take 10": no listening after her reply either
             more = self.respond("followup")
 
     def launch_popup(self) -> None:
