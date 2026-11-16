@@ -236,6 +236,20 @@ class AgentConfig(_Section):
     user_name: str = ""  # how she addresses you; empty: she doesn't use a name
 
 
+class MusicConfig(_Section):
+    """Where your music comes from (actions/music.py, ADR-084). "Play music", pause, next, a
+    song by name, what's playing and the island's Music page use only this source; "any" is
+    the old way: whatever is playing in the browser."""
+
+    source: Literal["youtube_music", "spotify", "youtube", "any"] = "youtube_music"
+    # auto: its installed app if there is one (YouTube Music installed from the browser,
+    # Spotify's app), else the website | app: always the app | browser: always the website
+    open_in: Literal["auto", "app", "browser"] = "auto"
+    # "Play music" with nothing open plays this search ("lofi", an artist); empty: it opens
+    # the source and asks what to play.
+    default_query: str = Field("", max_length=200)
+
+
 class Config(_Section):
     data_dir: Path
     watched_roots: list[Path] = []
@@ -250,6 +264,7 @@ class Config(_Section):
     agent: AgentConfig = AgentConfig()
     modes: ModesConfig = ModesConfig()
     brief: BriefConfig = BriefConfig()
+    music: MusicConfig = MusicConfig()
 
     @property
     def db_path(self) -> Path:

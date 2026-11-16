@@ -289,7 +289,8 @@ def test_the_island_api_writes_and_reads_notes(home: Path, config: Config):
 
 
 def test_music_without_the_browser_says_so(tmp_path: Path):
-    m = island_data.music(tmp_path, "brave")
+    """With the music source "any": whatever plays in the browser, which needs the extension."""
+    m = island_data.browser_music(tmp_path, "brave")
     assert not m["available"] and "extension" in m["why"]
 
 

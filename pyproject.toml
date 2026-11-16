@@ -30,6 +30,9 @@ dependencies = [
     "pyaudiowpatch>=0.2.12.9",
     "vosk>=0.3.45",
     "scipy>=1.18.1",
+    "winrt-runtime>=4.1",
+    "winrt-windows-media-control>=3",
+    "winrt-windows-foundation>=3",
 ]
 
 [project.scripts]

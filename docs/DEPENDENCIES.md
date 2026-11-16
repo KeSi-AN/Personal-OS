@@ -30,6 +30,7 @@ Transitive packages pulled in by the ones below (for example `rich`, `click` and
 | `rapidfuzz` | 8 | Fuzzy matching of spoken names against apps, folders and files. |
 | `piper-tts` | 8 | Local neural voice, streamed sentence by sentence. |
 | `pycaw` | 8 | Windows' audio API: exact volume levels and per-app sound meters. |
+| `winrt-runtime`, `winrt-Windows.Media.Control`, `winrt-Windows.Foundation` | 11 | Windows' media sessions (the players the volume flyout shows): tells Spotify's app or an installed web app such as YouTube Music apart from a browser tab, and plays, pauses or skips only that one (ADR-084). Official Microsoft projections through pywinrt; nothing is sent anywhere. |
 | `scipy` | 7 | Resampling audio (loopback 48 kHz to 16 kHz). |
 | `keyring` | 7 | Windows Credential Manager for the Google refresh token and the Speechify key. |
 | `mcp` | 7 | The official MCP SDK for the read-only `personal-os mcp` server. |

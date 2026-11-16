@@ -76,39 +76,41 @@ class BrowserOpen(Tool):
 
 class PlayArgs(Args):
     query: str = Field(min_length=1, max_length=200, description="song, artist or video")
-    site: Literal["youtube music", "youtube"] = "youtube music"
+    site: Literal["music", "youtube music", "youtube", "spotify"] = Field(
+        "music", description="music: the user's music app; youtube: a video"
+    )
 
 
 class PlayMedia(Tool):
     name = "play_media"
     summary = (
-        "play a specific song or video by name: finds it on YouTube Music (music) or YouTube "
-        "(videos) in the browser and starts it"
+        "play a specific song or video by name: a song from the user's music app (site music, "
+        "the default), or a video from YouTube (site youtube)"
     )
     tier = Tier.LOW
     network = True
     args_model = PlayArgs
 
+    def _source(self, args: PlayArgs, ctx: ToolContext) -> Any:
+        from personal_os.actions import music
+
+        return music.named(args.site, ctx.config.music.source)
+
     def preview(self, args: PlayArgs, ctx: ToolContext) -> str:
-        return f'play "{args.query}" on {args.site}'
+        return f'play "{args.query}" on {self._source(args, ctx).name}'
 
     def run(self, args: PlayArgs, ctx: ToolContext) -> Result:
-        site = recipes.find(args.site)
-        assert site is not None and site.first
-        from urllib.parse import urlparse
+        """From the source you chose (actions/music.py): in its installed web app when that's
+        where you listen, else its website; Spotify opens its search (ADR-084)."""
+        from personal_os.actions import music
+        from personal_os.actions.tools.music import backend
 
-        data = _send(
-            ctx,
-            "open_first",
-            {
-                "url": recipes.search_url(site, args.query),
-                "selector": site.first,
-                "reuse": urlparse(site.search).netloc,  # play in the tab you already have
-            },
-        )
-        title = str((data or {}).get("title") or args.query).replace(" - YouTube Music", "")
-        title = title.replace(" - YouTube", "")
-        return Result(f'Playing "{title}" on {args.site}', data=data)
+        try:
+            reply = music.play(self._source(args, ctx), backend(ctx), args.query,
+                               open_in=ctx.config.music.open_in)  # fmt: skip
+        except (control.BrowserUnavailable, control.BrowserError) as exc:
+            raise ActionError(str(exc)) from None
+        return Result(reply.text)
 
 
 # What "which" means when it names no tab: the one in front ("close this tab", "the tab").
@@ -208,8 +210,8 @@ class MediaArgs(Args):
 class BrowserMedia(Tool):
     name = "browser_media"
     summary = (
-        "control the song or video already playing in the browser: play, pause, next, previous, "
-        "seek (it can't choose a song: use play_media for that)"
+        "control a video already playing in the browser: play, pause, next, previous, seek "
+        "(the user's music is the music tool; a song by name is play_media)"
     )
     tier = Tier.LOW
     args_model = MediaArgs
@@ -230,14 +232,23 @@ class NoArgs(Args):
 
 class WhatsPlaying(Tool):
     name = "whats_playing"
-    summary = "the song or video playing in the browser right now (title, artist, position)"
+    summary = "the song playing now in the user's music app (title, artist, playing or paused)"
     tier = Tier.READ
     args_model = NoArgs
 
     def preview(self, args: NoArgs, ctx: ToolContext) -> str:
-        return "look at what's playing in the browser"
+        return "look at what's playing"
 
     def run(self, args: NoArgs, ctx: ToolContext) -> Result:
+        from personal_os.actions import music
+        from personal_os.actions.tools.music import backend
+
+        src = music.chosen(ctx.config.music.source)
+        if src is not None:  # your music source only (ADR-084)
+            now = music.now(src, backend(ctx))
+            data = {"source": now.source, "open": now.open, "title": now.title,
+                    "artist": now.artist, "playing": now.playing, "where": now.where}  # fmt: skip
+            return Result(now.said(), data=data, captured=True)
         s = _send(ctx, "media", {"action": "status"}) or {}
         what = " by ".join(x for x in (s.get("title"), s.get("artist")) if x) or "nothing"
         state = "playing" if s.get("playing") else "paused"

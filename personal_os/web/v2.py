@@ -606,7 +606,24 @@ SETTINGS = {
         "number",
     ),
     "voice.enabled": ("Voice", "Push-to-talk and spoken replies", "bool"),
+    "music.source": (
+        "Music from",
+        "“Play music”, pause, next and songs by name use only this (ADR-084)",
+        "choice",
+    ),
+    "music.open_in": ("Open music in", "Where to start it when nothing is open", "choice"),
 }
+# The values a "choice" setting can take, as shown.
+CHOICES = {
+    "music.source": [
+        ("youtube_music", "YouTube Music"), ("spotify", "Spotify"), ("youtube", "YouTube"),
+        ("any", "Whatever plays in the browser"),
+    ],
+    "music.open_in": [
+        ("auto", "Its app if installed, else the website"), ("app", "The app"),
+        ("browser", "The website"),
+    ],
+}  # fmt: skip
 
 
 def settings_page(state: Any, conn: sqlite3.Connection) -> str:
@@ -614,17 +631,26 @@ def settings_page(state: Any, conn: sqlite3.Connection) -> str:
     from personal_os.config.loader import load_config
 
     cfg = load_config(state.home) if state.home else state.config
-    rows = []
+    rows: list[str] = []  # voice
+    music_rows: list[str] = []
     for key, (label, hint, kind) in SETTINGS.items():
         section, name = key.split(".")
         value = getattr(getattr(cfg, section), name)
         if kind == "bool":
             ctrl = (f"<input type='checkbox' style='width:auto' {'checked' if value else ''} "
                     f"onchange=\"act('/api/v2/setting', {{key:'{key}', value:this.checked}}, false)\">")  # fmt: skip
+        elif kind == "choice":
+            opts = "".join(
+                f"<option value='{e(v)}'{' selected' if v == value else ''}>{e(shown)}</option>"
+                for v, shown in CHOICES[key]
+            )
+            ctrl = (f"<select style='width:auto;max-width:240px' "
+                    f"onchange=\"act('/api/v2/setting', {{key:'{key}', value:this.value}}, false)\">"
+                    f"{opts}</select>")  # fmt: skip
         else:
             ctrl = (f"<input type='number' style='width:90px' value='{e(value)}' "
                     f"onchange=\"act('/api/v2/setting', {{key:'{key}', value:Number(this.value)}}, false)\">")  # fmt: skip
-        rows.append(
+        (music_rows if section == "music" else rows).append(
             f"<div class='row'><div class='grow'><b>{e(label)}</b><div class='small muted'>{e(hint)}</div></div>{ctrl}</div>"
         )
     browsers = control.connected(state.config.runtime_dir)
@@ -642,6 +668,7 @@ def settings_page(state: Any, conn: sqlite3.Connection) -> str:
     body = (
         "<h1>Settings</h1><p class='sub'>Changes apply within a few seconds.</p><div class='grid'>"
         f"<div class='card'><h2>Voice</h2>{''.join(rows)}</div>"
+        f"<div class='card'><h2>Music</h2>{''.join(music_rows)}</div>"
         f"<div class='card'><h2>Browser</h2><div>{e(', '.join(browsers) + ' connected' if browsers else 'No browser connected')}</div>"
         "<div class='small muted'>Donna can open, play, read and (with your yes) click in it.</div></div>"
         f"<div class='card wide'><h2>Privacy, memory and more</h2>{classic}</div></div>"
@@ -682,7 +709,7 @@ class ModeBody(BaseModel):
 
 class SettingBody(BaseModel):
     key: str
-    value: bool | float | int
+    value: bool | float | int | str
 
 
 def register(
@@ -852,7 +879,13 @@ def register(
         if body.key not in SETTINGS:
             raise HTTPException(400, "not a setting this page changes")
         kind = SETTINGS[body.key][2]
-        value: Any = bool(body.value) if kind == "bool" else float(body.value)
+        value: Any
+        if kind == "choice":
+            value = str(body.value)
+            if value not in {v for v, _ in CHOICES[body.key]}:
+                raise HTTPException(400, "not one of the choices")
+        else:
+            value = bool(body.value) if kind == "bool" else float(body.value)
         if kind == "number" and not 0 <= value <= 20:
             raise HTTPException(400, "between 0 and 20")
         set_value(body.key, value, state.home)

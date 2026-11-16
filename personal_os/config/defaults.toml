@@ -214,3 +214,10 @@ auto_gaming = true         # gaming mode while a game is in front, and back 3 mi
 [brief]
 on_start = true            # open the 24-hour brief in the browser when capture starts
 min_gap_h = 6              # ... but not again within this many hours
+
+[music]
+# Where your music comes from. "Play music", pause, next, "play <song>", what's playing and
+# the island's Music page use only this: a video playing in another tab is left alone.
+source = "youtube_music"   # youtube_music | spotify | youtube | any (whatever plays in the browser)
+open_in = "auto"           # auto: its installed app if there is one, else the website | app | browser
+default_query = ""         # "play music" with nothing open plays this search; empty: opens it and asks

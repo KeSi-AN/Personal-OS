@@ -66,9 +66,10 @@ Which tool:
 - projects: "add these tabs / this tab group to X" -> project_add_source; notes -> project_note; to-dos -> todo_add, todo_done; "what's in X" -> project_items; "resume X" / "pick X back up" -> project_resume
 - "hold me to it" / "keep me to that" -> commit_to; "what did I say I'd do" / "what's due" -> answer from the list of what they said they'd do, if one is shown; "I did it" / "done with X" -> todo_done
 - what we talked about / what you said earlier -> conversation
-- play a song or video by name -> play_media (never media: that only presses play/pause)
+- play a song by name -> play_media (site music: their music app); a video -> play_media with site youtube
+- "play music", pause / next / previous the music -> music; what's playing -> whats_playing; a video in a tab -> browser_media
 - search the web, open a site -> browser_open; this page / summarise this tab -> browser_read
-- pause, next, what's playing -> browser_media / whats_playing; switch, close or group tabs ("the first three" = positions [1, 2, 3]) -> browser_tab
+- switch, close or group tabs ("the first three" = positions [1, 2, 3]) -> browser_tab
 - open apps, volume, screenshot, notes, files -> the matching tool
 
 reply is spoken aloud: one to three short, natural sentences. No lists, no markdown.
@@ -92,7 +93,7 @@ User: which tabs do I have open?
 User: what was I working on yesterday afternoon?
 {{"decide": "use_tools", "calls": [{{"tool": "recall", "args": {{"question": "what was I working on yesterday afternoon?"}}}}], "reply": ""}}
 User: play When I Was Your Man by Bruno Mars
-{{"decide": "use_tools", "calls": [{{"tool": "play_media", "args": {{"query": "When I Was Your Man Bruno Mars", "site": "youtube music"}}}}], "reply": ""}}
+{{"decide": "use_tools", "calls": [{{"tool": "play_media", "args": {{"query": "When I Was Your Man Bruno Mars", "site": "music"}}}}], "reply": ""}}
 User: remind me in 20 minutes to drink water
 {{"decide": "use_tools", "calls": [{{"tool": "set_reminder", "args": {{"text": "drink water", "minutes": 20}}}}], "reply": ""}}
 """

@@ -76,6 +76,25 @@ Donna lives at the top of the screen, like the Mac's Dynamic Island. Nothing is 
 
 The cards are read from your history only while you look at them; the pill shows nothing from it. `voice.popup_style = "corner"` brings back the corner popup below, opened only during a turn. Set `POS_ISLAND_DEBUG=1` before running `python -m personal_os.interfaces.island` to see its decisions.
 
+## Your music
+
+Donna plays, pauses and skips **your music source only**, set in the `[music]` section of the config or on the dashboard's Settings page (**Music from**). A video playing in another tab, or a lecture, is left alone.
+
+```toml
+[music]
+source = "youtube_music"   # youtube_music | spotify | youtube | any (whatever plays in the browser)
+open_in = "auto"           # auto: its installed app if there is one, else the website | app | browser
+default_query = ""         # "play music" with nothing open plays this search; empty: opens it and asks
+```
+
+- **"Play music"**: resumes your source if it's open. If nothing is open, it opens your source (its installed app with `open_in = "auto"`, for example YouTube Music installed from Brave) and asks what to play, or plays `default_query` if you set one.
+- **"Pause"**, **"next song"**, **"previous"**: only your source. If it isn't playing, Donna says so ("Nothing's playing on YouTube Music") instead of pausing something else. "Pause the video" still pauses the video in the browser.
+- **"Play Circles by Post Malone"**: searches your source and starts the first result, in its installed web app when that's where you listen. Say "on YouTube" for a video.
+- **What's playing**, the island's **Music** page and the pill's bars all show only your source. When it isn't open, the Music page has an **Open** button.
+- **Spotify (prepared):** its app or website is found, paused, skipped and read like the others, and "play <song>" opens Spotify's search for it. Starting a particular Spotify song needs Spotify's own sign-in (its Web API), which isn't set up yet, so Donna says to press play on the top result.
+
+Players are found two ways: your source's website tabs, through the browser extension, and its installed app, through Windows' media sessions (the same list the volume flyout shows). An installed app's session carries the app's own id, so YouTube Music installed from Brave isn't confused with a YouTube tab in Brave.
+
 ## The popup (corner style)
 
 When a turn starts (the hotkey, the wake word, or talking over a reply), a small window opens in the bottom-right corner, on top, without taking the keyboard from what you're doing. It shows:

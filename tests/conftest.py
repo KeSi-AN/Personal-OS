@@ -35,6 +35,15 @@ def no_real_app_list(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def no_real_media_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests never read or press this machine's media players (Spotify, a browser)."""
+    from personal_os.platform import media_sessions
+
+    monkeypatch.setattr(media_sessions, "sessions", lambda *_a, **_k: [])
+    monkeypatch.setattr(media_sessions, "control", lambda *_a, **_k: None)
+
+
+@pytest.fixture(autouse=True)
 def mic_not_muted(monkeypatch: pytest.MonkeyPatch) -> None:
     """Tests never ask Windows whether this machine's microphone is muted."""
     from personal_os.voice import main as voice_main

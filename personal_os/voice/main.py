@@ -625,6 +625,9 @@ class Voice:
                   "next": "next", "previous": "previous"}.get(key)  # fmt: skip
         if action is None:
             return None
+        music = self.music_control(action, text)
+        if music is not None:
+            return music
         from personal_os.browser import control
 
         if not control.connected(self.cfg.runtime_dir):
@@ -634,6 +637,16 @@ class Voice:
         self.announce(said)
         reply = self.run_tool("browser_media", {"action": action}, text, ack=False)
         return None if reply.startswith("I couldn't") else said
+
+    def music_control(self, action: str, text: str) -> str | None:
+        """ "Play music", "pause", "next song": your music source only (config [music],
+        ADR-084), never the media key, which toggles whatever Windows picks (a lecture in
+        another tab). None when the source is "any" or it's about a video ("pause the video"),
+        which stay with the browser tab or the media key as before."""
+        if self.cfg.music.source == "any" or re.search(r"\bvideo\b", text, re.I):
+            return None
+        reply = self.run_tool("music", {"action": action}, text)
+        return reply.removeprefix("I couldn't: ")  # "Nothing's playing on YouTube Music."
 
     def run_intent(self, intent: Any, text: str) -> str:
         from personal_os.actions.base import Origin

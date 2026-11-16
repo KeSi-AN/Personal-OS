@@ -171,14 +171,16 @@ def test_recipes():
 
 
 def test_play_media_finds_and_starts_it(home: Path, config: Config, browser):
-    b = browser(lambda op, args: ok({"title": "When I Was Your Man - YouTube Music", "url": "u"}))
+    b = browser(
+        lambda op, args: ok([] if op == "tabs.list" else
+                            {"title": "When I Was Your Man - YouTube Music", "url": "u"})
+    )  # fmt: skip
     env = Env(home, config)
     o = env.ex.request(
         "play_media", {"query": "When I Was Your Man Bruno Mars"}, origin=Origin.USER
     )
-    assert o.ok and o.message == 'Playing "When I Was Your Man" on youtube music'
-    op, args = b.seen[0]
-    assert op == "open_first"
+    assert o.ok and o.message == 'Playing "When I Was Your Man" on YouTube Music'
+    args = next(a for op, a in b.seen if op == "open_first")
     assert args["url"] == "https://music.youtube.com/search?q=When+I+Was+Your+Man+Bruno+Mars"
     assert "watch?v=" in args["selector"]
 
@@ -265,10 +267,11 @@ def test_without_the_extension_the_tools_say_so(home: Path, config: Config):
 
 
 def test_play_media_reuses_the_site_tab(home: Path, config: Config, browser):
-    b = browser(lambda op, args: ok({"title": "Circles - YouTube Music"}))
+    b = browser(lambda op, args: ok(TABS if op == "tabs.list" else {"title": "Circles"}))
     env = Env(home, config)
     env.ex.request("play_media", {"query": "Circles Post Malone"}, origin=Origin.USER)
-    assert b.seen[0][1]["reuse"] == "music.youtube.com"  # the extension plays it in that tab
+    (args,) = [a for op, a in b.seen if op == "open_first"]
+    assert args["reuse"] == "music.youtube.com"  # the extension plays it in that tab
 
 
 def test_group_the_first_three_tabs(home: Path, config: Config, browser):
@@ -294,7 +297,30 @@ def test_group_the_first_three_tabs(home: Path, config: Config, browser):
     assert not o.ok and "aren't that many tabs" in o.message
 
 
+def test_voice_pause_goes_to_your_music_tab_only(home: Path, config: Config, browser, monkeypatch):
+    """With a music source (the default), "pause music" pauses its tab, not the lecture."""
+    import winsound
+
+    from tests.test_phase7 import voice_for
+    from tests.test_voice_fastpath import INDEX
+
+    monkeypatch.setattr(winsound, "Beep", lambda *_a: None)
+    tabs = [{"id": 3, "title": "Lecture - YouTube", "url": "https://www.youtube.com/watch?v=x",
+             "audible": True},
+            {"id": 1, "title": "Circles | YouTube Music", "url": "https://music.youtube.com/w",
+             "audible": True}]  # fmt: skip
+    b = browser(lambda op, args: ok(tabs if op == "tabs.list" else
+                                    {"title": "Circles", "playing": False}))  # fmt: skip
+    v, _h = voice_for(Env(home, config))
+    v.index._index = INDEX
+    v.last_audio = None
+    v.turn = {"id": "t"}
+    assert v.fast("pause music") == "Paused YouTube Music."
+    assert [a for op, a in b.seen if op == "media"] == [{"action": "pause", "tabId": 1}]
+
+
 def test_voice_pause_goes_to_the_browser_tab(home: Path, config: Config, browser, monkeypatch):
+    """With the music source "any": the tab making sound, as before."""
     import winsound
 
     from tests.test_phase7 import voice_for
@@ -304,6 +330,7 @@ def test_voice_pause_goes_to_the_browser_tab(home: Path, config: Config, browser
     b = browser(
         lambda op, args: ok({"title": "Circles", "artist": "Post Malone", "playing": False})
     )
+    config = config.model_copy(update={"music": config.music.model_copy(update={"source": "any"})})
     env = Env(home, config)
     v, _h = voice_for(env)
     v.index._index = INDEX

@@ -120,6 +120,27 @@ def test_settings_only_change_what_the_page_offers(site: Site, home: Path):  # n
     assert site.post("/api/v2/setting", {"key": "voice.followup_s", "value": 99}).status_code == 400
 
 
+def test_the_music_source_is_picked_on_settings(site: Site, home: Path):  # noqa: F811
+    """You choose where music comes from, and it's kept in the config (ADR-084)."""
+    from personal_os.config.loader import load_config
+
+    site.login()
+    page = site.client.get("/settings").text
+    assert "Music from" in page and "<option value='spotify'>Spotify</option>" in page
+    assert (
+        site.post("/api/v2/setting", {"key": "music.source", "value": "spotify"}).status_code == 200
+    )
+    assert load_config(home).music.source == "spotify"
+    assert (
+        site.post("/api/v2/setting", {"key": "music.open_in", "value": "browser"}).status_code
+        == 200
+    )
+    assert load_config(home).music.open_in == "browser"
+    assert (
+        site.post("/api/v2/setting", {"key": "music.source", "value": "tidal"}).status_code == 400
+    )
+
+
 def test_chat_on_the_dashboard(home: Path, config: Config):
     def responder(system: str, user: str, schema: Any) -> Any:
         return {"decide": "answer", "calls": [], "reply": "Hello from Donna.", "details": "- one"}

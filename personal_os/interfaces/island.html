@@ -416,10 +416,33 @@ const render = {
     }
     pg.append(fullButton("projects"));
   },
+  // Your music source only (config [music]): its name, the song, and its controls; when it
+  // isn't open, a button to open it (in its app if it's installed).
   music(d) {
     const pg = $("p-music");
     pg.replaceChildren();
-    if (!d.available) { pg.append(el("div", "h", "Music"), el("div", "empty", d.why || "Nothing to show.")); return; }
+    const src = d.source || "Music";
+    pg.append(el("div", "h", src + (d.where ? " · " + (d.where === "app" ? "app" : "browser") : "")));
+    if (!d.available) { pg.append(el("div", "empty", d.why || "Nothing to show.")); return; }
+    const said = el("div", "formnote");
+    const act = async (action) => {
+      const r = await api().media(action);
+      said.textContent = r && !r.ok ? r.text : "";
+      setTimeout(() => load("music", true), action === "open" ? 2500 : 450);
+    };
+    if (d.open === false) {
+      pg.append(el("div", "empty", d.why || src + " isn't open."));
+      const c = el("div", "controls");
+      const b = el("button", "main", "▶");
+      b.title = "Play: opens " + src;
+      b.onclick = () => act("play");
+      const o = el("button", "", "Open " + src);
+      o.style.width = "auto"; o.style.padding = "0 14px";
+      o.onclick = () => act("open");
+      c.append(b, o);
+      pg.append(c, said);
+      return;
+    }
     const pl = el("div", "player");
     const art = el("div", "art");
     const bars = el("span", "bars" + (d.playing ? "" : " paused"));
@@ -427,19 +450,20 @@ const render = {
     art.append(bars);
     const meta = el("div", "grow");
     meta.style.minWidth = "0";
-    meta.append(el("div", "t", d.title || "Nothing playing"), el("div", "a", d.artist || (d.title ? "" : "Play something in your browser")));
+    meta.append(el("div", "t", d.title || "Nothing chosen yet"),
+      el("div", "a", d.artist || (d.title ? "" : "Ask Donna to play something")));
     pl.append(art, meta);
     pg.append(pl);
     const c = el("div", "controls");
     const mk = (label, title, action, main) => {
       const b = el("button", main ? "main" : "", label);
       b.title = title;
-      b.onclick = async () => { await api().media(action); setTimeout(() => load("music", true), 350); };
+      b.onclick = () => act(action);
       return b;
     };
     c.append(mk("⏮", "Previous", "previous"), mk(d.playing ? "⏸" : "▶", d.playing ? "Pause" : "Play",
       d.playing ? "pause" : "play", true), mk("⏭", "Next", "next"));
-    pg.append(c);
+    pg.append(c, said);
   },
 };
 

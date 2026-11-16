@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from personal_os.config.schema import Config
 from personal_os.core.clock import Clock, to_ms
 
 
@@ -210,7 +211,50 @@ def projects(conn: sqlite3.Connection, now: datetime, limit: int = 4) -> list[di
     return out
 
 
-def music(runtime_dir: Path, browser: str) -> dict[str, Any]:
+def _music_backend(cfg: Config) -> Any:
+    from personal_os.actions.music import LiveBackend
+
+    return LiveBackend(cfg.runtime_dir, cfg.actions.browser)
+
+
+def music(cfg: Config, backend: Any = None) -> dict[str, Any]:
+    """The Music page: your music source only (config [music], ADR-084); with "any", whatever
+    plays in the browser, as before."""
+    from personal_os.actions import music as m
+
+    src = m.chosen(cfg.music.source)
+    if src is None:
+        return browser_music(cfg.runtime_dir, cfg.actions.browser)
+    now = m.now(src, backend or _music_backend(cfg))
+    return {
+        "available": True, "source": src.name, "open": now.open,
+        "title": now.title[:120], "artist": now.artist[:80], "playing": now.playing,
+        "where": now.where, "why": "" if now.open else f"{src.name} isn't open.",
+    }  # fmt: skip
+
+
+def music_action(cfg: Config, action: str, backend: Any = None) -> dict[str, Any]:
+    """Play, pause, next, previous (and "open") on the Music page: your source only. Returns
+    {"ok", "text"}; "play" with nothing open starts it."""
+    from personal_os.actions import music as m
+
+    src = m.chosen(cfg.music.source)
+    if src is None:
+        ok = browser_media(cfg.runtime_dir, cfg.actions.browser, action)
+        return {"ok": ok, "text": "" if ok else "The browser didn't answer."}
+    b = backend or _music_backend(cfg)
+    try:
+        if action == "open":
+            where = m.open_source(src, b, cfg.music.open_in)
+            return {"ok": True, "text": f"Opened {src.name} in {where}."}
+        r = m.control(src, b, action, open_in=cfg.music.open_in,
+                      default_query=cfg.music.default_query)  # fmt: skip
+    except Exception as exc:
+        return {"ok": False, "text": f"Couldn't reach {src.name} ({type(exc).__name__})."}
+    return {"ok": r.ok, "text": r.text}
+
+
+def browser_music(runtime_dir: Path, browser: str) -> dict[str, Any]:
     """What's playing in the browser (title, artist, playing), from the extension."""
     from personal_os.browser import control
 
@@ -231,8 +275,8 @@ def music(runtime_dir: Path, browser: str) -> dict[str, Any]:
     }
 
 
-def media(runtime_dir: Path, browser: str, action: str) -> bool:
-    """Play, pause, next or previous in the browser's music tab."""
+def browser_media(runtime_dir: Path, browser: str, action: str) -> bool:
+    """Play, pause, next or previous in the browser's playing tab (music source "any")."""
     from personal_os.browser import control
 
     if action not in ("play", "pause", "toggle", "next", "previous"):

@@ -381,8 +381,11 @@ class IslandApi(popup.Api):
         from personal_os.storage.db import open_db
 
         name = str(name)
-        if name == "music":
-            return island_data.music(self._cfg.runtime_dir, self._cfg.actions.browser)
+        if name == "music":  # your music source only (config [music], ADR-084)
+            try:
+                return island_data.music(self._island.cfg)
+            except Exception as exc:
+                return {"available": False, "why": f"Couldn't check ({type(exc).__name__})."}
         if name not in ("today", "projects", "notes"):
             return {}
         try:
@@ -433,10 +436,11 @@ class IslandApi(popup.Api):
         except Exception as exc:
             return f"Couldn't save it ({type(exc).__name__})."
 
-    def media(self, action: str) -> bool:
+    def media(self, action: str) -> dict[str, Any]:
+        """The Music page's buttons (and "open"): your music source only. {"ok", "text"}."""
         from personal_os.interfaces import island_data
 
-        return island_data.media(self._cfg.runtime_dir, self._cfg.actions.browser, str(action))
+        return island_data.music_action(self._island.cfg, str(action))
 
     def open_full(self, page: str) -> str:
         """The full dashboard window, on the page that matches this card."""
@@ -622,8 +626,24 @@ class Island:
                 self.monitor = mon
                 self._place(jump=True)
         self.fullscreen = fullscreen_on(self.monitor[0], self.monitor[1], self.hwnd)
-        voice_pid = int(self.view.get("pid") or 0) if isinstance(self.view, dict) else 0
-        self.music = music_playing({os.getpid(), voice_pid})
+        if self.cfg.music.source == "any":  # any app making sound, as before
+            voice_pid = int(self.view.get("pid") or 0) if isinstance(self.view, dict) else 0
+            self.music = music_playing({os.getpid(), voice_pid})
+
+    def _watch_music(self) -> None:
+        """Every few seconds, on its own thread (it asks the browser and Windows): is your
+        music source playing? Only that lights the pill's bars (ADR-084)."""
+        from personal_os.actions import music
+
+        while True:
+            src = music.chosen(self.cfg.music.source)
+            if src is not None:
+                try:
+                    b = music.LiveBackend(self.cfg.runtime_dir, self.cfg.actions.browser)
+                    self.music = music.playing_now(src, b)
+                except Exception:
+                    self.music = False
+            time.sleep(3)
 
     def inputs(self, now: float) -> L.Inputs:
         v = self.view
@@ -722,6 +742,7 @@ class Island:
         threading.Thread(target=self.shape.run, name="pos-island-shape", daemon=True).start()
         threading.Thread(target=self.run, name="pos-island", daemon=True).start()
         threading.Thread(target=self._watch_config, name="pos-island-cfg", daemon=True).start()
+        threading.Thread(target=self._watch_music, name="pos-island-music", daemon=True).start()
 
     def _watch_config(self) -> None:
         """Gone when voice is turned off, or the popup style changes back to the corner."""
