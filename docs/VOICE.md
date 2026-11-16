@@ -65,11 +65,13 @@ Follow-ups keep the microphone open a few seconds longer after each reply. Audio
 Donna lives at the top of the screen, like the Mac's Dynamic Island. Nothing is there while she's idle: when you say "Donna", press the hotkey, ask for a page or a reminder comes due, a black island drops down from the top edge at the centre of the screen your mouse is on, and slides back up into it when you're done. `voice.island_idle = "pill"` keeps a small pill there instead (the time, a dot for Donna, bars while music plays), which also opens when you rest the pointer on it.
 
 - **With the pill kept** (`island_idle = "pill"`), rest the pointer on it and it grows open; move away and it shrinks back.
+- **Over an app** (your browser's tabs, a title bar), the pill turns see-through and lets clicks through to what's under it, fading almost away while the pointer is on it. To open it there, push the pointer against the top edge of the screen on it for half a second.
+- **Today** has a box beside each to-do to tick it off (click again to undo) and a box to add one; a time at the end ("call mum tomorrow 5pm", "by friday") becomes when it's due. **Notes** shows your latest notes and a box to jot one, into the inbox or a project you pick.
 - **Typing:** click in the box on the Donna page and type; Enter sends it.
 - **While she's talking**, say "Donna" to stop her and talk, or "stop talking" / "never mind" to just stop her.
 - **Say "Donna"** (or press the hotkey) and it opens on the **Donna** page, which is the popup below: what you said, her reply, questions, reminders, the box to type in, Talk, Stop, Pin.
-- **Swipe** sideways with two fingers on the touchpad, click the **‹ ›** arrows, the page names or the dots, or press **← →** once you've clicked it, to move between **Donna**, **Today** (time worked, what's coming up, to-dos), **Music** (what's playing in the browser, with play, pause, next) and **Projects** (where you left off, the next to-do). **Open full ↗** opens that page of the dashboard.
-- **Say "show my projects"**, "show today", "show the music" or "hide the island".
+- **Swipe** sideways with two fingers on the touchpad, click the **‹ ›** arrows, the page names or the dots, or press **← →** once you've clicked it, to move between **Donna**, **Today** (time worked, what's coming up, to-dos), **Notes**, **Music** (what's playing in the browser, with play, pause, next) and **Projects** (where you left off, the next to-do). **Open full ↗** opens that page of the dashboard.
+- **Say "show my projects"**, "show today", "show my notes", "show the music" or "hide the island".
 - It hides while a full-screen app, game or video is on its screen, unless you call her or a reminder comes due.
 
 The cards are read from your history only while you look at them; the pill shows nothing from it. `voice.popup_style = "corner"` brings back the corner popup below, opened only during a turn. Set `POS_ISLAND_DEBUG=1` before running `python -m personal_os.interfaces.island` to see its decisions.

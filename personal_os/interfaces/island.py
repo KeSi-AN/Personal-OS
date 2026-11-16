@@ -6,7 +6,12 @@ pointer on it, saying "Donna", "show my projects", or a reminder coming due open
 (Donna, Today, Music, Projects), and a two-finger swipe, the ‹ › arrows or the dots move
 between pages. It hides while a full-screen app or game is on its screen, unless you called.
 
-The window is the island: no transparent margins, nothing to click through. Its rounded shape
+A pill over an app is a ghost (island_logic, ADR-083): see-through and click-through, so the
+browser's tabs or a title bar under it still work; holding the pointer against the top edge
+on it opens it. Hover is read from the pointer's position here, since a click-through
+window's page never sees the mouse.
+
+The window is the island: no transparent margins around it. Its rounded shape
 is a window region, and its size is animated by a spring here in Python at 60 frames a second
 (a spring keeps its speed when the target changes mid-way, so a change of mind is smooth).
 The page draws only what's inside, in a fixed-width layer, so nothing reflows as it grows.
@@ -14,7 +19,8 @@ The page draws only what's inside, in a fixed-width layer, so nothing reflows as
 The Donna page is the voice popup's (interfaces/popup.py): the same Api underneath (typed
 prompts, Talk, Stop, Pin, reminders, links), the same status file, the same "seen" handshake
 so she speaks only once the reply is on screen. Pages other than Donna read a few lines from
-the database while shown (interfaces/island_data.py). Nothing here writes to it.
+the database while shown (interfaces/island_data.py); the only writes are your own to-dos and
+notes (ticked off, added), as the dashboard does.
 """
 
 from __future__ import annotations
@@ -131,6 +137,10 @@ HWND_TOPMOST = -1
 SWP_NOACTIVATE, SWP_SHOWWINDOW = 0x0010, 0x0040
 GWL_EXSTYLE = -20
 WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE, WS_EX_APPWINDOW = 0x80, 0x08000000, 0x40000
+# A layered window can be see-through (LWA_ALPHA), and a transparent one lets clicks through
+# to what's under it. WebView2 still draws in it (checked on this laptop: the page blends with
+# what's behind it, and the window under the pointer becomes the app's).
+WS_EX_LAYERED, WS_EX_TRANSPARENT, LWA_ALPHA = 0x80000, 0x20, 0x2
 SW_HIDE, SW_SHOWNOACTIVATE = 0, 4
 
 
@@ -226,6 +236,8 @@ class Shape:
         self.hide_when_settled = False  # going away: shrink into the top edge, then hide
         self.last: tuple[int, int, int, int, int] | None = None
         self._lock = threading.Lock()
+        self.alpha, self.alpha_target = 255.0, 255  # see-through as a ghost (island_logic)
+        self.click_through = False
 
     def go(
         self, cx: float, top: float, w: float, h: float, r: float, *, jump: bool = False
@@ -239,11 +251,39 @@ class Shape:
                     s.target = value
         self.wake.set()
 
+    def ghost(self, alpha: int, click_through: bool) -> None:
+        """Fade to `alpha` (0-255) and let clicks through to what's under it, or not. The
+        clicks change at once, so a click meant for the app is never caught mid-fade."""
+        if click_through != self.click_through:
+            self.click_through = click_through
+            with contextlib.suppress(Exception):
+                style = user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE) & ~WS_EX_TRANSPARENT
+                if click_through:
+                    style |= WS_EX_TRANSPARENT
+                user32.SetWindowLongW(self.hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED)
+        if alpha != self.alpha_target:
+            self.alpha_target = alpha
+            self.wake.set()
+
+    def _fade(self) -> bool:
+        """One frame of the fade; True once it's there. About a sixth of a second end to end."""
+        gap = self.alpha_target - self.alpha
+        if abs(gap) < 2:
+            if self.alpha != self.alpha_target:
+                self.alpha = float(self.alpha_target)
+                user32.SetLayeredWindowAttributes(self.hwnd, 0, int(self.alpha), LWA_ALPHA)
+            return True
+        self.alpha += gap * 0.3
+        level = max(0, min(255, round(self.alpha)))
+        user32.SetLayeredWindowAttributes(self.hwnd, 0, level, LWA_ALPHA)
+        return False
+
     def run(self) -> None:
         frame = 1 / 60
         while True:
             self.wake.wait()
             t = time.perf_counter()
+            faded = self._fade()
             with self._lock:
                 for s in self.springs.values():
                     for _ in range(2):  # two half-steps a frame: stable at this stiffness
@@ -252,7 +292,8 @@ class Shape:
                 if done:
                     for s in self.springs.values():
                         s.x, s.v = s.target, 0.0
-                    self.wake.clear()
+                    if faded:
+                        self.wake.clear()
                 box = {k: s.x for k, s in self.springs.items()}
             if box:
                 self.apply(box)
@@ -316,7 +357,9 @@ class IslandApi(popup.Api):
             self._island.collapse()
 
     def hover(self, on: bool) -> bool:
-        self._island.on_hover(bool(on))
+        """The page's own mouseenter/leave. Hover is read from the pointer's position in
+        Python instead (Island.poll_pointer): a ghost pill lets clicks through, so its page
+        never sees the mouse. Kept so the page's calls still succeed."""
         return True
 
     def page(self, name: str) -> str:
@@ -340,7 +383,7 @@ class IslandApi(popup.Api):
         name = str(name)
         if name == "music":
             return island_data.music(self._cfg.runtime_dir, self._cfg.actions.browser)
-        if name not in ("today", "projects"):
+        if name not in ("today", "projects", "notes"):
             return {}
         try:
             conn = open_db(self._cfg.db_path)
@@ -350,11 +393,45 @@ class IslandApi(popup.Api):
             now = datetime.now(UTC)
             if name == "today":
                 return island_data.today(conn, now)
+            if name == "notes":
+                return island_data.notes(conn, now)
             return {"projects": island_data.projects(conn, now)}
         except Exception as exc:
             return {"error": f"Couldn't load this ({type(exc).__name__})."}
         finally:
             conn.close()
+
+    def _write(self, fn: Any, *args: Any) -> Any:
+        """One change to your own items (a to-do ticked, a note added), as the dashboard does."""
+        from personal_os.core.clock import SystemClock
+        from personal_os.storage.db import open_db
+
+        conn = open_db(self._cfg.db_path)
+        try:
+            return fn(conn, SystemClock(), *args)
+        finally:
+            conn.close()
+
+    def todo(self, item_id: str, done: bool) -> bool:
+        """☐ / ☑ on Today: tick a to-do off, or back on."""
+        from personal_os.interfaces import island_data
+
+        try:
+            return bool(self._write(island_data.set_todo, str(item_id), bool(done)))
+        except Exception:
+            return False
+
+    def add(self, kind: str, text: str, project: str = "") -> str:
+        """The box on Today (a to-do) or Notes (a note). Returns "" or why it wasn't added."""
+        from personal_os.interfaces import island_data
+
+        fn = {"todo": island_data.add_todo, "note": island_data.add_note}.get(str(kind))
+        if fn is None:
+            return "Can't add that here."
+        try:
+            return str(self._write(fn, str(text)[:5000], str(project)[:80]))
+        except Exception as exc:
+            return f"Couldn't save it ({type(exc).__name__})."
 
     def media(self, action: str) -> bool:
         from personal_os.interfaces import island_data
@@ -413,6 +490,8 @@ class Island:
         self.collapse_asked = False
         self.view: dict[str, Any] = {}
         self.target = L.Target("hidden", "today", "start")  # nothing shown until wanted
+        self.ghost = False  # a pill over an app: see-through, clicks go to the app (ADR-083)
+        self.pointer_on = False
         self._pushed = ""
         self._poke = threading.Event()
 
@@ -471,6 +550,7 @@ class Island:
                 elif page:
                     self.request, self.request_at, self.page = page, now, page
                     self.monitor = cursor_monitor()
+                self.poll_pointer()
                 self._decide(now)
                 failures = 0
                 if DEBUG and int(now) % 5 == 0 and now - int(now) < 0.06:
@@ -485,6 +565,43 @@ class Island:
                 time.sleep(0.5)
             self._poke.wait(0.05)
             self._poke.clear()
+
+    def _rect(self) -> tuple[int, int, int, int] | None:
+        """Where the island is on screen now (left, top, right, bottom), or None if hidden."""
+        if self.shape is None or not self.shape.visible or self.shape.last is None:
+            return None
+        x, y, w, h, _r = self.shape.last
+        return x, y, x + w, y + h
+
+    def _app_under(self, rect: tuple[int, int, int, int]) -> bool:
+        """The app in front covers the island's spot (a browser's tabs, a title bar)."""
+        fg = user32.GetForegroundWindow()
+        if not fg or fg == self.hwnd:
+            return False
+        cls = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(fg, cls, 64)
+        if cls.value in ("Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"):
+            return False  # the desktop: nothing under the pill to click
+        r = wintypes.RECT()
+        user32.GetWindowRect(fg, ctypes.byref(r))
+        return L.overlaps((r.left, r.top, r.right, r.bottom), rect)
+
+    def poll_pointer(self) -> None:
+        """Hover, read from the pointer's position (a ghost lets clicks through, so its page
+        never sees the mouse). As a ghost, only the pointer held against the top edge on it
+        counts as hovering; anywhere on it fades it further so you see what's under it."""
+        rect = self._rect()
+        pt = wintypes.POINT()
+        user32.GetCursorPos(ctypes.byref(pt))
+        inside = rect is not None and rect[0] <= pt.x < rect[2] and rect[1] <= pt.y < rect[3]
+        self.ghost = rect is not None and L.ghosted(self.target, self._app_under(rect))
+        edge = round(L.EDGE_PX * self.monitor[2])
+        hovering = inside and (not self.ghost or (rect is not None and pt.y <= rect[1] + edge))
+        if hovering != (self.hover_since is not None):
+            self.on_hover(hovering)
+        self.pointer_on = inside
+        if self.shape is not None:
+            self.shape.ghost(L.alpha(self.ghost, inside), self.ghost)
 
     def _read_voice(self) -> None:
         self.collapse_asked = False
@@ -523,6 +640,7 @@ class Island:
             music=self.music,
             voice_running=bool(v.get("voice_running")),
             idle_pill=self.cfg.voice.island_idle == "pill",
+            ghost=self.ghost,
         )
 
     def _decide(self, now: float) -> None:
@@ -595,8 +713,9 @@ class Island:
         dwm.DwmSetWindowAttribute(self.hwnd, 2, ctypes.byref(off), 4)  # no frame shadow
         dwm.DwmSetWindowAttribute(self.hwnd, 33, ctypes.byref(square), 4)  # no OS rounding
         style = user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
-        style = (style | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) & ~WS_EX_APPWINDOW
+        style = (style | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED) & ~WS_EX_APPWINDOW
         user32.SetWindowLongW(self.hwnd, GWL_EXSTYLE, style)  # no taskbar button, no Alt+Tab
+        user32.SetLayeredWindowAttributes(self.hwnd, 0, 255, LWA_ALPHA)  # solid until a ghost
         self.monitor = cursor_monitor()
         self.shape = Shape(self.hwnd)
         self._place(jump=True)

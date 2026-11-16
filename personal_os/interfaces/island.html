@@ -64,7 +64,7 @@ body.open #open { opacity:1; transform:none; pointer-events:auto;
   transition:opacity .2s; font-size:15px; }
 body.open:hover .arrow { opacity:1; }
 #viewport { flex:1; overflow:hidden; position:relative; }
-#track { display:flex; height:100%; width:calc(var(--W) * 4);
+#track { display:flex; height:100%; width:calc(var(--W) * 5);
   transition:transform .48s var(--spring); will-change:transform; }
 .page { width:var(--W); height:100%; padding:2px 18px 12px; overflow-y:auto;
   scrollbar-width:thin; scrollbar-color:#2c2c31 transparent; }
@@ -92,6 +92,27 @@ body.open:hover .arrow { opacity:1; }
 .proj .name { font-weight:600; } .proj .when { color:var(--muted); font-size:12px; float:right; }
 .proj .left { color:var(--muted); font-size:12.5px; margin-top:1px; }
 .proj .next { font-size:12.5px; margin-top:2px; } .proj .next::before { content:"☐ "; color:var(--faint); }
+
+/* To-dos you can tick, and the boxes to add a to-do or a note */
+.check { width:20px; height:20px; padding:0; border-radius:6px; flex:none; display:grid;
+  place-items:center; font-size:12px; line-height:1; background:transparent;
+  border:1.5px solid #4a4a52; color:transparent; align-self:center; }
+.check:hover { border-color:var(--ok); background:transparent; }
+.row.done .check { background:var(--ok); border-color:var(--ok); color:#06150c; }
+.row.done .grow { color:var(--faint); text-decoration:line-through; }
+.row.todo { align-items:center; }
+.addform { display:flex; gap:6px; margin-top:8px; }
+.addform input, .addform select { background:#111114; color:var(--ink); border:1px solid var(--line);
+  border-radius:999px; font:inherit; font-size:12.5px; padding:5px 12px; user-select:text; }
+.addform input { flex:1; min-width:0; }
+.addform select { max-width:150px; padding-right:6px; }
+.addform input:focus, .addform select:focus { outline:none; border-color:var(--accent); }
+.addform input::placeholder { color:var(--faint); }
+.formnote { color:var(--warn); font-size:12px; min-height:0; }
+.note { padding:6px 0; border-bottom:1px solid var(--line); }
+.note:last-child { border-bottom:none; }
+.note .text { white-space:pre-wrap; word-wrap:break-word; user-select:text; font-size:13px; }
+.note .meta { color:var(--faint); font-size:11.5px; margin-top:1px; }
 
 /* Music */
 .player { display:flex; gap:14px; align-items:center; padding-top:10px; }
@@ -167,13 +188,28 @@ body.open:hover .arrow { opacity:1; }
           <button id="talk" type="button" title="Start listening, like the hotkey">Talk</button>
         </form>
         <div id="vfoot">
-          <span id="note">Swipe for Today, Music, Projects</span>
+          <span id="note">Swipe for Today, Notes, Music, Projects</span>
           <button id="stop" class="hidden" title="Stop (Esc)">Stop</button>
           <button id="pin" aria-pressed="false" title="Keep open">Pin</button>
           <button id="full" title="Open the full dashboard">Open full ↗</button>
         </div>
       </div></section>
-      <section class="page" id="p-today" aria-label="Today"></section>
+      <section class="page" id="p-today" aria-label="Today">
+        <div id="today-body"></div>
+        <form id="todo-form" class="addform" autocomplete="off">
+          <input id="todo-text" type="text" maxlength="300" placeholder="Add a to-do… (call mum tomorrow 5pm)" aria-label="Add a to-do">
+        </form>
+        <div id="todo-why" class="formnote"></div>
+        <div id="today-foot"></div>
+      </section>
+      <section class="page" id="p-notes" aria-label="Notes">
+        <form id="note-form" class="addform" autocomplete="off">
+          <input id="note-text" type="text" maxlength="5000" placeholder="Jot a note…" aria-label="Write a note">
+          <select id="note-project" aria-label="Which project the note goes to"><option value="">Inbox</option></select>
+        </form>
+        <div id="note-why" class="formnote"></div>
+        <div id="notes-body"></div>
+      </section>
       <section class="page" id="p-music" aria-label="Music"></section>
       <section class="page" id="p-projects" aria-label="Projects"></section>
     </div>
@@ -184,8 +220,8 @@ body.open:hover .arrow { opacity:1; }
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-const PAGES = ["donna", "today", "music", "projects"];
-const TITLES = { donna: "Donna", today: "Today", music: "Music", projects: "Projects" };
+const PAGES = ["donna", "today", "notes", "music", "projects"];
+const TITLES = { donna: "Donna", today: "Today", notes: "Notes", music: "Music", projects: "Projects" };
 const ACTIVE = ["listening", "thinking", "speaking"];
 const LABELS = { listening: "Listening…", thinking: "Thinking…", speaking: "Speaking…",
   done: "Done", idle: "Ready", "not running": "Voice isn't running" };
@@ -280,7 +316,7 @@ window.addEventListener("wheel", (e) => {
 
 // --- cards ------------------------------------------------------------------------------
 const loaded = {};
-const FRESH = { today: 20000, projects: 30000, music: 3000 };
+const FRESH = { today: 20000, notes: 20000, projects: 30000, music: 3000 };
 async function load(p, force) {
   if (!api() || S.mode !== "open") return;
   if (!force && loaded[p] && performance.now() - loaded[p] < FRESH[p]) return;
@@ -297,10 +333,32 @@ function fullButton(p) {
   return f;
 }
 
+// A to-do's box: tick it off (struck through, kept until the next refresh so a mis-click is
+// undone by clicking again), or back on.
+function todoRow(t) {
+  const r = el("div", "row todo" + (t.overdue ? " overdue" : ""));
+  const b = el("button", "check", "✓");
+  b.type = "button";
+  b.title = "Done";
+  b.setAttribute("aria-label", "Mark done: " + t.text);
+  b.onclick = async () => {
+    const done = !r.classList.contains("done");
+    r.classList.toggle("done", done);
+    b.title = done ? "Not done after all" : "Done";
+    loaded.today = performance.now();  // don't refresh it away straight after the tick
+    const ok = await api().todo(t.id, done);
+    if (!ok) r.classList.toggle("done", !done);
+  };
+  r.append(b, el("span", "grow", t.text + (t.project ? " · " + t.project : "")),
+    el("span", "side", t.overdue ? "overdue" : t.due || ""));
+  return r;
+}
+
 const render = {
   today(d) {
-    const pg = $("p-today");
+    const pg = $("today-body");
     pg.replaceChildren();
+    $("today-foot").replaceChildren(fullButton("today"));
     if (d.error) { pg.append(el("div", "empty", d.error)); return; }
     pg.append(el("div", "h", "Worked today"));
     pg.append(el("div", "big", d.worked || "—"));
@@ -311,17 +369,37 @@ const render = {
     }
     pg.append(chips);
     pg.append(el("div", "h", "Coming up"));
-    const items = [...(d.reminders || []).map((r) => ({ icon: "⏰", text: r.text, side: r.when })),
-      ...(d.todos || []).map((t) => ({ icon: "☐", text: t.text + (t.project ? " · " + t.project : ""),
-        side: t.overdue ? "overdue" : t.due, overdue: t.overdue }))];
-    if (!items.length) pg.append(el("div", "empty", "Nothing due. Clear skies."));
-    for (const it of items.slice(0, 5)) {
-      const r = el("div", "row" + (it.overdue ? " overdue" : ""));
-      r.append(el("span", "", it.icon), el("span", "grow", it.text), el("span", "side", it.side || ""));
-      pg.append(r);
+    const rem = d.reminders || [], todos = d.todos || [];
+    if (!rem.length && !todos.length) pg.append(el("div", "empty", "Nothing due. Add a to-do below."));
+    for (const r of rem) {
+      const row = el("div", "row");
+      row.append(el("span", "", "⏰"), el("span", "grow", r.text), el("span", "side", r.when));
+      pg.append(row);
     }
-    if (d.more_todos) pg.append(el("div", "empty", `+${d.more_todos} more to-dos`));
-    pg.append(fullButton("today"));
+    for (const t of todos) pg.append(todoRow(t));
+    if (d.more_todos) pg.append(el("div", "empty", `+${d.more_todos} more on the dashboard`));
+  },
+  notes(d) {
+    const pg = $("notes-body");
+    pg.replaceChildren();
+    if (d.error) { pg.append(el("div", "empty", d.error)); return; }
+    const pick = $("note-project"), chosen = pick.value;
+    pick.replaceChildren(el("option", "", "Inbox"));
+    pick.firstChild.value = "";
+    for (const p of d.projects || []) {
+      const o = el("option", "", p.name);
+      o.value = p.id;
+      pick.append(o);
+    }
+    pick.value = [...pick.options].some((o) => o.value === chosen) ? chosen : "";
+    const list = d.notes || [];
+    if (!list.length) pg.append(el("div", "empty", "No notes yet. Jot one above."));
+    for (const n of list) {
+      const c = el("div", "note");
+      c.append(el("div", "text", n.text), el("div", "meta", (n.project || "Inbox") + " · " + n.when));
+      pg.append(c);
+    }
+    pg.append(fullButton("projects"));
   },
   projects(d) {
     const pg = $("p-projects");
@@ -483,16 +561,38 @@ window.island = {
 
 // --- you ----------------------------------------------------------------------------------
 let hovering = false;
-function hold() {
-  const typing = document.activeElement === $("prompt") || $("prompt").value.trim() !== "";
+const BOXES = ["prompt", "todo-text", "note-text"];
+const inBox = () => document.activeElement && ["INPUT", "SELECT"].includes(document.activeElement.tagName);
+function hold() {  // typing in any box keeps the island open, like the Donna prompt
+  const typing = inBox() || BOXES.some((id) => $(id).value.trim() !== "");
   api() && api().hold(hovering || typing);
   api() && api().typing(typing);
 }
 document.documentElement.addEventListener("mouseenter", () => { hovering = true; api() && api().hover(true); hold(); });
 document.documentElement.addEventListener("mouseleave", () => { hovering = false; api() && api().hover(false); hold(); });
-$("prompt").addEventListener("focus", hold);
-$("prompt").addEventListener("blur", hold);
-$("prompt").addEventListener("input", hold);
+for (const id of [...BOXES, "note-project"]) {
+  $(id).addEventListener("focus", hold);
+  $(id).addEventListener("blur", hold);
+  $(id).addEventListener("input", hold);
+}
+async function addFrom(kind, input, why, page, project) {
+  const text = input.value.trim();
+  if (!text) return;
+  const err = await api().add(kind, text, project || "");
+  why.textContent = err || "";
+  if (err) return;
+  input.value = "";
+  hold();
+  load(page, true);
+}
+$("todo-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  addFrom("todo", $("todo-text"), $("todo-why"), "today");
+});
+$("note-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  addFrom("note", $("note-text"), $("note-why"), "notes", $("note-project").value);
+});
 document.addEventListener("pointerdown", () => { if (S.mode === "open" && api()) api().focus(); });
 $("askform").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -513,12 +613,13 @@ $("pin").onclick = async () => {
 $("full").onclick = async () => { $("note").textContent = (await api().open_full("donna")) || "Opened the dashboard."; };
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    if (document.activeElement === $("prompt") && $("prompt").value) { $("prompt").value = ""; hold(); return; }
+    const a = document.activeElement;
+    if (a && a.tagName === "INPUT" && a.value) { a.value = ""; hold(); return; }
     const busy = ACTIVE.includes((S.view || {}).state);
     busy ? api().stop(true) : api().close();
     return;
   }
-  if (document.activeElement === $("prompt")) return;
+  if (inBox()) return;  // arrow keys move the caret in a box, not the page
   if (e.key === "ArrowRight") step(1);
   if (e.key === "ArrowLeft") step(-1);
 });

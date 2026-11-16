@@ -6,6 +6,11 @@ interfaces/island.py animates the real window to whatever this says. ADR-082.
     pill  ──"Donna"──────────▶  open on Donna (listening…)    ──turn over + read──▶  pill
     pill  ──"show my projects"▶  open on Projects (a while)    ──time / mouse leaves──▶  pill
     any   ──a full-screen app─▶  hidden (unless you called her or a reminder is due)
+
+A pill over an app (a browser's tabs, a title bar) is a *ghost* (ADR-083): see-through and
+click-through, so what's under it still works. It fades further while the pointer is on it,
+so you can see what you're clicking, and opens only when you hold the pointer against the top
+edge of the screen there for a moment, which clicking a tab never does.
 """
 
 from __future__ import annotations
@@ -13,14 +18,17 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-PAGES = ("donna", "today", "music", "projects")
-PAGE_TITLES = {"donna": "Donna", "today": "Today", "music": "Music", "projects": "Projects"}
+PAGES = ("donna", "today", "notes", "music", "projects")
+PAGE_TITLES = {
+    "donna": "Donna", "today": "Today", "notes": "Notes", "music": "Music",
+    "projects": "Projects",
+}  # fmt: skip
 
 # Sizes in logical pixels (scaled by the monitor's DPI when placed).
 PILL = (196, 34)
 PILL_WIDE = (300, 34)  # with something to show: music playing, a reminder due
 OPEN_W = 560
-CARD_H = 250  # Today / Music / Projects
+CARD_H = 290  # Today / Notes / Music / Projects (room for the box to add one)
 VOICE_MIN_H, VOICE_MAX_H = 150, 560  # Donna: as tall as what's on it
 PILL_RADIUS, OPEN_RADIUS = 17, 30
 TUCKED_H = 8  # hidden: shrunk into the top edge this far before it disappears
@@ -28,6 +36,12 @@ TUCKED_H = 8  # hidden: shrunk into the top edge this far before it disappears
 HOVER_OPEN_S = 0.18  # resting on the pill this long opens it (passing over doesn't)
 LEAVE_CLOSE_S = 0.45  # after the mouse leaves an island it opened on hover
 REQUEST_S = 14.0  # "show my projects" keeps it open this long (longer while the mouse is on it)
+
+# The ghost pill (over an app): opacity out of 255, and how it opens.
+GHOST_ALPHA = 105  # see-through enough to read the tab under it
+NEAR_ALPHA = 40  # the pointer is on it: nearly gone, so you see what you're clicking
+EDGE_OPEN_S = 0.45  # held against the top edge on it this long opens it
+EDGE_PX = 3  # "against the top edge": within this many logical pixels of it
 
 
 @dataclass(frozen=True)
@@ -44,6 +58,9 @@ class Inputs:
     music: bool  # something is playing in another app
     voice_running: bool
     idle_pill: bool = False  # show the pill while idle (else hidden until she's active)
+    # A ghost pill (over an app): hovered_s counts only time held against the top edge,
+    # and opening takes EDGE_OPEN_S of it.
+    ghost: bool = False
 
 
 @dataclass(frozen=True)
@@ -69,8 +86,8 @@ def decide(i: Inputs, page: str, opened_by: str | None) -> tuple[Target, str | N
         return Target("open", "donna", "a reminder is due"), "alert"
     if opened_by and held:
         return Target("open", page, "held open"), opened_by
-    if i.hovered_s is not None and i.hovered_s >= HOVER_OPEN_S:
-        return Target("open", page, "hovered"), "hover"
+    if i.hovered_s is not None and i.hovered_s >= (EDGE_OPEN_S if i.ghost else HOVER_OPEN_S):
+        return Target("open", page, "held at the top edge" if i.ghost else "hovered"), "hover"
     if opened_by == "hover" and i.left_s is not None and i.left_s < LEAVE_CLOSE_S:
         return Target("open", page, "mouse just left"), "hover"
     if i.fullscreen:
@@ -90,6 +107,23 @@ def size(target: Target, i: Inputs, voice_h: int) -> tuple[int, int]:
     if i.music or i.alerts:
         return PILL_WIDE
     return PILL
+
+
+def ghosted(target: Target, app_under: bool) -> bool:
+    """A pill with an app under it is a ghost: see-through, and clicks go to the app."""
+    return target.mode == "pill" and app_under
+
+
+def alpha(ghost: bool, pointer_on: bool) -> int:
+    """The window's opacity (0-255): solid, a ghost, or a ghost with the pointer on it."""
+    if not ghost:
+        return 255
+    return NEAR_ALPHA if pointer_on else GHOST_ALPHA
+
+
+def overlaps(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
+    """Do two (left, top, right, bottom) rectangles share any area?"""
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
 
 def radius(target: Target, h: int) -> int:
@@ -120,6 +154,7 @@ _WHICH = {
     "music": "music", "the music": "music", "now playing": "music", "player": "music",
     "what's playing": "music", "song": "music",
     "projects": "projects", "project": "projects", "my projects": "projects",
+    "notes": "notes", "my notes": "notes", "note": "notes", "the notes": "notes",
     "donna": "donna", "conversation": "donna", "chat": "donna",
 }  # fmt: skip
 _HIDE = re.compile(r"^(?:hide|close|dismiss)\s+(?:the\s+)?(?:island|dashboard|panel)$", re.I)
@@ -142,6 +177,7 @@ PAGE_REPLIES = {
     "today": "Here's today.",
     "music": "Here's what's playing.",
     "projects": "Here are your projects.",
+    "notes": "Here are your notes.",
     "donna": "Here.",
     "hide": "Okay.",
 }

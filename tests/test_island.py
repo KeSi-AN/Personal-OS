@@ -120,6 +120,33 @@ def test_the_spring_settles_on_its_target_and_keeps_its_speed_when_the_target_mo
     assert s.settled and abs(s.x - 50.0) < 0.5
 
 
+# --- over an app: the ghost pill (ADR-083) ----------------------------------------------------
+
+
+def test_a_pill_over_an_app_is_a_see_through_click_through_ghost():
+    """The browser's tabs under the pill couldn't be clicked (16 Nov)."""
+    pill, opened = L.Target("pill", "today", ""), L.Target("open", "today", "")
+    assert L.ghosted(pill, app_under=True) and not L.ghosted(pill, app_under=False)
+    assert not L.ghosted(opened, app_under=True)  # open, you're using it: solid
+    assert L.alpha(False, False) == 255
+    assert L.alpha(True, False) == L.GHOST_ALPHA
+    assert L.alpha(True, True) == L.NEAR_ALPHA < L.GHOST_ALPHA  # pointer on it: see under it
+
+
+def test_a_ghost_opens_only_when_held_against_the_top_edge_a_while():
+    """Resting on a tab under it (as long as a normal hover) mustn't open it."""
+    assert L.decide(inputs(ghost=True, hovered_s=0.3), "today", None)[0].mode == "pill"
+    target, by = L.decide(inputs(ghost=True, hovered_s=L.EDGE_OPEN_S), "notes", None)
+    assert (target.mode, target.page, by) == ("open", "notes", "hover")
+    assert L.decide(inputs(hovered_s=0.3), "today", None)[0].mode == "open"  # not a ghost
+
+
+def test_overlap():
+    assert L.overlaps((0, 0, 100, 40), (50, 0, 150, 34))
+    assert not L.overlaps((0, 100, 100, 200), (0, 0, 100, 34))  # a window lower down
+    assert not L.overlaps((0, 0, 50, 40), (50, 0, 150, 34))  # touching isn't overlapping
+
+
 # --- voice: "show my projects" ----------------------------------------------------------------
 
 
@@ -132,6 +159,8 @@ def test_the_spring_settles_on_its_target_and_keeps_its_speed_when_the_target_mo
         ("can you show the music", "music"),
         ("open now playing", "music"),
         ("Hide the island.", "hide"),
+        ("show my notes", "notes"),
+        ("open the notes", "notes"),
         ("show my resume", None),  # a file: the router's job
         ("open brave", None),
     ],
@@ -202,6 +231,61 @@ def test_today_and_projects_cards(home: Path, config: Config):
     assert t["todos"][0]["text"] == "write the refresh test" and t["todos"][0]["overdue"]
     (p,) = island_data.projects(w.conn, now)
     assert p["name"] == "auth-service" and p["next_todo"] == "write the refresh test"
+
+
+def test_todos_can_be_ticked_off_and_back_on(home: Path, config: Config):
+    """The to-dos on Today couldn't be ticked (16 Nov)."""
+    from personal_os.projects import items
+
+    env = Env(home, config)
+    tid = items.add(env.conn, env.clock, None, "todo", title="water the plants")
+    (shown,) = island_data.today(env.conn, env.clock.now())["todos"]
+    assert shown["id"] == tid
+    assert island_data.set_todo(env.conn, env.clock, tid, True)
+    assert island_data.today(env.conn, env.clock.now())["todos"] == []
+    assert island_data.set_todo(env.conn, env.clock, tid, False)  # a mis-click, undone
+    assert [t["text"] for t in island_data.today(env.conn, env.clock.now())["todos"]] == [
+        "water the plants"
+    ]
+
+
+def test_a_typed_todo_with_a_time_gets_it_as_its_due_time(home: Path, config: Config):
+    from personal_os.projects import items
+
+    env = Env(home, config)
+    assert island_data.add_todo(env.conn, env.clock, "call mum tomorrow at 5pm") == ""
+    assert island_data.add_todo(env.conn, env.clock, "buy 2") == ""  # not a time
+    assert island_data.add_todo(env.conn, env.clock, "   ") == "Type what to do."
+    got = {t.title: t.due for t in items.todos(env.conn)}
+    assert got["call mum"] is not None and got["buy 2"] is None
+
+
+def test_notes_are_added_and_listed_newest_first(home: Path, config: Config):
+    from personal_os.projects import items
+
+    env = Env(home, config)
+    assert island_data.add_note(env.conn, env.clock, "idea: dark mode for the brief") == ""
+    env.clock.advance(60)
+    assert island_data.add_note(env.conn, env.clock, "ask Ravi about the invoice",
+                                project="no-such-project") == ""  # fmt: skip
+    items.add(env.conn, env.clock, None, "note", title="found it", body="x", source="auto")
+    assert island_data.add_note(env.conn, env.clock, "") == "Type a note."
+    n = island_data.notes(env.conn, env.clock.now())
+    assert [x["text"] for x in n["notes"]] == [
+        "ask Ravi about the invoice", "idea: dark mode for the brief",
+    ]  # newest first; Donna's own ('auto') aren't shown  # fmt: skip
+    assert all(x["project"] == "" for x in n["notes"])  # an unknown project: the inbox
+
+
+def test_the_island_api_writes_and_reads_notes(home: Path, config: Config):
+    isl = island.Island(config)
+    assert isl.api.add("note", "remember the milk") == ""
+    assert isl.api.add("todo", "send the deck by friday") == ""
+    assert isl.api.add("photo", "x") == "Can't add that here."
+    assert [n["text"] for n in isl.api.cards("notes")["notes"]] == ["remember the milk"]
+    (todo,) = isl.api.cards("today")["todos"]
+    assert todo["text"] == "send the deck" and todo["due"]
+    assert isl.api.todo(todo["id"], True) and isl.api.cards("today")["todos"] == []
 
 
 def test_music_without_the_browser_says_so(tmp_path: Path):

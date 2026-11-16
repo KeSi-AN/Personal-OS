@@ -90,18 +90,23 @@ def detect(text: str) -> Proposal | None:
     m = _LEAD.match(text.strip())
     if not m:
         return None
-    rest = m["rest"].strip()
-    when = ""
-    w = _WHEN.search(rest)
-    if w and w.start() > 0:
-        when = w["when"].strip()
-        rest = rest[: w.start()].strip(" ,")
+    rest, when = split_when(m["rest"])
     rest = re.sub(r"\s*,?\s*(?:please|for sure|definitely)$", "", rest, flags=re.I).strip()
     if len(rest.split()) < 2 or _NOT_A_TASK.match(rest):
         return None
     if not when and _COMPUTER_NOW.match(rest):
         return None
     return Proposal(text=rest[:300], when=when[:40])
+
+
+def split_when(text: str) -> tuple[str, str]:
+    """ "call mum tomorrow 5pm" -> ("call mum", "tomorrow 5pm"); ("water plants", "") when
+    it ends with no time. Used for spoken commitments and to-dos typed on the island."""
+    rest = text.strip()
+    w = _WHEN.search(rest)
+    if w and w.start() > 0:
+        return rest[: w.start()].strip(" ,"), w["when"].strip()[:40]
+    return rest, ""
 
 
 def _clock(word: str, day: datetime) -> datetime:
