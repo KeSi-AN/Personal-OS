@@ -126,7 +126,7 @@ class VoiceConfig(_Section):
     echo_cancel: bool = True
     # Quietest sound level (RMS) that counts as speech; `personal-os voice mic` shows yours.
     mic_floor: float = Field(0.002, gt=0, lt=0.5)
-    vad_silence_ms: int = Field(600, ge=200, le=3000)  # quiet this long ends your turn
+    vad_silence_ms: int = Field(800, ge=200, le=3000)  # quiet this long ends your turn
     router_threshold: float = Field(0.85, gt=0.5, le=1.0)  # name match needed to act at once
     # wake: while she talks, "Donna" (stops and listens) or "stop talking" / "never mind"
     # (just stops), the hotkey and the popup interrupt her: as smart speakers do. voice: any
@@ -139,6 +139,12 @@ class VoiceConfig(_Section):
     windows_voice: str = "Microsoft Zira Desktop"  # female, US English; or Hazel (UK)
     popup: bool = True  # show a small window with the transcript and reply for each turn
     popup_position: Literal["bottom-right", "top-right", "bottom-left", "top-left"] = "bottom-right"
+    # island: a pill at the top of the screen that opens into Donna, Today, Music and
+    # Projects (ADR-082); corner: the older window in a corner, only during a turn.
+    popup_style: Literal["island", "corner"] = "island"
+    # When Donna isn't active: hidden (it drops down from the top when you call her or ask
+    # for a page) or a small pill always at the top, which also opens on hover.
+    island_idle: Literal["hidden", "pill"] = "hidden"
     popup_autoclose_s: float = Field(5.0, ge=1, le=120)
     followup_s: float = Field(10.0, ge=0, le=20)  # listen this long after a reply (JARVIS: 10)
     # Other apps (music, a video) play at this share of their volume during a turn, so she

@@ -61,6 +61,16 @@ def no_real_popup(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
 
 
 @pytest.fixture(autouse=True)
+def no_real_island(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Tests never start the island process; starts are recorded here instead."""
+    from personal_os.interfaces import island
+
+    started: list[str] = []
+    monkeypatch.setattr(island, "_spawn", lambda: started.append("island"))
+    return started
+
+
+@pytest.fixture(autouse=True)
 def no_real_app(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Tests never open the desktop app or a browser; what would open is recorded here."""
     from personal_os.interfaces import app, tray

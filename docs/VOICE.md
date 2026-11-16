@@ -60,7 +60,21 @@ followup_s = 6.0   # seconds to listen after a reply; 0 turns follow-ups off
 
 Follow-ups keep the microphone open a few seconds longer after each reply. Audio still stays in memory and is never written to disk, and the tone and popup show when it's listening. Set `followup_s = 0` if you'd rather press the hotkey every time.
 
-## The popup
+## The island
+
+Donna lives at the top of the screen, like the Mac's Dynamic Island. Nothing is there while she's idle: when you say "Donna", press the hotkey, ask for a page or a reminder comes due, a black island drops down from the top edge at the centre of the screen your mouse is on, and slides back up into it when you're done. `voice.island_idle = "pill"` keeps a small pill there instead (the time, a dot for Donna, bars while music plays), which also opens when you rest the pointer on it.
+
+- **With the pill kept** (`island_idle = "pill"`), rest the pointer on it and it grows open; move away and it shrinks back.
+- **Typing:** click in the box on the Donna page and type; Enter sends it.
+- **While she's talking**, say "Donna" to stop her and talk, or "stop talking" / "never mind" to just stop her.
+- **Say "Donna"** (or press the hotkey) and it opens on the **Donna** page, which is the popup below: what you said, her reply, questions, reminders, the box to type in, Talk, Stop, Pin.
+- **Swipe** sideways with two fingers on the touchpad, click the **‹ ›** arrows, the page names or the dots, or press **← →** once you've clicked it, to move between **Donna**, **Today** (time worked, what's coming up, to-dos), **Music** (what's playing in the browser, with play, pause, next) and **Projects** (where you left off, the next to-do). **Open full ↗** opens that page of the dashboard.
+- **Say "show my projects"**, "show today", "show the music" or "hide the island".
+- It hides while a full-screen app, game or video is on its screen, unless you call her or a reminder comes due.
+
+The cards are read from your history only while you look at them; the pill shows nothing from it. `voice.popup_style = "corner"` brings back the corner popup below, opened only during a turn. Set `POS_ISLAND_DEBUG=1` before running `python -m personal_os.interfaces.island` to see its decisions.
+
+## The popup (corner style)
 
 When a turn starts (the hotkey, the wake word, or talking over a reply), a small window opens in the bottom-right corner, on top, without taking the keyboard from what you're doing. It shows:
 

@@ -369,3 +369,117 @@ def test_stopped_is_logged_once(home: Path, config: Config):
     v, _h = voice_for(env, "stop")
     v.converse("wake")
     assert history(env.config.runtime_dir)[-1]["route"] == "stopped by you"
+
+
+# --- 16 Nov: Settings couldn't be closed; real requests dropped as "no wake word" -----------
+
+
+def test_close_settings_finds_windows_settings(home: Path, config: Config, monkeypatch):
+    monkeypatch.setattr(apps_mod, "installed", lambda *_a, **_k: [InstalledApp("Settings", "ms")])
+    env = Env(home, config)
+    env.desktop.open_windows = [
+        WindowInfo(7, "Settings", "normal", "SystemSettings.exe"),  # a UWP app's real program
+        WindowInfo(8, "Settings - Google Chrome", "normal", "chrome.exe"),  # not this one
+    ]
+    out = env.ex.request("close_app", {"app": "Settings"}, origin=Origin.USER)
+    assert out.ok, out.message
+    assert [w.handle for w in env.desktop.open_windows] == [8]
+
+
+def test_a_clear_request_is_not_thrown_away_for_missing_the_name(home: Path, config: Config):
+    env = Env(home, config)
+    v, _h = voice_for(env, "Open calculator.")
+    from tests.test_voice_fastpath import INDEX
+
+    v.index._index = INDEX
+    v.barge_frames = [np.zeros(512, np.float32)]  # the wake word's audio was handed over
+    ran: list[Any] = []
+    v.run_intent = lambda intent, text: ran.append(intent.calls) or "Opening Calculator."  # type: ignore[method-assign,assignment,func-returns-value]
+    v.respond("wake")
+    assert ran == [[("open_app", {"app": "Calculator"})]]
+    v2, _h = voice_for(Env(home.parent / "h3", config), "and you open it")
+    v2.barge_frames = [np.zeros(512, np.float32)]
+    v2.respond("wake")
+    assert history(v2.cfg.runtime_dir)[-1]["route"] == "no wake word in it"  # a stray phrase
+
+
+def test_donna_heard_over_her_reply_unless_she_said_it(home: Path, config: Config):
+    """While she talks the wake word listens to the raw mic (the echo canceller squashes you
+    too); her own "I'm Donna" mustn't wake her."""
+    v, _h = voice_for(Env(home, config))
+    v.state, v.said_last = "speaking", "I'm Donna, your assistant."
+    v._woke([])
+    assert v.triggers.empty() and not v.interrupt.is_set()
+    v.said_last = "Here's what I found."
+    v._woke([])
+    assert v.triggers.get_nowait() == "wake" and v.interrupt.is_set()
+
+
+def test_the_wake_word_hears_the_raw_mic_while_she_talks():
+    import contextlib
+    import queue
+    import threading
+
+    from personal_os.voice.engine import Frame
+
+    clean, raw = np.zeros(512, np.float32), np.ones(512, np.float32)
+    talking = [True, False]  # she's talking for the first frame, not the second
+    frames: queue.Queue[Frame] = queue.Queue()
+    for t in (1.0, 2.0):
+        frames.put(Frame(clean, 0.1, 0.1, t, raw))
+
+    class Engine:
+        @contextlib.contextmanager
+        def subscribe(self) -> Any:
+            yield frames
+
+    w = wake.VoskWake.__new__(wake.VoskWake)
+    w.engine, w.stop = Engine(), threading.Event()
+    fed: list[float] = []
+
+    def feed(audio: np.ndarray) -> None:
+        fed.append(float(audio[0]))
+        talking.pop(0)
+        if not talking:
+            w.stop.set()
+
+    w.feed = feed  # type: ignore[method-assign]
+    w.speaking = lambda: talking[0]
+    w._run()  # the real loop: it picks the stream
+    assert fed == [1.0, 0.0]  # raw mic while she talks, echo-cancelled otherwise
+    assert w.heard_until == 2.0
+
+
+# --- 16 Nov: "opens smart meter clean in VS code" looked only in E:/Personal-OS --------------
+
+
+def test_opens_as_whisper_writes_it_is_still_open():
+    from personal_os.voice import router
+    from tests.test_voice_fastpath import INDEX
+
+    for said in ("Opens Brave.", "opened brave", "opening brave"):
+        intent = router.route(said, INDEX)
+        assert intent is not None and intent.calls == [("open_app", {"app": "Brave"})], said
+
+
+def test_a_folder_name_said_with_spaces_is_found_in_your_folders(home: Path, config: Config):
+    from personal_os.actions.base import ActionError
+
+    env = Env(home, config)
+    (env.work / "smartmeter-clean").mkdir()
+    paths = env.ex.paths
+    for said in ("smart meter clean", "Smart Meter-Clean", "smartmeter-clean"):
+        assert Path(paths.locate(said)) == (env.work / "smartmeter-clean").resolve(), said
+    with pytest.raises(ActionError, match="nothing called 'no such thing' in your folders"):
+        paths.check(paths.locate("no such thing"), must_exist=True)
+
+
+def test_your_folders_come_before_the_folder_voice_started_in(
+    home: Path, config: Config, monkeypatch: pytest.MonkeyPatch
+):
+    env = Env(home, config)
+    (env.work / "notes").mkdir()
+    elsewhere = home.parent / "voice-started-here"
+    (elsewhere / "notes").mkdir(parents=True)
+    monkeypatch.chdir(elsewhere)
+    assert Path(env.ex.paths.locate("notes")) == (env.work / "notes").resolve()

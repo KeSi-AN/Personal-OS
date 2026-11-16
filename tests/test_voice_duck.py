@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,11 @@ def test_other_apps_are_turned_down_for_a_turn_and_back_after(tmp_path: Path):
     )
     d = Ducker(tmp_path, 0.2, sessions=lambda: [brave, spotify, quiet])
     with d.turn():
+        # Turned down alongside listening, not before it: a moment later.
+        for _ in range(100):
+            if (tmp_path / FILE).exists():
+                break
+            time.sleep(0.01)
         assert brave.SimpleAudioVolume.level == pytest.approx(0.16)
         assert spotify.SimpleAudioVolume.level == pytest.approx(0.2)
         assert quiet.SimpleAudioVolume.level == 0.0  # muted apps are left alone

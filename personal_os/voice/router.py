@@ -146,7 +146,7 @@ def choose(answer: str, intent: Intent, *, threshold: float = THRESHOLD) -> Inte
 
 def _clean(text: str) -> str:
     # Hint words can come back glued to the verb: "OpenBrave." -> "Open Brave."
-    text = re.sub(r"\b((?i:open|launch|start|show|close))(?=[A-Z])", r"\1 ", text.strip())
+    text = re.sub(r"\b((?i:opens?|launch|start|show|close))(?=[A-Z])", r"\1 ", text.strip())
     t = strip_polite(strip_wake(text)).strip()
     t = re.sub(r"[.!?,]+$", "", t)
     # Courtesies after the request: "open brave for me", "lock the screen please".
@@ -265,7 +265,10 @@ def _decide(said: str, entries: list[Entry], threshold: float) -> tuple[Match | 
 
 
 _OPEN = re.compile(
-    r"^(?:open|launch|start|run|show me|bring up|pull up)\s+(?:up\s+)?(?:the\s+|my\s+)?(.+)$",
+    # "opens"/"opened": how Whisper sometimes writes "open" (16 Nov: "opens smart meter clean
+    # in VS code" missed this and went to the model, which looked in the wrong folder).
+    r"^(?:open(?:s|ed|ing)?|launch(?:es)?|start|run|show me|bring up|pull up)\s+(?:up\s+)?"
+    r"(?:the\s+|my\s+)?(.+)$",
     re.I,
 )
 # "open X in/on/with/using Y": split at the last connector, so names with "on" or "in" survive.

@@ -252,12 +252,14 @@ def frames(n: int, level: float = 0.01) -> list[np.ndarray]:
 
 
 def test_the_turn_ends_after_the_silence_and_keeps_the_start():
-    probs = [0.0] * 5 + [0.9] * 10 + [0.0] * 30
+    # A sentence's worth of speech (over a second): the usual pause ends it. (After only a
+    # word or two it waits longer: test_voice_engine, the pause after a word or two.)
+    probs = [0.0] * 5 + [0.9] * 40 + [0.0] * 30
     ep = Endpointer(FakeVAD(probs), silence_ms=320)  # type: ignore[arg-type]
-    states = [ep.feed(f) for f in frames(45)]
+    states = [ep.feed(f) for f in frames(75)]
     assert "speaking" in states and "done" in states
     done_at = states.index("done")
-    assert done_at == 5 + 10 + 10 - 1  # 10 quiet frames of 32 ms
+    assert done_at == 5 + 40 + 10 - 1  # 10 quiet frames of 32 ms
     audio = ep.audio()
     assert audio is not None and len(audio) >= 10 * FRAME  # speech plus the pre-roll
 

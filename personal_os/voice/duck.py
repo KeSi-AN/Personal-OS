@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -61,14 +62,28 @@ class Ducker:
     @contextlib.contextmanager
     def turn(self) -> Iterator[None]:
         """Other apps down for the duration; nested use keeps the first (outer) duck."""
-        if self.saved or self.level >= 1.0:
+        if self.saved or self.level >= 1.0 or getattr(self, "_busy", False):
             yield
             return
-        self.duck()
+        # Turned down alongside, not before: listening starts at once (the first look at
+        # the mixer takes ~0.3 s, which was cut from what you said). Down and back up in the
+        # same thread: Windows' audio objects belong to the thread that made them.
+        self._busy = True
+        done = threading.Event()
+
+        def work() -> None:
+            self.duck()
+            done.wait()
+            self.restore()
+
+        worker = threading.Thread(target=work, name="pos-duck", daemon=True)
+        worker.start()
         try:
             yield
         finally:
-            self.restore()
+            done.set()
+            worker.join(3.0)
+            self._busy = False
 
     def duck(self) -> None:
         for s in self.sessions():

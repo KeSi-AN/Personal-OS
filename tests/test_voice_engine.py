@@ -177,3 +177,66 @@ def test_saying_only_donna_then_listens_for_the_request(home: Path, config: Conf
     entry = history(env.config.runtime_dir)[-1]
     assert entry["trigger"] == "wake" and entry["heard"] == "what time is it"
     assert entry["reply"].startswith("It's ")
+
+
+# --- the wake word's tap: nothing said while the turn starts is lost (16 Nov) -------------------
+
+
+def test_a_tap_starts_from_a_moment_ago_and_keeps_everything_after():
+    from personal_os.voice.engine import AudioEngine, Frame
+
+    eng = AudioEngine(echo_cancel=False)
+    for i in range(10):  # frames published before the wake word was heard
+        eng._publish(Frame(np.full(512, i, np.float32), 0.0, 0.0, float(i)))
+    q = eng.tap(since=6.0)  # the wake word's audio ended with frame 6
+    for i in range(10, 13):  # ...and the turn is still starting
+        eng._publish(Frame(np.full(512, i, np.float32), 0.0, 0.0, float(i)))
+    got = [q.get_nowait().t for _ in range(q.qsize())]
+    assert got == [7.0, 8.0, 9.0, 10.0, 11.0, 12.0]  # no gap, no repeats
+    eng.untap(q)
+    eng._publish(Frame(np.zeros(512, np.float32), 0.0, 0.0, 13.0))
+    assert q.empty()
+
+
+def test_the_recorder_carries_on_from_the_tap(monkeypatch):
+    from personal_os.voice import audio
+    from personal_os.voice.engine import AudioEngine, Frame
+
+    class VAD:  # speech in frames marked 1, silence in 0
+        def reset(self) -> None: ...
+
+        def speech_prob(self, frame: np.ndarray, *, gain: float = 1.0) -> float:
+            return 0.9 if frame[0] > 0.5 else 0.0
+
+    monkeypatch.setattr(audio, "shared_vad", lambda: VAD())
+    eng = AudioEngine(echo_cancel=False)
+    q = eng.tap()
+    loud = np.full(512, 0.9, np.float32)
+    for n in range(80):  # "open brave" said while the turn was starting, then quiet
+        f = loud if n < 15 else np.zeros(512, np.float32)
+        eng._publish(Frame(f, 0.05, 0.0, float(n)))
+    # (a short utterance gets the patient pause, ~40 quiet frames, before the turn ends; and
+    # the test stops itself if the queue runs dry rather than wait for more audio forever)
+    out = audio.record_from_engine(
+        eng, lambda: q.empty(), preroll=[loud] * 5, tap=q, silence_ms=300
+    )
+    assert out is not None and out.size >= 20 * 512  # the wake word's 5 frames + all 15 after
+
+
+def test_a_pause_after_a_word_or_two_is_not_the_end():
+    """ "Play ..." was cut off at the pause, and "Alakalova" became a turn of its own."""
+    from personal_os.voice.audio import Endpointer
+
+    class VAD:
+        def speech_prob(self, frame: np.ndarray, *, gain: float = 1.0) -> float:
+            return 0.9 if frame[0] > 0.5 else 0.0
+
+    loud, quiet = np.full(512, 0.9, np.float32), np.zeros(512, np.float32)
+    short = Endpointer(VAD(), silence_ms=800)  # type: ignore[arg-type]
+    states = [short.feed(loud) for _ in range(12)]  # "Play" (~0.4 s)
+    states += [short.feed(quiet) for _ in range(31)]  # a 1 s pause
+    assert states[-1] == "speaking"  # still waiting for the rest
+    long = Endpointer(VAD(), silence_ms=800)  # type: ignore[arg-type]
+    for _ in range(60):  # two seconds of speech
+        long.feed(loud)
+    assert [long.feed(quiet) for _ in range(25)][-1] == "done"  # then 0.8 s ends it

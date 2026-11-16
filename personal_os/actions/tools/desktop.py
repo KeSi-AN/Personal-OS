@@ -228,11 +228,19 @@ class CloseApp(Tool):
                 continue
             exe = _norm(Path(w.exe).stem) if w.exe else ""
             title = _norm(w.title)
-            # By its program first; a title match only for a long, specific name, so
-            # "code" never closes a browser tab titled "Claude Code".
-            if (exe and exe in programs) or (
-                not exe and any(t and title.endswith(t) for t in titles)
-            ):
+            # By its program ("Code.exe"; "SystemSettings.exe" for "settings"), or a window
+            # titled exactly the app's name ("Settings"). A title that only ends with it
+            # counts only when the program isn't known, so "code" never closes a browser tab
+            # titled "Claude Code".
+            by_exe = bool(exe) and (
+                exe in programs or any(len(p) >= 5 and p in exe for p in programs)
+            )
+            by_title = (
+                title in titles
+                or title in programs
+                or (not exe and any(t and title.endswith(t) for t in titles))
+            )
+            if by_exe or by_title:
                 found.append(w)
         if not found:
             raise ActionError(f"{args.app} isn't open")

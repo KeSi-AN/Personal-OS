@@ -13,6 +13,7 @@ import contextlib
 import queue
 from collections import deque
 from collections.abc import Callable, Iterable
+from typing import Any
 
 import numpy as np
 
@@ -28,6 +29,10 @@ MAX_S = 15.0
 PREROLL_MS = 300  # kept from just before speech starts, so the first word isn't clipped
 SPEECH_PROB = 0.5
 MIN_SPEECH_MS = 96  # three frames: a click or a cough isn't a turn
+# A pause after only a word or two ("Donna ...", "Play ...") is someone gathering the rest,
+# not the end: wait this long then (seen: "Play..." cut off, the rest heard as a new turn).
+SHORT_SPEECH_MS = 1000
+PATIENT_SILENCE_MS = 1300
 # Quietest level that counts as speech, whatever the noise. Laptop mic arrays can record
 # normal speech around 0.003-0.01 RMS, so a higher floor makes them "hear nothing".
 MIC_FLOOR = 0.002
@@ -80,6 +85,9 @@ class Endpointer:
         self.quiet = 0
         self.seen = 0
         self.probs: list[float] = []
+        self.spoken = 0  # frames of speech since it started (not counting a preroll)
+        self.short = max(1, SHORT_SPEECH_MS // FRAME_MS)
+        self.patient = max(self.silence_frames, PATIENT_SILENCE_MS // FRAME_MS)
 
     def is_speech(self, frame: np.ndarray) -> bool:
         self.peaks.append(float(np.max(np.abs(frame))) if frame.size else 0.0)
@@ -101,7 +109,9 @@ class Endpointer:
             return "timeout" if self.seen >= self.start_frames else "waiting"
         self.frames.append(frame)
         self.quiet = 0 if speech else self.quiet + 1
-        if self.quiet >= self.silence_frames or len(self.frames) >= self.max_frames:
+        self.spoken += speech
+        enough = self.silence_frames if self.spoken >= self.short else self.patient
+        if self.quiet >= enough or len(self.frames) >= self.max_frames:
             return "done"
         return "speaking"
 
@@ -191,9 +201,12 @@ def record_from_engine(
     start_timeout_s: float = START_TIMEOUT_S,
     preroll: Iterable[np.ndarray] = (),
     levels: list[float] | None = None,
+    tap: Any = None,
 ) -> np.ndarray | None:
     """record_utterance on the audio engine's echo-cancelled frames (voice/engine.py): the
-    speakers (a reply still fading, a video) are out of what's recorded."""
+    speakers (a reply still fading, a video) are out of what's recorded. `tap`: a queue the
+    engine has been filling since the wake word (engine.tap), read instead of a new one, so
+    what you said while the turn was starting isn't lost."""
     vad = shared_vad()
     if vad is None:
         return None
@@ -204,7 +217,8 @@ def record_from_engine(
         started=bool(first),
     )  # fmt: skip
     ep.frames.extend(first)
-    with engine.subscribe() as q:  # type: ignore[attr-defined]
+    source = contextlib.nullcontext(tap) if tap is not None else engine.subscribe()  # type: ignore[attr-defined]
+    with source as q:
         while not should_stop():
             try:
                 frame = q.get(timeout=1.0)

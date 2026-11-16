@@ -41,7 +41,10 @@ def test_other_speech_still_isnt_the_wake_word(heard: str):
     assert not mentions_wake(heard, ["donna"])
 
 
-def test_a_wake_turn_tells_whisper_her_name(home: Path, config: Config):
+def test_a_wake_turn_does_not_prompt_whisper_with_her_name(home: Path, config: Config):
+    """Told "Hey Donna," Whisper took the name as already said and left it out ("Open
+    calculator."), and the request was thrown away as having no wake word (16 Nov). Its
+    sound-alikes are recognised instead."""
     v, _h = voice_for(Env(home, config))
     got: list[dict[str, Any]] = []
 
@@ -52,7 +55,7 @@ def test_a_wake_turn_tells_whisper_her_name(home: Path, config: Config):
 
     v.stt = v.stt_fast = Model()  # type: ignore[assignment]
     assert v.transcribe(object(), wake=True) == "Donna, open Brave."
-    assert got[-1] == {"vocabulary": "Hey Donna,"}
+    assert got[-1] == {}
     v.transcribe(object())
     assert got[-1] == {}  # other turns are transcribed as before
 
@@ -68,4 +71,6 @@ def test_the_wake_listen_passes_it_on(home: Path, config: Config, monkeypatch: p
     v.transcribe = lambda _a, wake=False, accurate=False: seen.append(wake) or "Donna."  # type: ignore[method-assign,assignment,func-returns-value]
     v.listen([], wake=True)
     v.listen()
-    assert seen == [True, False]
+    # Heard only "Donna": the wake listen carries on for the request and hears it all again
+    # (still told the name); the plain listen isn't.
+    assert seen == [True, True, False]

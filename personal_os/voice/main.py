@@ -104,6 +104,8 @@ class Voice:
         self.stopped_by_you = False  # this turn was stopped on purpose, not cut by a new one
         self.unanswered = False  # a yes-or-no question got no answer at all this turn
         self.said_last = ""  # the last thing she said aloud
+        self.bridge: Any = None  # the mic, tapped from the wake word until the recording
+        self.last_listen: dict[str, Any] = {}  # the last recording's length and loudness
         from personal_os.voice.duck import Ducker
 
         # Music and videos turned down for a conversation, so she hears you over them.
@@ -192,9 +194,32 @@ class Voice:
 
     def _woke(self, preroll: list[Any]) -> None:
         """The wake word was heard: listen, starting from the beginning of that sentence, so
-        "Donna, open Brave" in one breath keeps "open Brave". Mid-reply, it stops the reply."""
+        "Donna, open Brave" in one breath keeps "open Brave". Mid-reply, it stops the reply.
+        The mic is tapped from the wake word's last frame at once: the turn takes a moment to
+        start (a beep, music turned down, the island), and what you said meanwhile was lost
+        ("Donna, open Brave" heard as "break")."""
+        if self.state == "speaking" and "donna" in self.said_last.lower():
+            return  # her own reply said her name ("I'm Donna"): not you
+        if self.state != "listening":
+            self.open_bridge(getattr(self.wake, "heard_until", None))
         self.barge_frames = preroll
         self.pressed("wake")
+
+    def open_bridge(self, since: float | None) -> None:
+        """Start buffering the mic now (from `since`), for the recording about to start."""
+        if self.engine is None:
+            return
+        self.close_bridge()
+        try:
+            self.bridge = self.engine.tap(since)
+        except Exception:
+            self.bridge = None
+
+    def close_bridge(self) -> None:
+        q, self.bridge = getattr(self, "bridge", None), None
+        if q is not None and self.engine is not None:
+            with contextlib.suppress(Exception):
+                self.engine.untap(q)
 
     def _stop_talking(self) -> None:
         """ "Stop talking" / "be quiet" while she's thinking or talking: stop, don't listen."""
@@ -278,41 +303,70 @@ class Voice:
         def stopped() -> bool:  # voice shutting down, or this turn stopped (Esc, "stop")
             return self.stop.is_set() or self.interrupt.is_set()
 
+        # One tap on the mic for the whole of this listen (the wake word's, if it opened one):
+        # it keeps filling while a part is transcribed, so a second part ("Donna" ... "open
+        # Brave", "Play" ... "Alakalova") carries on from exactly where the first stopped.
+        # Opening a new one after transcribing lost what was said meanwhile.
+        tap = None
+        if self.engine is not None:
+            tap = (self.bridge if preroll else None) or self.engine.tap()
+            self.bridge = None
+        levels: list[float] = []
+        parts = 0
+
         def record(first: Any, timeout: float) -> Any:
+            nonlocal parts
+            parts += 1
             if self.engine is not None:  # echo-cancelled: a reply still fading isn't you
                 return record_from_engine(
-                    self.engine, stopped, floor=v.mic_floor,
-                    silence_ms=v.vad_silence_ms, preroll=first or (), start_timeout_s=timeout,
+                    self.engine, stopped, floor=v.mic_floor, silence_ms=v.vad_silence_ms,
+                    preroll=first or (), start_timeout_s=timeout, tap=tap, levels=levels,
                 )  # fmt: skip
             return record_utterance(
                 stopped, floor=v.mic_floor, silence_ms=v.vad_silence_ms,
-                preroll=first or (), start_timeout_s=timeout,
+                preroll=first or (), start_timeout_s=timeout, levels=levels,
             )  # fmt: skip
 
         self.recording.set()  # the wake word rests while a request is recorded
+        audio = None
         try:
             audio = record(preroll, start_timeout_s or START_TIMEOUT_S)
             if audio is None:
-                self.last_audio = None
                 return ""
             text = self.transcribe(audio, wake=wake)
+            # Only "Donna" so far: the request comes after a breath. Carry on listening.
+            if wake and text and not _without_wake(text):
+                more = record(None, START_TIMEOUT_S)
+                if more is not None:
+                    audio = np.concatenate([audio, more])
+                    text = self.transcribe(audio, wake=wake)
             # Cut off ("open the-"), or a reminder whose message hasn't come yet ("remind me
             # in a minute ... to stretch"): a pause isn't the end, so listen a moment more.
             if incomplete(text) or needs_more(text):
-                more = record(None, 2.0)
+                more = record(None, 2.5)
                 if more is not None:
                     audio = np.concatenate([audio, more])
                     text = self.transcribe(audio, wake=wake)
         finally:
+            if tap is not None:
+                self.engine.untap(tap)
             self.recording.clear()
-        self.last_audio = audio
+            self.last_audio = audio
+            # Numbers only, for `voice log`: how much was recorded, how loud, in how many parts.
+            self.last_listen = {
+                "s": round(len(audio) / 16_000, 1) if audio is not None else 0.0,
+                "peak": round(max(levels), 4) if levels else 0.0,
+                "parts": parts,
+            }
         return text
 
     def transcribe(self, audio: Any, *, accurate: bool = False, wake: bool = False) -> str:
-        """`wake`: the audio starts with the wake word. Whisper is then given her name as a
-        prompt ("Hey Donna,"), so it writes "Donna" rather than "Don't know"."""
+        """`wake`: the audio starts with the wake word. Whisper is NOT told her name: given
+        "Hey Donna," as a prompt it took the name as already said and left it out ("Open
+        calculator."), so real requests were thrown away as having no wake word (16 Nov).
+        Its sound-alikes ("Don't know", "Done up") are recognised instead (_WAKE_ONLY)."""
         model = self.stt if accurate else self.stt_fast
-        name = f"Hey {self.cfg.agent.name}," if wake else ""
+        name = ""
         if not self.cfg.voice.stt_hints:  # as in JARVIS: no prompt, just English
             return model.transcribe(audio, vocabulary=name) if name else model.transcribe(audio)
         names = self.index.current().names_for_hints(40)
@@ -404,10 +458,24 @@ class Voice:
 
     # --- fast path ---------------------------------------------------------------------------
 
+    def sync_island(self) -> None:
+        """Keep the island (the pill at the top of the screen) running while it's wanted."""
+        from personal_os.interfaces import island
+
+        if not island.wanted(self.cfg) or not modes.effects(self.cfg.runtime_dir).popup:
+            return
+        try:
+            island.launch(self.cfg)
+        except Exception as exc:
+            _log.warning("island not started", extra={"error": type(exc).__name__})
+
     def fast(self, text: str) -> str | None:
         """A command the router can run without the LLM; the reply to say, or None."""
         from personal_os.voice import router
 
+        shown = self.show_page(text)
+        if shown is not None:
+            return shown
         reminder = self.reminder(text)
         if reminder is not None:
             return reminder
@@ -456,6 +524,34 @@ class Voice:
                     question="Sorry, which one? " + intent.question,
                 )  # fmt: skip
         return self.run_intent(intent, text)
+
+    def clearly_a_request(self, text: str) -> bool:
+        """Something you'd only say to her ("open calculator", "show my projects"): never
+        thrown away as a false wake, even when the transcript lost the name."""
+        from personal_os.context.route import route
+        from personal_os.interfaces.island_logic import page_request
+        from personal_os.voice import router
+
+        if page_request(text):
+            return True
+        intent = router.route(text, self.index.current(), threshold=self.cfg.voice.router_threshold)
+        if intent is not None and (intent.sure or intent.guesses):
+            return True
+        return route(text) in ("do", "briefing", "remember")
+
+    def show_page(self, text: str) -> str | None:
+        """ "Show my projects", "show today", "hide the island": the island opens on that
+        page (or closes). None when it isn't one of these, or there's no island."""
+        from personal_os.interfaces import island
+        from personal_os.interfaces.island_logic import PAGE_REPLIES, page_request
+
+        if not island.wanted(self.cfg):
+            return None
+        page = page_request(text)
+        if page is None:
+            return None
+        island.request_page(self.cfg.runtime_dir, page)
+        return PAGE_REPLIES[page]
 
     def ask_aloud(self, question: str, *, shown: str | None = None) -> str:
         """Ask (on screen as it's said), then beep, so it's clear it's waiting for you."""
@@ -815,6 +911,7 @@ class Voice:
         self.ducker.recover()  # volumes a crash left turned down
         threading.Thread(target=self.warm, name="pos-warm", daemon=True).start()
         self.sync_wake()
+        self.sync_island()
         threading.Thread(target=self.watch_stop, name="pos-stop", daemon=True).start()
         self.write_status("ready")
         _log.info("voice ready", extra={"fields": {"hotkey": self.hotkey_error is None}})
@@ -832,6 +929,7 @@ class Voice:
                     if self.engine is not None and self.engine.output_changed():
                         self.restart_audio()  # TV to headphones: cancel the new device
                     self.sync_wake()
+                    self.sync_island()
                     self.stt.unload_if_idle()
                     self.stt_fast.unload_if_idle()
                     self.write_status("ready")
@@ -980,6 +1078,7 @@ class Voice:
                 if (
                     trigger == "wake" and carry and text
                     and not mentions_wake(text, list(self.cfg.voice.wake_words))
+                    and not self.clearly_a_request(text)
                 ):  # fmt: skip
                     # The wake word fired, but there's no "Donna" in what was recorded: it
                     # was something else (a video, people talking), so it isn't acted on.
@@ -987,12 +1086,15 @@ class Voice:
                     entry["route"] = "no wake word in it"
                     return False
                 if trigger == "wake" and text and not _without_wake(text):
-                    text = self.listen()  # just "Donna": now the request itself
+                    self.speaker.earcon("listen")  # still only "Donna": ask with the tone
+                    text = self.listen()
                 elif trigger == "wake" and text:
                     text = _without_wake(text)  # what came before "Donna" isn't the request
             assert text is not None
             entry["heard"] = text
             entry["listen_s"] = round(time.monotonic() - t0, 1)
+            if self.last_listen:
+                entry["audio"] = dict(self.last_listen)
             if not text:
                 entry["route"] = "nothing heard"
                 if trigger == "followup":
@@ -1097,6 +1199,8 @@ class Voice:
                 entry["trace"] = self.last_trace
             if not entry.get("quiet"):
                 record_history(self.cfg.runtime_dir, entry)
+            if self.triggers.empty():  # (one waiting is the next turn's: it reads that tap)
+                self.close_bridge()  # a wake word's tap the recording didn't use
             if self.stopped_by_you:
                 ended = True  # a stopped exchange isn't something to build on later
             if entry.get("heard") and "error" not in entry and not ended:
@@ -1240,9 +1344,12 @@ def _without_wake(text: str) -> str:
 
 def _launch_popup(cfg: Config) -> None:
     try:
-        from personal_os.interfaces import popup
+        from personal_os.interfaces import island, popup
 
-        popup.launch(cfg)
+        if island.wanted(cfg):
+            island.launch(cfg)  # the island is already up; this starts it if it died
+        else:
+            popup.launch(cfg)
     except Exception as exc:
         _log.warning("voice popup not opened", extra={"error": type(exc).__name__})
         with contextlib.suppress(Exception):  # even the import may be what failed

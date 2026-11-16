@@ -99,6 +99,7 @@ class VoskWake:
         self.ring: deque[np.ndarray] = deque(maxlen=int(RING_S * 16000 / 512))
         self.last_wake = 0.0
         self.last: dict[str, Any] = {}  # what the last wake or stop heard, for `voice status`
+        self.heard_until: float | None = None  # monotonic time of the last frame fed
         self.thread: threading.Thread | None = None
         self._rec: Any = None
 
@@ -127,7 +128,12 @@ class VoskWake:
                             frame = q.get(timeout=0.5)
                         except queue.Empty:
                             continue
-                        self.feed(frame.audio)
+                        self.heard_until = frame.t  # the wake word's audio ends here
+                        # While she talks, the echo canceller squashes you too (it can't
+                        # tell two voices apart at once), so "Donna" never got through: the
+                        # raw mic then. She's kept from waking herself in voice/main._woke.
+                        talking = frame.raw is not None and self.speaking()
+                        self.feed(frame.raw if talking else frame.audio)
             else:
                 self._run_own_mic()
         except Exception as exc:

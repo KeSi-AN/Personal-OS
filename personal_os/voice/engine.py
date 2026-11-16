@@ -49,6 +49,7 @@ AEC_SLACK_S = 0.10  # fed this much earlier than measured: the canceller covers 
 ESTIMATE_EVERY_S = 1.0
 MATCH = 0.5  # envelope correlation needed to trust a delay estimate
 SUBSCRIBER_FRAMES = 400  # ~13 s buffered per subscriber before old frames are dropped
+RECENT_FRAMES = 64  # ~2 s of published frames kept, so a tap can start from a moment ago
 
 
 @dataclass
@@ -59,6 +60,7 @@ class Frame:
     raw_rms: float
     ref_rms: float  # how loud the speakers were (0 if nothing playing or no reference)
     t: float  # monotonic time of the frame's end
+    raw: np.ndarray | None = None  # the same 32 ms before echo cancelling
 
 
 def rms(x: np.ndarray) -> float:
@@ -144,6 +146,7 @@ class AudioEngine:
         self.delay = DelayEstimator(initial_delay_s)
         self.ref = _Reference()
         self.subscribers: list[queue.Queue[Frame]] = []
+        self.recent: deque[Frame] = deque(maxlen=RECENT_FRAMES)
         self.sub_lock = threading.Lock()
         self.running = threading.Event()
         self.aec_active = False
@@ -235,17 +238,33 @@ class AudioEngine:
 
     @contextlib.contextmanager
     def subscribe(self) -> Iterator[queue.Queue[Frame]]:
-        q: queue.Queue[Frame] = queue.Queue(maxsize=SUBSCRIBER_FRAMES)
-        with self.sub_lock:
-            self.subscribers.append(q)
+        q = self.tap()
         try:
             yield q
         finally:
-            with self.sub_lock:
+            self.untap(q)
+
+    def tap(self, since: float | None = None) -> queue.Queue[Frame]:
+        """A queue of frames from now on, or from just after monotonic time `since` (frames
+        of the last ~2 s are put in first): nothing between `since` and now is missed.
+        Close it with untap()."""
+        q: queue.Queue[Frame] = queue.Queue(maxsize=SUBSCRIBER_FRAMES)
+        with self.sub_lock:
+            if since is not None:
+                for f in self.recent:
+                    if f.t > since:
+                        q.put_nowait(f)
+            self.subscribers.append(q)
+        return q
+
+    def untap(self, q: queue.Queue[Frame]) -> None:
+        with self.sub_lock:
+            if q in self.subscribers:
                 self.subscribers.remove(q)
 
     def _publish(self, frame: Frame) -> None:
         with self.sub_lock:
+            self.recent.append(frame)
             subs = list(self.subscribers)
         for q in subs:
             try:
@@ -286,7 +305,9 @@ class AudioEngine:
             if have >= FRAME:
                 audio = np.concatenate(pending)
                 raw = np.concatenate(raw_pending)
-                self._publish(Frame(audio[:FRAME], rms(raw[:FRAME]), max(ref_levels), t))
+                self._publish(
+                    Frame(audio[:FRAME], rms(raw[:FRAME]), max(ref_levels), t, raw[:FRAME])
+                )
                 rest, raw_rest = audio[FRAME:], raw[FRAME:]
                 pending = [rest] if rest.size else []
                 raw_pending = [raw_rest] if raw_rest.size else []

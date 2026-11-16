@@ -232,6 +232,10 @@ def voice_log(last: Annotated[int, typer.Option(help="How many exchanges.")] = 1
         )
         typer.echo(f"{when}  [{x.get('trigger', '?')}] heard: {x.get('heard') or '(nothing)'}")
         typer.echo(f"          as: {x.get('route', '?')}   ({times})")
+        if x.get("audio"):  # how much was recorded, and how loud: "peak" under ~0.01 is faint
+            a = x["audio"]
+            parts = f", in {a['parts']} parts" if a.get("parts", 1) > 1 else ""
+            typer.echo(f"          audio: {a.get('s')} s recorded, peak {a.get('peak')}{parts}")
         if x.get("asked"):
             typer.echo(
                 f"          asked: {x['asked'].get('question')}  you: {x['asked'].get('answer')}"
