@@ -65,6 +65,7 @@ class ToolContext:
     action_id: str = ""
     cancel: threading.Event = field(default_factory=threading.Event)
     provider: LLMProvider | None = None
+    request_text: str = ""  # what you said or typed, when the call came from a request
 
     @property
     def undo_dir(self) -> Path:

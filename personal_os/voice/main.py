@@ -87,6 +87,8 @@ class Voice:
         self.next_request: str | None = None
         self.announced = ""  # said before an action ran: not said again after
         self.wake_dirty = False  # a press ended a rest: restart the wake word after the turn
+        self.was_resting = False  # what watch_rest saw last
+        self.rest_announce = False  # say "I'm back" when the current rest runs out
         self.streamed = ""  # said while the model was still writing the reply
         self.first_said_s: float | None = None  # when that began, from the turn's start
         self.turn_t0 = time.monotonic()  # when the current turn started
@@ -180,6 +182,7 @@ class Voice:
             if rest.end_rest(self.cfg.runtime_dir):
                 _log.info("rest ended by a press")
                 self.wake_dirty = True  # the wake word comes back after this turn
+                self.rest_announce = self.was_resting = False  # no "I'm back": you're here
         elif self.resting():
             return  # the wake word heard while resting (it was just stopping): ignored
         if self.state in ("thinking", "speaking"):
@@ -479,15 +482,58 @@ class Voice:
         except Exception as exc:
             _log.warning("island not started", extra={"error": type(exc).__name__})
 
-    def take_rest(self, minutes: int) -> str:
+    def take_rest(self, minutes: int, *, announce: bool = False) -> str:
         """Listening on hold for `minutes`: the wake word stops and no follow-up is listened
-        for, until the hotkey or the island's Talk button (or the time running out)."""
+        for, until the hotkey or the island's Talk button (or the time running out).
+        `announce`: say "I'm back" when it runs out ("... and remind me once you're ready")."""
         from personal_os.voice import rest
 
-        rest.start(self.cfg.runtime_dir, minutes)
+        rest.start(self.cfg.runtime_dir, minutes, announce=announce)
         self.sync_wake()
-        _log.info("resting", extra={"fields": {"minutes": minutes}})
-        return rest.reply(minutes)
+        _log.info("resting", extra={"fields": {"minutes": minutes, "announce": announce}})
+        return rest.reply(minutes, announce)
+
+    def watch_rest(self) -> None:
+        """Once a second while idle: a rest that ran out brings the wake word back now (not at
+        the next 10 s check), and says "I'm back" if that was asked for. A rest ended by a
+        press says nothing (you're already talking to her). It also sees a rest the agent's
+        take_rest tool started, which writes the same file."""
+        from personal_os.voice import rest
+
+        rt = self.cfg.runtime_dir
+        now_resting = rest.resting(rt)
+        if now_resting:
+            self.rest_announce = rest.announces(rt)
+            if self.wake is not None:
+                self.sync_wake()  # started outside a turn of ours: stop listening now
+        elif self.was_resting:
+            self.sync_wake()
+            if self.rest_announce:
+                self.rest_announce = False
+                self.say(rest.BACK)
+        self.was_resting = now_resting
+
+    def several(self, text: str) -> str | None:
+        """Several requests in one sentence ("pause the music and take 10", "remind me in 5
+        minutes to stretch, then take 5"), when every part is one the rules handle on its own:
+        each is done in the order said, and the replies are joined. None otherwise (the whole
+        sentence goes on, to the agent if no rule takes it), so a reminder's own "and"
+        ("remind me to call mum and dad") is never split."""
+        from personal_os.voice import router
+
+        parts = split_requests(text)
+        if len(parts) < 2:
+            return None
+        index, threshold = self.index.current(), self.cfg.voice.router_threshold
+        whole = router.route(text, index, threshold=threshold)
+        if whole is not None and whole.sure:
+            return None  # one command after all ("turn it up and down"? the router knows)
+        for part in parts:
+            if not handled_by_rules(part, index, threshold):
+                return None
+        replies = [self.fast(part) for part in parts]
+        _log.info("several requests", extra={"fields": {"parts": len(parts)}})
+        return " ".join(r for r in replies if r) or None
 
     def resting(self) -> bool:
         from personal_os.voice import rest
@@ -500,7 +546,10 @@ class Voice:
 
         minutes = rest.parse(text)
         if minutes is not None:  # "take 10", "rest up for 20 minutes" (ADR-085)
-            return self.take_rest(minutes)
+            return self.take_rest(minutes, announce=rest.tell_when_back(text))
+        both = self.several(text)
+        if both is not None:  # "pause the music and take 10": each part by rules, in order
+            return both
         shown = self.show_page(text)
         if shown is not None:
             return shown
@@ -962,6 +1011,7 @@ class Voice:
                 trigger = self.triggers.get(timeout=1.0)
             except queue.Empty:
                 self.speak_queued()
+                self.watch_rest()
                 if time.monotonic() - last_reload > 10:
                     last_reload = time.monotonic()
                     self.cfg = load_config()
@@ -1157,7 +1207,9 @@ class Voice:
                 self.convo.clear()
                 ended = True
                 return False
-            if incomplete(text):
+            # Cut off by a pause ("Can you open the-"). Typed text can't be: "play" typed in
+            # the island is a whole request (17 Nov: it got no answer at all).
+            if trigger != "typed" and incomplete(text):
                 entry["route"] = "incomplete"
                 self.say(f"Sorry, I only caught: {text.rstrip('-. ')}. Please say it again.")
                 return False
@@ -1404,6 +1456,34 @@ def _launch_popup(cfg: Config) -> None:
 
 SPOKEN_SENTENCES = 2
 MAX_FOLLOWUPS = 8  # a conversation ends after this many follow-ups without a press
+
+
+_JOIN = re.compile(
+    r"\s*(?:,\s*)?\b(?:and\s+then|and\s+also|and|then|also|plus)\b\s*|\s*[,;]\s*", re.I
+)
+
+
+def split_requests(text: str) -> list[str]:
+    """ "Pause the music and take 10" -> ["Pause the music", "take 10"]; one part when there's
+    no "and", "then" or comma. The wake word in front isn't a part."""
+    from personal_os.context.route import strip_wake
+
+    body = strip_wake(text).strip().rstrip(".!?")
+    return [p.strip(" .,!?") for p in _JOIN.split(body) if p and p.strip(" .,!?")]
+
+
+def handled_by_rules(part: str, index: Any, threshold: float) -> bool:
+    """Would the rules alone do this part, start to finish (no model, no question back)?"""
+    from personal_os.actions import reminder_parse
+    from personal_os.voice import rest, router
+
+    if rest.parse(part) is not None:
+        return True
+    r = reminder_parse.parse(part)
+    if r is not None:
+        return not r.missing
+    intent = router.route(part, index, threshold=threshold)
+    return intent is not None and intent.sure and bool(intent.calls)
 
 
 class SentenceSpeaker:

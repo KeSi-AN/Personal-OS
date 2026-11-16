@@ -167,6 +167,7 @@ class Executor:
             log("blocked", decision.reason)
             return Outcome(aid, tool.name, "blocked", decision.reason)
         ctx = self._context(aid)
+        ctx.request_text = request_text or ""  # your words, for a tool that checks them
         try:
             preview = tool.preview(args, ctx)
         except ActionError as exc:

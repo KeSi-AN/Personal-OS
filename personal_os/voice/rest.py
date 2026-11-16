@@ -68,9 +68,24 @@ def _minutes(span: str | None) -> int:
     return n * 60 if re.search(r"\b(hours?|hrs?|hr)\b", s) else n
 
 
+# "... and remind me once you're ready", "... and tell me when you're back", "..., let me know
+# when you're done": she says she's back when the rest ends (not a reminder called "take 5",
+# which is what the agent made of it, 17 Nov).
+_BACK = re.compile(
+    r"\s*,?\s*(?:and\s+)?(?:remind|tell|let|ping|wake)\s+me(?:\s+know)?\s+(?:once|when|after)\s+"
+    r"(?:you(?:'re|\s+are|\s+get)|you'?ve\s+(?:had|taken)\s+it)\s*(?:ready|back|done|up)?\W*$",
+    re.I,
+)
+
+
+def tell_when_back(text: str) -> bool:
+    """Does the request ask her to say when she's back ("... and remind me once you're ready")?"""
+    return bool(_BACK.search(" ".join(text.split())))
+
+
 def parse(text: str) -> int | None:
     """Minutes of rest asked for, or None if this isn't a request for a rest."""
-    t = " ".join(text.strip().split())
+    t = _BACK.sub("", " ".join(text.strip().split()))
     m = _TAKE.match(t)
     if m:
         return max(1, min(MAX_MIN, _minutes(m["span"] or m["span2"])))
@@ -80,12 +95,22 @@ def parse(text: str) -> int | None:
     return None
 
 
-def start(runtime_dir: Path, minutes: int, now: float | None = None) -> float:
-    """Rest for `minutes`; returns when it ends (epoch seconds)."""
+def start(
+    runtime_dir: Path, minutes: int, now: float | None = None, *, announce: bool = False
+) -> float:
+    """Rest for `minutes`; returns when it ends (epoch seconds). `announce`: say "I'm back"
+    when it ends by itself (voice watches for that)."""
     until = (now if now is not None else time.time()) + minutes * 60
     runtime_dir.mkdir(parents=True, exist_ok=True)
-    runtime.write_json_atomic(runtime_dir / REST_FILE, {"until": until, "minutes": minutes})
+    runtime.write_json_atomic(
+        runtime_dir / REST_FILE, {"until": until, "minutes": minutes, "announce": announce}
+    )
     return until
+
+
+def announces(runtime_dir: Path) -> bool:
+    """Was the current rest asked to end with "I'm back"?"""
+    return bool((runtime.read_json(runtime_dir / REST_FILE) or {}).get("announce"))
 
 
 def until(runtime_dir: Path, now: float | None = None) -> float | None:
@@ -124,8 +149,13 @@ def left_min(runtime_dir: Path, now: float | None = None) -> int:
     return max(1, int((end - (now if now is not None else time.time()) + 59) // 60))
 
 
-def reply(minutes: int) -> str:
+def reply(minutes: int, announce: bool = False) -> str:
     span = "an hour" if minutes == 60 else (f"{minutes} minutes" if minutes != 1 else "a minute")
     if minutes > 60 and minutes % 60 == 0:
         span = f"{minutes // 60} hours"
+    if announce:
+        return f"Okay, taking {span}. I'll tell you when I'm back, or press Talk or the hotkey."
     return f"Okay, taking {span}. Press Talk or the hotkey when you need me."
+
+
+BACK = "I'm back. Say Donna when you need me."

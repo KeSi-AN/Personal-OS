@@ -80,6 +80,10 @@ The cards are read from your history only while you look at them; the pill shows
 
 Say **"Donna, take 10"**, **"take five"**, **"rest up for 20 minutes"**, **"take a breather"** or **"be quiet for half an hour"**, and Donna stops listening for that long: the wake word is off and she doesn't listen for a follow-up after replies. "Take a break" with no time is 10 minutes, and the longest rest is 4 hours. On their own, "be quiet" and "stop listening" still just stop her talking.
 
+Add **"... and remind me once you're ready"** (or "tell me when you're back") and she says **"I'm back"** when the time is up. Woken early by a press, she says nothing, since you're already there.
+
+**Several things at once:** "pause the music and take 10", "remind me in 5 minutes to stretch, then take 5". When every part is something the rules do by themselves, all of them run, in the order said, at once. Otherwise the whole sentence goes to Donna's agent, which can also rest her (`take_rest`) alongside other things ("take a break and play something calm"). A reminder's own "and" ("remind me to call mum and dad") is never split.
+
 To wake her early, press the **hotkey** or **Talk** on the island (it says **Wake & talk** while she rests): she's awake again and listening at once. When the time is up she's back by herself. Reminders still pop up and are said while she rests. The pill shows **Resting · 8 min** with a grey dot.
 
 ## The island after you use it

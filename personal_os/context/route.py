@@ -53,12 +53,13 @@ _CHAT = re.compile(
     r"cool|great|nice|bye|goodbye|good night|you there|are you there)\W*$",
     re.I,
 )
-# Words a request can't end on: "can you open the-" was cut off.
+# Words a request can't end on: "can you open the-" was cut off. Not "play": alone, it means
+# "play my music" (ADR-084), and "play" said on its own got no answer (17 Nov).
 _DANGLING = frozenset(
     {
         *("the", "a", "an", "to", "and", "or", "of", "in", "on", "at", "for", "with"),
         *("my", "your", "this", "that", "what", "which"),
-        *("open", "start", "play", "set", "turn", "take", "show", "tell"),
+        *("open", "start", "set", "turn", "take", "show", "tell"),
     }
 )
 

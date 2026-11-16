@@ -186,6 +186,58 @@ class Conversation(Tool):
         )
 
 
+class RestArgs(Args):
+    minutes: int = Field(10, ge=1, le=240, description="how long: 'take 5' is 5")
+    tell_when_back: bool = Field(
+        False,
+        description="false unless they said 'tell me / remind me when you're back or ready'",
+    )
+
+
+class TakeRest(Tool):
+    """ "Take 10", as part of a longer request (voice/rest.py, ADR-085). Alone, the rules
+    handle it before the agent; with other requests in the sentence the agent does both
+    ("take 5 and remind me once you're ready" became a reminder called "take 5", 17 Nov)."""
+
+    name = "take_rest"
+    summary = (
+        "Donna stops listening for N minutes ('take 10', 'rest up for 20 minutes', 'take a "
+        "break'): no wake word, until the hotkey or Talk; tell_when_back if they asked to be told"
+    )
+    tier = Tier.LOW
+    reversible = True
+    args_model = RestArgs
+
+    def preview(self, args: RestArgs, ctx: ToolContext) -> str:
+        return f"stop listening for {args.minutes} minutes"
+
+    def run(self, args: RestArgs, ctx: ToolContext) -> Result:
+        from personal_os.voice import rest
+
+        # "I'm back" only when your words asked for it: qwen3:4b sets tell_when_back for
+        # nearly any rest (checked 17 Nov), so with a request to read, that decides.
+        back = rest.tell_when_back(ctx.request_text) if ctx.request_text else args.tell_when_back
+        rest.start(ctx.config.runtime_dir, args.minutes, announce=back)
+        return Result(rest.reply(args.minutes, back), undo={"tool": "end_rest", "args": {}})
+
+
+class EndRest(Tool):
+    name = "end_rest"
+    summary = "(undo) Donna listens again"
+    tier = Tier.LOW
+    internal = True
+    args_model = NoArgs
+
+    def preview(self, args: NoArgs, ctx: ToolContext) -> str:
+        return "start listening again"
+
+    def run(self, args: NoArgs, ctx: ToolContext) -> Result:
+        from personal_os.voice import rest
+
+        rest.end_rest(ctx.config.runtime_dir)
+        return Result("Listening again")
+
+
 class ModeArgs(Args):
     mode: str = Field(description="work, gaming or chill (leisure)")
 

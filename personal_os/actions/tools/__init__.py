@@ -28,6 +28,8 @@ def build_registry(config: Config | None = None) -> Registry:
         agent.AboutMe(),
         agent.Conversation(),
         agent.SetMode(),
+        agent.TakeRest(),
+        agent.EndRest(),
         projects.ProjectCreate(),
         projects.ProjectAddSource(),
         projects.ProjectNote(),

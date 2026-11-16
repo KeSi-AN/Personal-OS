@@ -63,6 +63,7 @@ Which tool:
 - reminders -> list_reminders, set_reminder, update_reminder, cancel_reminder
 - about yourself (wake word, your voice, settings, what's connected) -> about_me
 - "gaming / work / chill / leisure mode" -> set_mode
+- "take 10", "rest up for 20 minutes", "take a break" -> take_rest (never a reminder called "take 10"); tell_when_back only if they said "tell me / remind me when you're back"
 - projects: "add these tabs / this tab group to X" -> project_add_source; notes -> project_note; to-dos -> todo_add, todo_done; "what's in X" -> project_items; "resume X" / "pick X back up" -> project_resume
 - "hold me to it" / "keep me to that" -> commit_to; "what did I say I'd do" / "what's due" -> answer from the list of what they said they'd do, if one is shown; "I did it" / "done with X" -> todo_done
 - what we talked about / what you said earlier -> conversation

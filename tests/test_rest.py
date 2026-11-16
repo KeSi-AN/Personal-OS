@@ -169,3 +169,105 @@ def test_the_pointer_on_it_keeps_it_open(config: Config):
     isl.used_at, isl.hover_since = now - 30, now - 30
     isl._decide(now)
     assert isl.target.mode == "open"
+
+
+# --- several requests in one sentence (17 Nov) --------------------------------------------------
+
+
+def test_take_5_and_remind_me_once_youre_ready_is_a_rest_that_says_im_back():
+    """It became a reminder called "take 5", and you had to say "take 5" again (17 Nov)."""
+    said = "take 5 and remind me once you're ready"
+    assert rest.parse(said) == 5 and rest.tell_when_back(said)
+    assert rest.parse("take 10 and tell me when you're back") == 10
+    assert not rest.tell_when_back("take 5")
+
+
+def ready_voice(home: Path, config: Config) -> Any:
+    from tests.test_voice_fastpath import INDEX
+
+    v, h = voice_for(Env(home, config))
+    v.index._index = INDEX
+    v.last_audio = None
+    return v, h
+
+
+def test_the_logged_sentence_now_rests_and_announces(home: Path, config: Config):
+    v, _h = ready_voice(home, config)
+    reply = v.fast("take 5 and remind me once you're ready")
+    assert reply == rest.reply(5, announce=True) and v.resting()
+    assert rest.announces(v.cfg.runtime_dir)
+
+
+def test_several_rule_requests_in_one_sentence_are_all_done(home: Path, config: Config):
+    from personal_os.actions import reminders
+    from personal_os.storage.db import open_db
+
+    v, _h = ready_voice(home, config)
+    reply = v.fast("remind me in 5 minutes to stretch, then take 5")
+    assert reply is not None and "stretch" in reply and "taking 5 minutes" in reply
+    assert v.resting()
+    conn = open_db(v.cfg.db_path)
+    assert [r.text for r in reminders.pending(conn)] == ["stretch"]
+    conn.close()
+
+
+def test_a_reminders_own_and_is_never_split(home: Path, config: Config):
+    from personal_os.actions import reminders
+    from personal_os.storage.db import open_db
+
+    v, _h = ready_voice(home, config)
+    v.fast("remind me in 10 minutes to call mum and dad")
+    conn = open_db(v.cfg.db_path)
+    assert [r.text for r in reminders.pending(conn)] == ["call mum and dad"]
+    conn.close()
+    assert not v.resting()
+
+
+def test_a_part_the_rules_cant_do_sends_the_whole_sentence_on(home: Path, config: Config):
+    v, _h = ready_voice(home, config)
+    assert v.several("take 10 and write me a poem about rain") is None
+    assert not v.resting()  # nothing was done halfway
+
+
+def test_the_agent_can_rest_her_alongside_other_things(home: Path, config: Config):
+    from personal_os.actions.base import Origin
+
+    env = Env(home, config)
+    o = env.ex.request("take_rest", {"minutes": 5, "tell_when_back": True}, origin=Origin.PLANNED,
+                       request_text="take 5 and remind me once you're ready")  # fmt: skip
+    assert o.ok and rest.resting(env.config.runtime_dir)
+    assert rest.announces(env.config.runtime_dir)
+    assert env.ex.undo(o.action_id).ok and not rest.resting(env.config.runtime_dir)
+
+
+def test_im_back_is_said_when_the_time_runs_out_not_after_a_press(home: Path, config: Config):
+    v, h = ready_voice(home, config)
+    rest.start(v.cfg.runtime_dir, 1, now=time.time() - 30, announce=True)
+    v.watch_rest()
+    assert v.was_resting and v.rest_announce and h.said == []
+    rest.start(v.cfg.runtime_dir, 1, now=time.time() - 120, announce=True)  # now it's over
+    v.watch_rest()
+    assert h.said == [rest.BACK] and not v.was_resting
+    rest.start(v.cfg.runtime_dir, 5, announce=True)
+    v.watch_rest()
+    v.pressed("hotkey")  # woken by you: no "I'm back"
+    v.watch_rest()
+    assert h.said == [rest.BACK]
+
+
+def test_play_on_its_own_is_a_whole_request():
+    """Typed "play" got no answer: it was taken for a cut-off sentence (17 Nov)."""
+    from personal_os.context.route import incomplete
+
+    assert not incomplete("play")
+    assert incomplete("can you open the")
+
+
+def test_im_back_only_when_your_words_asked_for_it(home: Path, config: Config):
+    """qwen3:4b set tell_when_back for almost any rest; your words decide (17 Nov)."""
+    from personal_os.actions.base import Origin
+
+    env = Env(home, config)
+    env.ex.request("take_rest", {"minutes": 30, "tell_when_back": True}, origin=Origin.PLANNED,
+                   request_text="I need to focus, take 30 and pause the music")  # fmt: skip
+    assert rest.resting(env.config.runtime_dir) and not rest.announces(env.config.runtime_dir)
