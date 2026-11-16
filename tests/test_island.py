@@ -311,3 +311,26 @@ def test_typing_has_a_window_to_focus(config: Config):
     isl.api._window = Win()
     isl.api.focus()
     assert calls == ["handle"] and isl.focused
+
+
+def test_the_island_ends_with_the_voice_process_that_started_it():
+    """A restart left the old island running on old code: it missed the stop request, which
+    the daemon clears within a second (17 Nov). Now it watches the voice process instead."""
+    import os
+    import subprocess
+    import sys
+
+    import psutil
+
+    me = psutil.Process(os.getpid())
+    assert island.owner_alive(os.getpid(), me.create_time())
+    assert not island.owner_alive(os.getpid(), me.create_time() - 3600)  # a reused pid
+    done = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
+                          capture_output=True, text=True, check=True)  # fmt: skip
+    assert not island.owner_alive(int(done.stdout), None)  # it has ended
+
+
+def test_voice_tells_the_island_who_started_it():
+    import os
+
+    assert island.spawn_env()[island.OWNER_ENV] == str(os.getpid())

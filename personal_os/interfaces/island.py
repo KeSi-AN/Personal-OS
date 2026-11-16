@@ -98,6 +98,30 @@ def launch(cfg: Config) -> str:
     return "opened"
 
 
+OWNER_ENV = "POS_ISLAND_OWNER"  # the voice process that started the island (its pid)
+OWNER_CHECK_S = 2.0
+
+
+def owner_alive(pid: int, started: float | None) -> bool:
+    """Is the process that started the island still the same one, running? A pid can be
+    reused after it ends, so its start time must match the one seen when the island began."""
+    import psutil
+
+    try:
+        p = psutil.Process(pid)
+        return p.is_running() and (started is None or abs(p.create_time() - started) < 1.0)
+    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+        return False
+
+
+def spawn_env() -> dict[str, str]:
+    """The island's environment: it's told which voice process started it (this one), and
+    ends once that one has (Island._watch_owner)."""
+    from personal_os.core import spawn
+
+    return spawn.child_env({OWNER_ENV: str(os.getpid())})
+
+
 def _spawn() -> None:
     """The island process, windowless and detached (tests replace this)."""
     import subprocess
@@ -106,7 +130,7 @@ def _spawn() -> None:
 
     subprocess.Popen(
         spawn.module_command("personal_os.interfaces.island"),
-        env=spawn.child_env(),
+        env=spawn_env(),
         creationflags=spawn.creation_flags(detached=True),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -743,6 +767,12 @@ class Island:
         threading.Thread(target=self.run, name="pos-island", daemon=True).start()
         threading.Thread(target=self._watch_config, name="pos-island-cfg", daemon=True).start()
         threading.Thread(target=self._watch_music, name="pos-island-music", daemon=True).start()
+        owner = os.environ.get(OWNER_ENV, "")
+        if owner.isdigit():  # started by voice (by hand, for development, it has no owner)
+            threading.Thread(
+                target=self._watch_owner, args=(int(owner),), name="pos-island-owner",
+                daemon=True,
+            ).start()  # fmt: skip
 
     def _watch_config(self) -> None:
         """Gone when voice is turned off, or the popup style changes back to the corner."""
@@ -758,6 +788,22 @@ class Island:
                 os._exit(0)
             self.api._auto.seconds = cfg.voice.popup_autoclose_s
             self.cfg = cfg  # island_idle, the browser, ... as you change them
+
+    def _watch_owner(self, pid: int) -> None:
+        """Gone a moment after the voice process that started it: voice stopped, Personal OS
+        stopped or restarted, or voice crashed. The next voice process starts a new island,
+        on whatever code is current. (The stop request alone was missed: the daemon clears it
+        within a second, and the config check runs every 10 s.)"""
+        import psutil
+
+        try:
+            started: float | None = psutil.Process(pid).create_time()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            os._exit(0)  # already gone before the island got going
+        while True:
+            time.sleep(OWNER_CHECK_S)
+            if not owner_alive(pid, started):
+                os._exit(0)
 
 
 def page_html() -> str:
