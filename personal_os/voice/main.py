@@ -528,9 +528,13 @@ class Voice:
         each is done in the order said, and the replies are joined. None otherwise (the whole
         sentence goes on, to the agent if no rule takes it), so a reminder's own "and"
         ("remind me to call mum and dad") is never split."""
-        from personal_os.voice import router
+        from personal_os.actions import music
+        from personal_os.voice import rest, router
 
-        parts = split_requests(text)
+        said = split_requests(text)
+        parts = rest.with_back(music.open_then_play(said))
+        if len(said) >= 2 and len(parts) == 1:
+            return self.fast(parts[0])  # "open youtube music and play X there": one request
         if len(parts) < 2:
             return None
         index, threshold = self.index.current(), self.cfg.voice.router_threshold
@@ -565,6 +569,9 @@ class Voice:
         reminder = self.reminder(text)
         if reminder is not None:
             return reminder
+        song = self.play_song(text)
+        if song is not None:
+            return song
         threshold = self.cfg.voice.router_threshold
         intent = router.route(text, self.index.current(), threshold=threshold)
         if intent is None or not intent.sure:
@@ -610,6 +617,17 @@ class Voice:
                     question="Sorry, which one? " + intent.question,
                 )  # fmt: skip
         return self.run_intent(intent, text)
+
+    def play_song(self, text: str) -> str | None:
+        """ "Play blood sport by sleep token": play_media by rules (actions/music.py), from
+        your music source unless your words name another. None when it isn't a song by name."""
+        from personal_os.actions import music
+
+        song = music.song_request(text)
+        if song is None:
+            return None
+        query, site = song
+        return self.run_tool("play_media", {"query": query, "site": site}, text)
 
     def clearly_a_request(self, text: str) -> bool:
         """Something you'd only say to her ("open calculator", "show my projects"): never
@@ -1553,7 +1571,7 @@ def split_requests(text: str) -> list[str]:
 
 def handled_by_rules(part: str, index: Any, threshold: float) -> bool:
     """Would the rules alone do this part, start to finish (no model, no question back)?"""
-    from personal_os.actions import reminder_parse
+    from personal_os.actions import music, reminder_parse
     from personal_os.voice import rest, router
 
     if rest.parse(part) is not None:
@@ -1561,6 +1579,8 @@ def handled_by_rules(part: str, index: Any, threshold: float) -> bool:
     r = reminder_parse.parse(part)
     if r is not None:
         return not r.missing
+    if music.song_request(part) is not None:
+        return True
     intent = router.route(part, index, threshold=threshold)
     return intent is not None and intent.sure and bool(intent.calls)
 

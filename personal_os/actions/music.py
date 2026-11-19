@@ -104,6 +104,74 @@ def named(site: str, source: str) -> Source:
     return chosen(source) or SOURCES["youtube_music"]
 
 
+# --- "play <song>" by rules -------------------------------------------------------------------
+
+_PLAY_SONG = re.compile(
+    r"^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:go\s+ahead\s+and\s+)?play\s+"
+    r"(?:the\s+song\s+|the\s+track\s+|song\s+|track\s+|music\s*[-:,]\s*)?(?P<q>.+?)"
+    r"(?:\s+(?:on|in|from|using|via)\s+(?:the\s+)?(?P<site>youtube\s*music|yt\s*music|"
+    r"ytmusic|youtube|yt|spotify|my\s+music(?:\s+app)?|music))?"
+    r"(?:\s+(?:there|on\s+it|in\s+it|for\s+me|please|now|donna))*\W*$",
+    re.I,
+)
+# "Play" with these isn't a song: the music itself ("play music"), a video or a show, or the
+# player's own controls. Those stay with the router and the agent.
+_NOT_A_SONG = re.compile(
+    r"^(?:(?:some|my|the|a|any)\s+)?(?:music|songs?|tunes?|tracks?|something(?:\s+\w+)?|"
+    r"anything|it|that|this|them|again|it again|that again|next(?:\s+\w+)?|"
+    r"(?:the\s+)?(?:next|previous|last)\s+\w+|previous|music\s+again)$|"
+    r"\b(?:video|videos|episode|movie|film|show|series|podcast|trailer|the tab)\b",
+    re.I,
+)
+_OPEN_SOURCE = re.compile(
+    r"^(?:open|launch|start|go\s+to|bring\s+up)\s+(?:the\s+)?(youtube\s*music|yt\s*music|"
+    r"spotify)(?:\s+app)?$",
+    re.I,
+)
+
+
+def song_request(text: str) -> tuple[str, str] | None:
+    """ "play blood sport by sleep token on youtube music" -> ("blood sport by sleep token",
+    "youtube music"); "music" when no service is named (your chosen source). None when it isn't
+    a song by name ("play music", "play the next episode", "play that video"). The model did
+    this (4-5 s, and once it opened YouTube and searched by hand: 20 Nov bench)."""
+    from personal_os.context.route import normalize, strip_polite, strip_wake
+
+    t = strip_polite(normalize(strip_wake(text))).strip()
+    m = _PLAY_SONG.match(t)
+    if m is None:
+        return None
+    query = m["q"].strip(" ,.-:'\"")
+    if len(query) < 2 or _NOT_A_SONG.search(query):
+        return None
+    said = re.sub(r"\s+", " ", (m["site"] or "").lower())
+    if not said or said.startswith(("my music", "music")):
+        site = "music"
+    elif "music" in said:
+        site = "youtube music"
+    else:
+        site = "spotify" if said == "spotify" else "youtube"
+    return query, site
+
+
+def open_then_play(parts: list[str]) -> list[str]:
+    """ "open youtube music, and play blood sport there" -> ["play blood sport on youtube
+    music"]: play_media opens the service itself (its app or a tab), so opening it first
+    only starts it twice. Other parts are left as they are."""
+    out: list[str] = []
+    i = 0
+    while i < len(parts):
+        opened = _OPEN_SOURCE.match(parts[i].strip())
+        nxt = song_request(parts[i + 1]) if opened and i + 1 < len(parts) else None
+        if opened and nxt is not None and nxt[1] == "music":
+            out.append(f"play {nxt[0]} on {re.sub(r'\s+', ' ', opened[1].lower())}")
+            i += 2
+            continue
+        out.append(parts[i])
+        i += 1
+    return out
+
+
 # --- players ---------------------------------------------------------------------------------
 
 

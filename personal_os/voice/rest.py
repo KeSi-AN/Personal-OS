@@ -83,6 +83,27 @@ def tell_when_back(text: str) -> bool:
     return bool(_BACK.search(" ".join(text.split())))
 
 
+# The same, said as its own part of a longer sentence: "take 5, say hi once you're back, and
+# then pause music" (19 Nov: the agent played a song called "hi").
+_BACK_PART = re.compile(
+    r"^(?:and\s+|then\s+)*(?:say\s+(?:hi|hello|hey)(?:\s+to\s+me)?|greet\s+me|remind\s+me|"
+    r"tell\s+me|let\s+me\s+know|ping\s+me|wake\s+me(?:\s+up)?)\s+(?:once|when|after)\s+"
+    r"you(?:'re|\s+are|\s+get|\s+come)\s*(?:back|ready|done|up)?\W*$",
+    re.I,
+)
+
+
+def with_back(parts: list[str]) -> list[str]:
+    """ "take 5" + "say hi once you're back" -> "take 5 and tell me when you're back": the
+    second part is how the rest ends, not a request of its own. Unchanged without a rest."""
+    if not any(_BACK_PART.match(p.strip()) for p in parts):
+        return parts
+    if not any(parse(p) is not None for p in parts if not _BACK_PART.match(p.strip())):
+        return parts
+    kept = [p for p in parts if not _BACK_PART.match(p.strip())]
+    return [f"{p} and tell me when you're back" if parse(p) is not None else p for p in kept]
+
+
 def parse(text: str) -> int | None:
     """Minutes of rest asked for, or None if this isn't a request for a rest."""
     t = _BACK.sub("", " ".join(text.strip().split()))

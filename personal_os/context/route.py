@@ -48,15 +48,19 @@ _POLITE = re.compile(
     r"i would like you to|go ahead and)\s+",
     re.I,
 )
-# Small talk, answered at once by rules. "hi donna", "wadup" and "how are you" went to the
-# agent, which spent 60-78 s looking at windows and projects for a greeting (19 Nov).
-_CHAT = re.compile(
-    r"^\W*(hi|hello|hey|hey there|hiya|yo|sup|wassup|wadup|whats? ?up|what's up|"
+# Small talk and closings, alone or a few together, answered at once by rules. "hi donna",
+# "wadup" and "how are you" went to the agent, which spent 60-78 s looking at windows and
+# projects for a greeting (19 Nov); "thanks, that's all" ran three project lookups (20 Nov).
+_CHAT_PHRASE = (
+    r"(?:hi|hello|hey|hey there|hiya|yo|sup|wassup|wadup|whats? ?up|what's up|"
     r"how are you(?: doing)?|how's it going|how is it going|how you doing|"
-    r"thanks|thank you|thank you so much|thanks a lot|ok|okay|"
-    r"cool|great|nice|bye|goodbye|good night|you there|are you there)"
-    r"(?:\W+donna)?\W*$",
-    re.I,
+    r"thanks|thank you|thank you so much|thanks a lot|thanks a ton|cheers|ok|okay|"
+    r"cool|great|nice|perfect|awesome|got it|bye|goodbye|good night|see you|see ya|later|"
+    r"you there|are you there|that'?s all|that'?s it|that is all|that'?ll be all|"
+    r"nothing else|i'?m good|all good|no thanks|no thank you|that'?s enough for now)"
+)
+_CHAT = re.compile(
+    rf"^\W*{_CHAT_PHRASE}(?:\W+(?:and\s+|so\s+)?{_CHAT_PHRASE})*(?:\W+donna)?\W*$", re.I
 )
 # Words a request can't end on: "can you open the-" was cut off. Not "play": alone, it means
 # "play my music" (ADR-084), and "play" said on its own got no answer (17 Nov).
@@ -140,11 +144,14 @@ def incomplete(text: str) -> bool:
 
 def chat_reply(text: str) -> str:
     t = strip_wake(text).lower()
-    if re.search(r"thank", t):
+    if re.search(r"that'?s (all|it)|that is all|that'?ll be all|nothing else|i'?m good|"
+                 r"no thank|enough for now", t):  # fmt: skip
+        return "Okay. I'm here if you need me."
+    if re.search(r"thank|cheers", t):
         return "You're welcome."
-    if re.search(r"\b(bye|goodbye|good night)\b", t):
+    if re.search(r"\b(bye|goodbye|good night|see you|see ya|later)\b", t):
         return "Bye."
-    if re.search(r"\b(ok|okay|cool|great|nice)\b", t):
+    if re.search(r"\b(ok|okay|cool|great|nice|perfect|awesome|got it|all good)\b", t):
         return "Okay."
     if re.search(r"how are you|how's it going|how is it going|how you doing|up\b", t):
         return "All good here. What can I do for you?"

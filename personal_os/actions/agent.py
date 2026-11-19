@@ -70,6 +70,7 @@ Which tool:
 - play a song by name -> play_media (site music: their music app); a video -> play_media with site youtube
 - "play music", pause / next / previous the music -> music; what's playing -> whats_playing; a video in a tab -> browser_media
 - search the web, open a site -> browser_open; this page / summarise this tab -> browser_read
+- what's in a tab, what am I watching or reading there -> browser_read with which = words from that tab's title ("fmovies"), not now
 - switch, close or group tabs ("the first three" = positions [1, 2, 3]) -> browser_tab
 - open apps, volume, screenshot, notes, files -> the matching tool
 
@@ -81,6 +82,7 @@ Several requests in one sentence ("pause this and play X"): make all the calls i
 Use the earlier conversation for "it", "those", "that one", "the first three": it says what was
 just talked about.
 Your own earlier replies in the conversation can be wrong (you may have lacked a tool then): decide from the tools you have now, never repeat an old "I can't".
+Never answer that you'll check, look or find out: call the tool now, in this step.
 Only claim what a tool result shows. If no tool can do something, say plainly that you can't
 do it yet; never say you can, and never say you did something no tool did.
 
@@ -303,6 +305,7 @@ def respond(
     seen: dict[str, str] = {}
     gathered: list[str] = []
     final_only = False
+    nudged = False
     for step in range(1, steps + 1):
         if stopped():
             return out
@@ -357,6 +360,13 @@ def respond(
         if plan.decide == "answer" or not plan.calls:
             out.reply = clean(plan.reply or "", 600)
             out.details = getattr(plan, "details", "") or ""
+            if promises(out.reply) and step < steps and not nudged:
+                # "Let me check what's playing there." as the answer: nothing follows a
+                # final reply, so it's asked once more to do the checking (20 Nov bench).
+                nudged = True
+                transcript += "\n\n" + NUDGE
+                out.trace.append(f"step {step}: said it would check without checking")
+                continue
             if out.reply or not gathered:
                 break
             final_only = True  # results but no words: one more call, answer only
@@ -423,6 +433,10 @@ def respond(
     out.streamed = " ".join(streamed)
     if streamed:
         out.trace.append(f"spoke while writing: {len(streamed)} sentence(s)")
+    if promises(out.reply) and acting_count(out.outcomes, executor) == 0:
+        kept = unpromised(out.reply)
+        out.trace.append(f"dropped a promise to check (nothing follows a reply): {out.reply[:120]}")
+        out.reply = kept or "I couldn't find that out."
     said = out.reply
     out.reply = grounded(out.reply, out.outcomes, executor, asking=asking)
     if said and out.reply != said:
@@ -449,6 +463,33 @@ def respond(
         else:
             out.reply = "I'm not sure how to help with that."
     return out
+
+
+NUDGE = (
+    "You said you'd check, but nothing happens after your reply. Call the tool that checks "
+    "now (use_tools), or answer with what you already know."
+)
+_PROMISE = re.compile(
+    r"^(?:(?:ok(?:ay)?|sure|alright|one sec(?:ond)?|one moment|give me a (?:sec|second|moment|"
+    r"minute))[,.!]?\s+)*(?:let me|let's|i'?ll|i will|i'?m going to)\s+(?:just\s+|quickly\s+|"
+    r"go\s+(?:and\s+)?|have\s+a\s+|take\s+a\s+)?(?:check|look|see|find out|pull up|read|search|"
+    r"dig)\b",
+    re.I,
+)
+
+
+def _sentences(text: str) -> list[str]:
+    return [x for x in re.split(r"(?<=[.!?])\s+", text.strip()) if x]
+
+
+def promises(reply: str) -> bool:
+    """Does the reply say it'll check something ("Let me check what's playing there.")?"""
+    return any(_PROMISE.match(x) for x in _sentences(reply))
+
+
+def unpromised(reply: str) -> str:
+    """The reply without its promises to check: a reply is final, so they'd never be kept."""
+    return " ".join(x for x in _sentences(reply) if not _PROMISE.match(x))
 
 
 def _commitments_block(executor: Executor) -> str:

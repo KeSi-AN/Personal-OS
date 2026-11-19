@@ -44,9 +44,11 @@ class Tab:
     audible: bool = False
     song: str = ""
     artist: str = ""
+    active: bool = False  # the tab in front
 
     def as_dict(self) -> dict[str, Any]:
         return {"id": self.id, "url": self.url, "title": self.title, "audible": self.audible,
+                "active": self.active, "window": 1, "index": self.id - 1,
                 "lastAccessed": float(self.id)}  # fmt: skip
 
 
@@ -55,7 +57,8 @@ def default_tabs(playing: bool = True) -> list[Tab]:
         Tab(1, "https://github.com/KeSi-AN/Personal-OS", "Personal-OS - GitHub"),
         Tab(2, "https://music.youtube.com/watch?v=x", "bad luck - YouTube Music", playing,
             "bad luck", "We Came As Romans"),
-        Tab(3, "https://fmovies.example/watch/dune", "Watch Dune Part Two - Fmovies"),
+        Tab(3, "https://fmovies.example/watch/dune", "Watch Dune Part Two - Fmovies",
+            active=True),
     ]  # fmt: skip
 
 
@@ -126,6 +129,20 @@ class World:
 
     # --- the rest ------------------------------------------------------------------------
 
+    def now_windows(self) -> list[Any]:
+        """The open windows as `now` reports them, Brave in front."""
+        from personal_os.context.now import Window
+
+        return [Window(w.exe.removesuffix(".exe"), w.title, i == 0, w.exe)
+                for i, w in enumerate(self.desktop.open_windows)]  # fmt: skip
+
+    def write_tabs(self, runtime_dir: Path) -> None:
+        """The extension's latest tab list, as `now` reads it (runtime/now/tabs-brave.json)."""
+        d = runtime_dir / "now"
+        d.mkdir(parents=True, exist_ok=True)
+        tabs = [t.as_dict() for t in self.tabs]
+        (d / "tabs-brave.json").write_text(json.dumps({"browser": "brave", "tabs": tabs}), "utf-8")
+
     def ask(self, question: str) -> str:
         self.asked.append(question)
         return self.answers.pop(0) if self.answers else ""
@@ -166,6 +183,7 @@ def patched(world_ref: list[World]) -> Iterator[None]:
     from personal_os.actions import apps, desktop
     from personal_os.actions.executor import Executor
     from personal_os.browser import control
+    from personal_os.context import now
     from personal_os.interfaces import app, island, popup, tray
     from personal_os.platform import media_sessions
     from personal_os.voice import duck
@@ -192,6 +210,8 @@ def patched(world_ref: list[World]) -> Iterator[None]:
             (media_sessions, "sessions", lambda *_a, **_k: []),
             (media_sessions, "control", lambda *_a, **_k: None),
             (duck, "_sessions", lambda: []),
+            (now, "windows", lambda *_a: w().now_windows()),
+            (now, "idle_seconds", lambda: 0),
             (voice_main, "mic_muted", lambda: False),
             (popup, "_spawn", lambda *_a: None),
             (island, "_spawn", lambda *_a: None),

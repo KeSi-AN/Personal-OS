@@ -122,6 +122,7 @@ class Bench:
         v.next_request = None
         world = World(self.apps, tabs=default_tabs(case.playing), answers=list(case.answers))
         self.world_ref[0] = world
+        world.write_tabs(rt)
         for earlier in case.before:
             v.respond("typed", earlier)
         world.calls.clear()

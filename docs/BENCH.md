@@ -93,3 +93,29 @@ What this baseline says, read with the 16-19 Nov log:
 - **Not covered here**: speech recognition (cases are typed, so "braille" for Brave can't
   happen), a prompt pushed out by recall or another app using Ollama, and the real browser's
   timing. Spoken cases from recordings are the next step for the bench.
+
+### 2026-11-20 03:09 (after the fixes, ADR-089): 34/34 pass, 0 slow, 0 wrong
+
+Model qwen3:4b, prompt read ahead. Median 0.0 s, 90th percentile 6.7 s.
+
+| group | right and in time | median |
+|---|---|---|
+| app | 4/4 | 0.1 s |
+| browser | 1/1 | 10.3 s |
+| chat | 1/1 | 0.0 s |
+| greet | 3/3 | 0.0 s |
+| multi | 4/4 | 0.0 s |
+| music | 9/9 | 0.0 s |
+| page | 1/1 | 0.0 s |
+| projects | 2/2 | 6.2 s |
+| recall | 1/1 | 12.5 s |
+| remind | 5/5 | 0.0 s |
+| rest | 2/2 | 0.0 s |
+| volume | 1/1 | 0.0 s |
+
+Each first-run failure was fixed where it came from, and two new problems seen on the way
+(a model choice that changed with the prompt, and a filter that ate a reminder's reply) are
+now cases too. A song by name, opening a service and playing on it, and "say hi once you're
+back" are now rules, so 30 of 34 cases never reach the model; the four that do (what's
+playing, recall, where you left off, what's in a tab) take 5-13 s. The reminder cases now
+also check the reply's words.

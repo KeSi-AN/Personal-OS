@@ -33,7 +33,7 @@ from personal_os.context.evidence import (
 from personal_os.context.question import ParsedQuestion, parse_question
 from personal_os.context.retrieval import hybrid_search
 from personal_os.context.summarizer import StoredSummary, load_summaries
-from personal_os.core.clock import to_ms
+from personal_os.core.clock import from_ms, to_ms
 from personal_os.llm.provider import LLMError, LLMProvider
 from personal_os.projects.registry import load_projects
 from personal_os.projects.sessions import GAP_BUCKETS, Session, load_sessions
@@ -249,6 +249,10 @@ def gather_leave_off(conn: sqlite3.Connection, q: ParsedQuestion, now: datetime)
     last = _last_session(conn, pid, now, before=None)
     who = q.project.id if q.project else "any project"
     own = project_item_lines(conn, pid) if pid else []
+    if pid:
+        later = _leave_off_from_events(conn, pid, last, now, own)
+        if later is not None:
+            return later
     if last is None:
         if own:  # nothing tracked lately, but what you wrote down for it is still there
             return Gathered(
@@ -291,6 +295,69 @@ def gather_leave_off(conn: sqlite3.Connection, q: ParsedQuestion, now: datetime)
         if own:
             facts.append(OWN_ITEMS_FACT)
     return Gathered(finalize(lines, 45), facts, scope=f"your last session on {pid}")
+
+
+LEAVE_OFF_WINDOW = timedelta(hours=3)  # the project's own records before its latest one
+# Only records placed on a project by a strong signal count here (a file in its repo, a
+# commit, its remote: 0.9-1.0). Guesses by keyword, page or time (0.55-0.65) put a Jetty
+# script and Fmovies on shop-app, and the answer led with them (20 Nov bench).
+SURE_PROJECT = 0.8
+
+
+def _leave_off_from_events(
+    conn: sqlite3.Connection,
+    pid: str,
+    last: Session | None,
+    now: datetime,
+    own: list[EvidenceLine],
+) -> Gathered | None:
+    """The project's own latest records, when they're newer than its last session: work on it
+    inside time mostly spent on another project (a session has one project, by majority), as
+    with five shop-app commits in a personal-os afternoon (19 Nov, answered as 13 Nov). Only
+    confidently placed records count (SURE_PROJECT). None when the last session is the latest
+    word."""
+    sure = conn.execute(
+        "SELECT ts_start FROM events WHERE project_id = ? AND project_confidence >= ? "
+        "AND source NOT IN ('meta', 'system', 'idle') AND ts_start >= ? "
+        "ORDER BY ts_start DESC LIMIT 1",
+        (pid, SURE_PROJECT, to_ms(now - DEFAULT_LOOKBACK)),
+    ).fetchone()
+    if sure is None:
+        return None
+    at_ms = int(sure[0])
+    at = from_ms(at_ms).astimezone()
+    if last is not None and at <= last.end:
+        return None
+    ids = [
+        r[0]
+        for r in conn.execute(
+            "SELECT id FROM events WHERE project_id = ? AND project_confidence >= ? "
+            "AND source NOT IN ('meta', 'system', 'idle') AND ts_start BETWEEN ? AND ? "
+            "ORDER BY ts_start",
+            (pid, SURE_PROJECT, to_ms(at - LEAVE_OFF_WINDOW), at_ms),
+        )
+    ]
+    rows = fetch_by_ids(conn, ids)
+    lines = lines_from_rows(rows, git_state=False)
+    lines += [x for x in _latest_git_state(conn, pid) if x.ts >= at - LEAVE_OFF_WINDOW]
+    known = {i for x in lines for i in x.event_ids}
+    for extra in (
+        _recent(conn, pid, "git", "commit", 3),
+        _recent(conn, pid, "terminal", "command", 1, failed_only=True),
+    ):
+        lines += [x for x in extra if not set(x.event_ids) & known]
+    first = from_ms(int(rows[0]["ts_start"])).astimezone() if rows else at
+    facts = [
+        f"Your latest work on {pid}: {_span(first, at)} ({first:%A %d %B}), during time mostly "
+        "spent on other work, so only its own records are shown. Lead with that day."
+    ]
+    if last is not None:
+        earlier = _span(last.start, last.end)
+        facts.append(f"The last session mostly on {pid} was earlier: {earlier}.")
+    lines += own
+    if own:
+        facts.append(OWN_ITEMS_FACT)
+    return Gathered(finalize(lines, 45), facts, scope=f"your latest work on {pid}")
 
 
 OWN_ITEMS_FACT = (

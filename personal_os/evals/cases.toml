@@ -136,6 +136,7 @@ from = "19 Nov, typed: four turns; 'in 5' wasn't a time and a typed yes counted 
 calls = [{ tool = "set_reminder", minutes = "^5$", text = "check claude" }]
 only = true
 asks = false
+reply = ["remind you"]
 max_s = 5
 tags = ["reminder"]
 
@@ -145,6 +146,7 @@ say = "remind me in 10 mins to check claude"
 from = "19 Nov, typed: 4 s, right"
 calls = [{ tool = "set_reminder", minutes = "^10$", text = "check claude" }]
 only = true
+reply = ["remind you"]
 max_s = 5
 tags = ["reminder"]
 
@@ -154,6 +156,7 @@ say = "remind in 15 minutes to check claude"
 from = "19 Nov, typed: 12 s through the model, right"
 calls = [{ tool = "set_reminder", minutes = "^15$", text = "check claude" }]
 only = true
+reply = ["remind you"]
 max_s = 12
 tags = ["reminder"]
 
@@ -164,6 +167,7 @@ answers = ["to stretch"]
 calls = [{ tool = "set_reminder", minutes = "^1$", text = "stretch" }]
 only = true
 asks = true
+reply = ["remind you"]
 max_s = 5
 tags = ["reminder"]
 
@@ -172,6 +176,7 @@ id = "remind-at-time"
 say = "remind me to call mum at 7 pm"
 calls = [{ tool = "set_reminder", text = "call mum", at = "7" }]
 only = true
+reply = ["remind you"]
 max_s = 5
 tags = ["reminder"]
 
