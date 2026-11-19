@@ -111,7 +111,7 @@ def test_presses_while_busy_interrupt_and_never_pile_up(home: Path, config: Conf
 def test_greetings_get_a_short_reply_not_an_answer(home: Path, config: Config):
     env = Env(home, config)
     v, _h = voice_for(env)
-    assert v.handle("Hello.") == "Hi. Ask me what you did, or tell me to open something."
+    assert v.handle("Hello.") == "Hi. What can I do for you?"
     assert v.handle("Thank you.") == "You're welcome."
 
 

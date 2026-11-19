@@ -36,6 +36,7 @@ def never(*_: Any) -> Any:
 @pytest.fixture
 def env(home: Path, config: Config, monkeypatch: pytest.MonkeyPatch) -> Env:
     monkeypatch.setattr(apps, "installed", lambda *_a, **_k: START_MENU)
+    monkeypatch.setattr(apps, "installed_now", lambda *_a, **_k: START_MENU)  # what a turn reads
     return Env(home, config)
 
 

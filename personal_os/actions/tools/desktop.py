@@ -107,8 +107,8 @@ def resolve_app(name: str, apps: dict[str, list[str]]) -> str | None:
 
 def installed_app(name: str, config: Any, *, fuzzy: bool = True) -> InstalledApp | None:
     """An app installed on this PC (Start menu) that `name` means; ActionError if unclear."""
-    try:
-        return find_installed(name, apps_mod.installed(config.runtime_dir), fuzzy=fuzzy)
+    try:  # never waits on Windows' scan mid-turn: "close brave" hung 82 s on it (17 Nov)
+        return find_installed(name, apps_mod.installed_now(config.runtime_dir), fuzzy=fuzzy)
     except AmbiguousApp as exc:
         raise ActionError(str(exc)) from None
 

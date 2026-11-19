@@ -27,6 +27,27 @@ _SPACE_RE = re.compile(r"\s+")
 _LOCK_EXES = {"lockapp.exe", "logonui.exe"}
 
 
+_OWN: dict[int, bool] = {}  # pid -> is it one of Personal OS's own processes (cached)
+
+
+def is_own_window(pid: int | None) -> bool:
+    """Is this window Personal OS's own (the island, the popup, the dashboard window, the
+    overlay)? They run as Python processes started with a personal_os module."""
+    if not pid:
+        return False
+    if pid not in _OWN:
+        if len(_OWN) > 2048:
+            _OWN.clear()
+        try:
+            import psutil
+
+            cmd = " ".join(psutil.Process(pid).cmdline())
+            _OWN[pid] = "personal_os" in cmd
+        except Exception:
+            _OWN[pid] = False
+    return _OWN[pid]
+
+
 def normalize_title(title: str) -> str:
     t = _SPACE_RE.sub(" ", title).strip()
     t = _UNREAD_RE.sub("", t)
@@ -249,6 +270,11 @@ class WindowObserver(BaseObserver):
             else:
                 self._was_paused = False
                 sample = self.probe.sample()
+                if sample is not None and is_own_window(sample.pid):
+                    # The island, the popup, the dashboard window: Personal OS's own, not your
+                    # work. What you were in stays open (19 Nov: 55 "Donna" windows had become
+                    # time on your Documents/Donna project).
+                    sample = None
                 for event in self.tracker.tick(
                     now, sample, self.probe.idle_seconds(), self.session.locked
                 ):

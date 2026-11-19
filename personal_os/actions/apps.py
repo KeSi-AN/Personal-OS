@@ -110,13 +110,25 @@ def installed_now(runtime_dir: Path) -> list[InstalledApp]:
     """The installed apps without ever waiting for Windows: the last list, however old, with
     a fresh one made in the background when it's stale ([] the very first time). For a turn
     in progress ("play music"), which once waited 60 s on a stalled scan (17 Nov)."""
+    return _installed_now(runtime_dir)
+
+
+def installed(runtime_dir: Path, *, refresh: bool = False) -> list[InstalledApp]:
+    """The installed apps, from the cache when it's fresh (may run the scan: not mid-turn)."""
+    return _installed(runtime_dir, refresh=refresh)
+
+
+# The two above are what callers use, and what tests replace; these do the work.
+
+
+def _installed_now(runtime_dir: Path) -> list[InstalledApp]:
     cached = _cached(runtime_dir)
     stale = cached is None or time.time() - cached[0] >= CACHE_HOURS * 3600
     if stale and _refreshing.acquire(blocking=False):  # one refresh at a time
 
         def refresh() -> None:
             try:
-                installed(runtime_dir, refresh=True)
+                _installed(runtime_dir, refresh=True)
             finally:
                 _refreshing.release()
 
@@ -124,8 +136,7 @@ def installed_now(runtime_dir: Path) -> list[InstalledApp]:
     return cached[1] if cached is not None else []
 
 
-def installed(runtime_dir: Path, *, refresh: bool = False) -> list[InstalledApp]:
-    """The installed apps, from the cache when it's fresh."""
+def _installed(runtime_dir: Path, *, refresh: bool = False) -> list[InstalledApp]:
     global _memo
     now = time.time()
     if not refresh and _memo is not None and now - _memo[0] < CACHE_HOURS * 3600:
@@ -141,11 +152,16 @@ def installed(runtime_dir: Path, *, refresh: bool = False) -> list[InstalledApp]
         except (OSError, ValueError, KeyError, TypeError):
             pass
     apps = read_installed()
-    if apps:
-        runtime.write_json_atomic(
-            path,
-            {"at": now, "apps": [{"name": a.name, "app_id": a.app_id, "exe": a.exe} for a in apps]},
-        )
+    if not apps:
+        # The scan stalled or failed: keep the last list (whatever its age) and try again in
+        # 5 minutes, rather than know no apps for the next 6 hours.
+        old = _cached(runtime_dir)
+        _memo = (now - CACHE_HOURS * 3600 + 300, old[1] if old else [])
+        return _memo[1]
+    runtime.write_json_atomic(
+        path,
+        {"at": now, "apps": [{"name": a.name, "app_id": a.app_id, "exe": a.exe} for a in apps]},
+    )
     _memo = (now, apps)
     return apps
 

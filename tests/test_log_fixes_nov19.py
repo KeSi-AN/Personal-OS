@@ -92,9 +92,7 @@ def test_every_action_is_in_the_reply(home: Path, config: Config, monkeypatch):
 
 def test_the_app_list_never_waits_on_windows(tmp_path: Path, monkeypatch):
     """A stalled Start-menu scan held "play music" for 60 s (17 Nov)."""
-    import importlib
-
-    real = importlib.reload(apps)  # the module itself, not the tests' stand-in
+    real = apps  # its own functions (_installed_now), not the tests' stand-ins
     slow: list[float] = []
 
     def stalled() -> list[apps.InstalledApp]:
@@ -105,12 +103,12 @@ def test_the_app_list_never_waits_on_windows(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(real, "read_installed", stalled)
     monkeypatch.setattr(real, "_memo", None)
     t = time.monotonic()
-    assert real.installed_now(tmp_path) == []  # nothing cached yet: none, at once
+    assert real._installed_now(tmp_path) == []  # nothing cached yet: none, at once
     assert time.monotonic() - t < 0.5
     deadline = time.monotonic() + 5
     while not (tmp_path / real.CACHE).exists() and time.monotonic() < deadline:
         time.sleep(0.05)
-    assert [a.name for a in real.installed_now(tmp_path)] == ["YouTube Music"]  # refreshed
+    assert [a.name for a in real._installed_now(tmp_path)] == ["YouTube Music"]  # refreshed
     assert len(slow) == 1
 
 

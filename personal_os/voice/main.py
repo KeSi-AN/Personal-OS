@@ -89,6 +89,10 @@ class Voice:
         self.wake_dirty = False  # a press ended a rest: restart the wake word after the turn
         self.was_resting = False  # what watch_rest saw last
         self._priming = threading.Lock()  # one prime_agent at a time
+        # A question asked in a typed turn ("Hold you to it? Say yes or no") waits here for
+        # the next typed text instead of the mic (typed_answer_to).
+        self.awaiting_typed = threading.Event()
+        self.typed_answers: queue.Queue[str] = queue.Queue()
         self.primed_at = 0.0  # when the agent's prompt was last read ahead (monotonic)
         self.rest_announce = False  # say "I'm back" when the current rest runs out
         self.streamed = ""  # said while the model was still writing the reply
@@ -263,6 +267,9 @@ class Voice:
         said), as a press does; only the newest one waits. Talk is the push-to-talk key."""
         if "text" not in asked:
             self.pressed("hotkey")
+            return
+        if self.awaiting_typed.is_set():  # it answers the question asked in a typed turn
+            self.typed_answers.put(str(asked["text"]))
             return
         with contextlib.suppress(queue.Empty):
             while True:
@@ -639,11 +646,35 @@ class Voice:
         self.say(question)
         if self.interrupt.is_set():
             return ""
+        if self.turn_trigger == "typed":
+            # You typed the request, so the answer is typed too. It used to listen on the mic:
+            # your typed "yes" came as a new request and the question counted as declined
+            # (19 Nov).
+            return self.typed_answer_to(shown)
         self.show("listening", question=shown)
         self.speaker.earcon("listen")
         answer = self.listen()
         self.show("thinking", question="")
         return answer
+
+    def typed_answer_to(self, shown: str, timeout_s: float | None = None) -> str:
+        """The next thing typed in the island or popup, as the answer to `shown` ("" after
+        `timeout_s`, TYPED_ANSWER_S by default, or if the turn is stopped)."""
+        timeout_s = TYPED_ANSWER_S if timeout_s is None else timeout_s
+        with contextlib.suppress(queue.Empty):
+            while True:
+                self.typed_answers.get_nowait()  # an old answer never answers a new question
+        self.show("listening", question=f"{shown} (type your answer)")
+        self.awaiting_typed.set()
+        try:
+            deadline = time.monotonic() + timeout_s
+            while time.monotonic() < deadline and not self.interrupt.is_set():
+                with contextlib.suppress(queue.Empty):
+                    return self.typed_answers.get(timeout=0.2)
+            return ""
+        finally:
+            self.awaiting_typed.clear()
+            self.show("thinking", question="")
 
     def show(self, state: str, **fields: Any) -> None:
         """Put the turn in `state` with these fields, on screen at once."""
@@ -1388,6 +1419,7 @@ _STOP_WORDS = re.compile(
 )
 VOICE_MAX_STEPS = 3  # model calls per spoken request (each 5-15 s on this laptop)
 PRIME_EVERY_S = 300  # read the agent's prompt ahead this often while idle (cheap if still read)
+TYPED_ANSWER_S = 60.0  # how long a typed turn's question waits for a typed answer
 # Lookups slow enough to be worth a beat first: a model call (recall), the database, or a
 # round trip to the browser or Google.
 SLOW_TOOLS = frozenset(

@@ -48,9 +48,14 @@ _POLITE = re.compile(
     r"i would like you to|go ahead and)\s+",
     re.I,
 )
+# Small talk, answered at once by rules. "hi donna", "wadup" and "how are you" went to the
+# agent, which spent 60-78 s looking at windows and projects for a greeting (19 Nov).
 _CHAT = re.compile(
-    r"^\s*(hi|hello|hey|hey there|thanks|thank you|thank you so much|thanks a lot|ok|okay|"
-    r"cool|great|nice|bye|goodbye|good night|you there|are you there)\W*$",
+    r"^\W*(hi|hello|hey|hey there|hiya|yo|sup|wassup|wadup|whats? ?up|what's up|"
+    r"how are you(?: doing)?|how's it going|how is it going|how you doing|"
+    r"thanks|thank you|thank you so much|thanks a lot|ok|okay|"
+    r"cool|great|nice|bye|goodbye|good night|you there|are you there)"
+    r"(?:\W+donna)?\W*$",
     re.I,
 )
 # Words a request can't end on: "can you open the-" was cut off. Not "play": alone, it means
@@ -141,7 +146,9 @@ def chat_reply(text: str) -> str:
         return "Bye."
     if re.search(r"\b(ok|okay|cool|great|nice)\b", t):
         return "Okay."
-    return "Hi. Ask me what you did, or tell me to open something."
+    if re.search(r"how are you|how's it going|how is it going|how you doing|up\b", t):
+        return "All good here. What can I do for you?"
+    return "Hi. What can I do for you?"
 
 
 def evening(text: str) -> bool:

@@ -34,6 +34,9 @@ _NUM_RE = r"(\d{1,4}|" + "|".join(sorted((re.escape(k) for k in _NUM), key=len, 
 _UNIT = r"(minutes?|mins?|hours?|hrs?|seconds?|secs?)"
 _HALF_HOUR = re.compile(r"\b(?:in|for|after)\s+(?:half an hour|a half hour|30 min\w*)\b", re.I)
 _IN = re.compile(rf"\b(?:in|for|after|within)\s+(?:another\s+)?{_NUM_RE}\s+{_UNIT}\b", re.I)
+# "in 5 to check claude": a number with no unit right after "in" is minutes (19 Nov: it was
+# read as part of the message, with no time, and took four turns).
+_IN_BARE = re.compile(r"\b(?:in|after)\s+(\d{1,3})(?=\s+(?:to|that|about)\b|\s*$)", re.I)
 _BY = re.compile(rf"\b(?:by|back|another|for another)\s+{_NUM_RE}\s+{_UNIT}\b", re.I)
 _CLOCK = r"(\d{1,2}(?:[:.]\d{2})?\s*(?:[ap]\.?\s*m\.?)?|noon|midday|midnight)"
 _AT = re.compile(rf"\b(?:at|for|to|till|until)\s+{_CLOCK}(?=$|[\s,.!?])", re.I)
@@ -138,6 +141,9 @@ def _take_time(rest: str) -> tuple[str, int | None, str | None]:
     m = _IN.search(rest)
     if m:
         return rest[: m.start()] + " " + rest[m.end() :], _minutes(_number(m[1]), m[2]), None
+    m = _IN_BARE.search(rest)
+    if m:
+        return rest[: m.start()] + " " + rest[m.end() :], int(m[1]), None
     m = _AT.search(rest)
     if m:
         return rest[: m.start()] + " " + rest[m.end() :], None, _clock(m[1])
