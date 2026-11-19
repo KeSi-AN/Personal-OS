@@ -151,6 +151,7 @@ Remove-Item Env:PERSONAL_OS_HOME
 uv run pytest -q
 uv run ruff check .
 uv run mypy personal_os
+uv run python -m personal_os.evals.bench   # your real requests on the real model (docs/BENCH.md)
 ```
 
 ## Daemon control

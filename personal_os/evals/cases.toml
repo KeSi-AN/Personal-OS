@@ -1,0 +1,328 @@
+# The live bench's cases: requests you really made (voice history, 16-19 Nov) and the
+# shapes they stand for. `from` says when and what went wrong then. Field meanings are in
+# cases.py; patterns are regexes, any case. The pretend machine: Brave (GitHub, YouTube Music
+# playing "bad luck", an Fmovies tab on Dune), VS Code and Claude open; your real app list.
+#
+# Times are what a good answer on the GTX 1650 can do: rules in a few seconds, one model
+# step (prompt already read) in about 10, a lookup with an answer written in about 30.
+
+# --- greetings and chat ---------------------------------------------------------------------
+
+[[case]]
+id = "greet-hi"
+say = "hi donna"
+from = "17 Nov, typed: 78 s, read windows and projects, listed overdue tasks"
+only = true
+max_s = 3
+tags = ["chat"]
+
+[[case]]
+id = "greet-wadup"
+say = "wadup"
+from = "19 Nov, typed: 63 s, replied with a literal [list of overdue items]"
+only = true
+max_s = 3
+tags = ["chat"]
+
+[[case]]
+id = "greet-how"
+say = "how are you donna"
+only = true
+max_s = 3
+tags = ["chat"]
+
+[[case]]
+id = "chat-thanks"
+say = "thanks, that's all"
+only = true
+max_s = 15
+tags = ["chat"]
+
+# --- music ----------------------------------------------------------------------------------
+
+[[case]]
+id = "music-play"
+say = "play music"
+from = "17 Nov, typed: hung 60 s on the app scan, then stopped"
+playing = false
+calls = [{ tool = "music", action = "play" }]
+only = true
+no_effects = ["google\\."]
+reply = ["youtube music"]
+max_s = 8
+tags = ["music"]
+
+[[case]]
+id = "music-pause"
+say = "pause music"
+from = "17 Nov, typed: hung 60 s, then stopped"
+calls = [{ tool = "music", action = "pause" }]
+only = true
+effects = ["media .*\"pause\""]
+max_s = 8
+tags = ["music"]
+
+[[case]]
+id = "music-resume"
+say = "resume music"
+from = "19 Nov, typed: 2.6 s, fine"
+playing = false
+calls = [{ tool = "music", action = "play" }]
+only = true
+max_s = 8
+tags = ["music"]
+
+[[case]]
+id = "music-next"
+say = "next song"
+calls = [{ tool = "music", action = "next" }]
+only = true
+max_s = 8
+tags = ["music"]
+
+[[case]]
+id = "music-whats-playing"
+say = "what's playing ?"
+from = "19 Nov, typed: 17 s, right"
+reply = ["bad luck"]
+no_calls = ["play_media", "music"]
+max_s = 15
+tags = ["music"]
+
+[[case]]
+id = "music-song-on-ytm"
+say = "play blood sport by sleep token on youtube music"
+from = "19 Nov, typed: 26 s, right"
+calls = [{ tool = "play_media", query = "blood ?sport" }]
+no_effects = ["google\\.", "www\\.youtube\\.com"]
+reply = ["blood ?sport"]
+max_s = 20
+tags = ["music"]
+
+[[case]]
+id = "music-open-then-play"
+say = "open youtube music , and play blood sport there"
+from = "19 Nov, typed: 46 s; once before it searched Google for YouTube Music"
+calls = [{ tool = "play_media", query = "blood ?sport" }]
+no_effects = ["google\\."]
+reply = ["blood ?sport"]
+max_s = 25
+tags = ["music", "multi"]
+
+[[case]]
+id = "music-song-dash"
+say = "play music - raaton by aditya rikhari"
+from = "17 Nov, typed: 86 s, right"
+calls = [{ tool = "play_media", query = "raaton" }]
+no_effects = ["google\\."]
+max_s = 20
+tags = ["music"]
+
+[[case]]
+id = "music-song-plain"
+say = "play saccharine by violent vira"
+from = "19 Nov, typed: 47 s"
+calls = [{ tool = "play_media", query = "saccharine" }]
+no_effects = ["google\\."]
+max_s = 20
+tags = ["music"]
+
+# --- reminders ------------------------------------------------------------------------------
+
+[[case]]
+id = "remind-in-5"
+say = "remind me in 5 to check claude"
+from = "19 Nov, typed: four turns; 'in 5' wasn't a time and a typed yes counted as no"
+calls = [{ tool = "set_reminder", minutes = "^5$", text = "check claude" }]
+only = true
+asks = false
+max_s = 5
+tags = ["reminder"]
+
+[[case]]
+id = "remind-10-mins"
+say = "remind me in 10 mins to check claude"
+from = "19 Nov, typed: 4 s, right"
+calls = [{ tool = "set_reminder", minutes = "^10$", text = "check claude" }]
+only = true
+max_s = 5
+tags = ["reminder"]
+
+[[case]]
+id = "remind-no-me"
+say = "remind in 15 minutes to check claude"
+from = "19 Nov, typed: 12 s through the model, right"
+calls = [{ tool = "set_reminder", minutes = "^15$", text = "check claude" }]
+only = true
+max_s = 12
+tags = ["reminder"]
+
+[[case]]
+id = "remind-asks-what"
+say = "remind me in a minute"
+answers = ["to stretch"]
+calls = [{ tool = "set_reminder", minutes = "^1$", text = "stretch" }]
+only = true
+asks = true
+max_s = 5
+tags = ["reminder"]
+
+[[case]]
+id = "remind-at-time"
+say = "remind me to call mum at 7 pm"
+calls = [{ tool = "set_reminder", text = "call mum", at = "7" }]
+only = true
+max_s = 5
+tags = ["reminder"]
+
+# --- rest -----------------------------------------------------------------------------------
+
+[[case]]
+id = "rest-take-5"
+say = "take 5"
+from = "16 Nov, typed: 5 s, right"
+calls = [{ tool = "take_rest", minutes = "^5$" }]
+only = true
+max_s = 3
+tags = ["rest"]
+
+[[case]]
+id = "rest-up-20"
+say = "rest up for 20 mins"
+calls = [{ tool = "take_rest", minutes = "^20$" }]
+only = true
+max_s = 3
+tags = ["rest"]
+
+# --- several at once ------------------------------------------------------------------------
+
+[[case]]
+id = "multi-play-then-rest"
+say = "play zulfe and then take 5"
+from = "16 Nov, typed: 49 s, right"
+calls = [{ tool = "play_media", query = "zulf" }, { tool = "take_rest", minutes = "^5$" }]
+only = true
+reply = ["zulf", "5"]
+max_s = 20
+tags = ["multi", "music", "rest"]
+
+[[case]]
+id = "multi-rest-hi-pause"
+say = "take 5, say hi once you're back, and then pause music"
+from = "19 Nov, typed: 48 s; tried to play a song called 'hi'"
+calls = [{ tool = "take_rest", minutes = "^5$" }, { tool = "music", action = "pause" }]
+no_calls = ["play_media"]
+reply = ["paus"]
+max_s = 20
+tags = ["multi", "music", "rest"]
+
+[[case]]
+id = "multi-remind-and-rest"
+say = "remind me in 10 minutes to stretch and take 5"
+from = "18 Nov: set the reminder only; 'take 5' had to be said again"
+calls = [{ tool = "set_reminder", minutes = "^10$", text = "stretch" }, { tool = "take_rest", minutes = "^5$" }]
+only = true
+max_s = 10
+tags = ["multi", "reminder", "rest"]
+
+[[case]]
+id = "multi-play-and-remind"
+say = "play music and remind me in 20 minutes to drink water"
+from = "19 Nov: played and set the reminder, but only said the reminder"
+playing = false
+calls = [{ tool = "music", action = "play" }, { tool = "set_reminder", minutes = "^20$", text = "water" }]
+only = true
+reply = ["youtube music|play", "remind|water"]
+max_s = 15
+tags = ["multi", "music", "reminder"]
+
+# --- apps -----------------------------------------------------------------------------------
+
+[[case]]
+id = "app-open-brave"
+say = "open brave"
+from = "17 Nov, follow-up: 56 s through the model"
+calls = [{ tool = "open_app", app = "brave" }]
+only = true
+effects = ["launch .*Brave"]
+max_s = 6
+tags = ["apps"]
+
+[[case]]
+id = "app-close-brave"
+say = "close brave"
+from = "17 Nov, wake: 82 s and no reply"
+calls = [{ tool = "close_app", app = "brave" }]
+only = true
+effects = ["close_window 101"]
+max_s = 6
+tags = ["apps"]
+
+[[case]]
+id = "app-open-ytm"
+say = "open youtube music"
+from = "19 Nov: opened, then searched Google for it"
+effects = ["cinhimbnkkghhklpknlkffjgod|music\\.youtube\\.com"]
+no_effects = ["google\\."]
+max_s = 8
+tags = ["apps", "music"]
+
+[[case]]
+id = "app-open-code"
+say = "open vs code"
+calls = [{ tool = "open_app", app = "code" }]
+only = true
+max_s = 6
+tags = ["apps"]
+
+[[case]]
+id = "volume-40"
+say = "set the volume to 40"
+calls = [{ tool = "set_volume", percent = "^40$" }]
+only = true
+max_s = 5
+tags = ["system"]
+
+# --- your history and projects ------------------------------------------------------------
+
+[[case]]
+id = "recall-yesterday"
+say = "what did I work on yesterday"
+from = "20 Nov audit: 11 s, with evidence"
+reply = ["personal|shop|roamies|donna"]
+max_s = 30
+tags = ["recall", "projects"]
+
+[[case]]
+id = "projects-left-off-shop"
+say = "where did I leave off on shop-app"
+from = "20 Nov audit: said 13 Nov; five shop-app commits on 19 Nov were missed"
+reply = ["yesterday|19"]
+no_reply = ["13"]
+max_s = 30
+tags = ["recall", "projects"]
+
+[[case]]
+id = "projects-overdue"
+say = "what's overdue"
+from = "19 Nov: '[list of overdue items]'"
+no_calls = ["todo_done", "todo_remove"]
+max_s = 20
+tags = ["projects"]
+
+[[case]]
+id = "browser-what-am-i-watching"
+say = "check inside fmovies to see what i'm watching"
+from = "19 Nov, typed: 38 s, clicked a link, then 'not sure how to help'"
+reply = ["dune"]
+no_calls = ["browser_act"]
+max_s = 20
+tags = ["browser"]
+
+[[case]]
+id = "page-projects"
+say = "show my projects"
+reply = ["project"]
+only = true
+max_s = 3
+tags = ["island"]
