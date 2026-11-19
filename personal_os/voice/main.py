@@ -88,6 +88,8 @@ class Voice:
         self.announced = ""  # said before an action ran: not said again after
         self.wake_dirty = False  # a press ended a rest: restart the wake word after the turn
         self.was_resting = False  # what watch_rest saw last
+        self._priming = threading.Lock()  # one prime_agent at a time
+        self.primed_at = 0.0  # when the agent's prompt was last read ahead (monotonic)
         self.rest_announce = False  # say "I'm back" when the current rest runs out
         self.streamed = ""  # said while the model was still writing the reply
         self.first_said_s: float | None = None  # when that began, from the turn's start
@@ -906,6 +908,7 @@ class Voice:
             self.previous = None  # "and yesterday?" means nothing after a long gap
         self.beat()  # a cited answer takes a few seconds
         answer = ask(conn, self.provider(), request, self.clock.now(), previous=self.previous)
+        self.prime_agent()  # recall's own prompt replaced the agent's: read it again now
         self.previous = answer.question
         evidence = [x.render() for x in answer.cited()]
         self.save_last(request, answer.text, evidence)
@@ -1012,6 +1015,11 @@ class Voice:
             except queue.Empty:
                 self.speak_queued()
                 self.watch_rest()
+                if time.monotonic() - self.primed_at > PRIME_EVERY_S:
+                    # Other model work (summaries, the video sorter, recall) replaces what
+                    # Ollama has read: read the agent's prompt again while nothing's asked.
+                    self.primed_at = time.monotonic()
+                    self.prime_agent()
                 if time.monotonic() - last_reload > 10:
                     last_reload = time.monotonic()
                     self.cfg = load_config()
@@ -1120,6 +1128,44 @@ class Voice:
                 _log.warning(
                     "warm-up step failed", extra={"fields": {"exc_type": type(exc).__name__}}
                 )
+        self.prime_agent()  # the agent's prompt read now, not on your first request
+
+    def prime_agent(self) -> None:
+        """Have the model read the agent's prompt now, on a thread of its own, so the next
+        request reuses it (about 0.3 s instead of about 30 s on this GPU). Only while the
+        model is kept on the GPU anyway (llm.keep_on_gpu) and not in gaming mode, so it never
+        loads the model you didn't ask for. One at a time; it never holds up a turn."""
+        cfg = self.cfg
+        if not (cfg.llm.enabled and cfg.agent.enabled and cfg.llm.keep_on_gpu):
+            return
+        if modes.effects(cfg.runtime_dir).unload_model:
+            return
+        if not self._priming.acquire(blocking=False):
+            return
+
+        def go() -> None:
+            from personal_os.actions import agent
+            from personal_os.storage.db import open_db
+
+            try:
+                provider = self.provider()
+                prime = getattr(provider, "prime", None)
+                if prime is None:
+                    return
+                conn = open_db(cfg.db_path)
+                try:
+                    system = agent.agent_prompt(self.executor(conn, provider))
+                finally:
+                    conn.close()
+                took = prime(system)
+                self.primed_at = time.monotonic()
+                _log.info("agent prompt primed", extra={"fields": {"s": round(took, 1)}})
+            except Exception as exc:
+                _log.warning("priming failed", extra={"fields": {"exc_type": type(exc).__name__}})
+            finally:
+                self._priming.release()
+
+        threading.Thread(target=go, name="pos-prime", daemon=True).start()
 
     def warm_stt(self) -> None:
         self.stt_fast.warm()
@@ -1341,6 +1387,7 @@ _STOP_WORDS = re.compile(
     re.I,
 )
 VOICE_MAX_STEPS = 3  # model calls per spoken request (each 5-15 s on this laptop)
+PRIME_EVERY_S = 300  # read the agent's prompt ahead this often while idle (cheap if still read)
 # Lookups slow enough to be worth a beat first: a model call (recall), the database, or a
 # round trip to the browser or Google.
 SLOW_TOOLS = frozenset(

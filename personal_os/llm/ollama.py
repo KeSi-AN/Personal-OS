@@ -295,6 +295,22 @@ class OllamaProvider:
         }
         self._with_gpu_fallback("/api/generate", body)  # no prompt: just loads the model
 
+    def prime(self, system: str) -> float:
+        """Have Ollama read `system` now (a one-token answer), so the next chat that starts
+        with it reuses that reading. On the GTX 1650 reading Donna's ~3,700-token prompt afresh
+        takes about 30 s (121 tokens/s, GPU at 100% and full clock), and about 0.3 s once read.
+        Same model options as chat_json, so it never reloads the model. Returns seconds taken."""
+        body = {
+            "model": self.chat_model, "stream": False, "think": False,
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": "User: hi"}],
+            "keep_alive": self._keep(self.cfg.keep_alive),
+            "options": self._options(gpu=True, num_ctx=self.cfg.num_ctx, temperature=0.2)
+            | {"num_predict": 1},
+        }  # fmt: skip
+        reply = self._with_gpu_fallback("/api/chat", body)
+        return int(reply.get("total_duration") or 0) / 1e9
+
     def unload(self) -> None:
         for model in (self.chat_model, self.embed_model):
             self._request("/api/generate", {"model": model, "keep_alive": 0}, 30)

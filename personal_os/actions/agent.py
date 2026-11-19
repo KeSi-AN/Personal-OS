@@ -264,8 +264,8 @@ def respond(
         on_sentence(text)
 
     def stream(gate: str | None) -> tuple[Callable[[str], None] | None, ReplyStream | None]:
-        if on_sentence is None or held:
-            return None, None
+        if on_sentence is None or held or acting_count(out.outcomes, executor) >= 2:
+            return None, None  # two actions or more: the reply is built from what they did
         rs = ReplyStream(sentence, gate=gate)
         return rs.feed, rs
 
@@ -366,7 +366,8 @@ def respond(
             break
         results: list[str] = []
         fresh: list[Outcome] = []
-        calls = merge_opens(route_app_names(list(plan.calls), executor))[:MAX_CALLS]
+        calls = drop_redundant_opens(merge_opens(route_app_names(list(plan.calls), executor)))
+        calls = calls[:MAX_CALLS]
         for call in calls:
             args = dict(call.args)
             key = _key(executor, call.tool, args)
@@ -403,6 +404,17 @@ def respond(
             out.reply = str(fresh[0].message)
             out.details = _data(fresh[0])  # the answer with its evidence
             break  # the cited answer is the reply: no second model call
+        if (
+            fresh
+            and acting_count(fresh, executor) == len(fresh)
+            and not any(o.status in ("failed", "blocked", "invalid") for o in fresh)
+        ):
+            # Only actions, and none failed: each says what it did, so a second model call
+            # (about 5-7 s on this GPU, mostly re-reading the results) would only reword it.
+            # A failure still gets the second step, which can try another way.
+            out.reply = actions_said(out.outcomes, executor)
+            out.trace.append("reply from the actions (no second model call)")
+            break
         if not fresh:
             final_only = True  # it only repeated itself: answer from what it has
             continue
@@ -415,6 +427,10 @@ def respond(
     out.reply = grounded(out.reply, out.outcomes, executor, asking=asking)
     if said and out.reply != said:
         out.trace.append(f"reply corrected (it claimed something no tool did): {said[:200]}")
+    if acting_count(out.outcomes, executor) >= 2 and not streamed:
+        # Several actions: each says what it did, so none is left out of the reply.
+        out.reply = actions_said(out.outcomes, executor) or out.reply
+        out.trace.append("reply built from the actions")
     if out.error:
         out.trace.append(f"error: {out.error}")
     if not out.details:  # what the reply was built from, to read in full on screen
@@ -443,6 +459,49 @@ def _commitments_block(executor: Executor) -> str:
     except Exception as exc:  # never costs the answer
         _log.warning("commitments unavailable", extra={"fields": {"exc": type(exc).__name__}})
         return ""
+
+
+_MUSIC_SITES = {"youtube music", "yt music", "ytmusic", "spotify"}
+
+
+def drop_redundant_opens(calls: list[Any]) -> list[Any]:
+    """ "Open YouTube Music and play X there": play_media opens it already, so a bare
+    browser_open of a music site in the same step is dropped (19 Nov: it failed, and the
+    model's retry searched Google for "youtube music")."""
+    if not any(c.tool == "play_media" for c in calls):
+        return list(calls)
+    return [
+        c for c in calls
+        if not (c.tool == "browser_open" and not c.args.get("query") and not c.args.get("url")
+                and str(c.args.get("site", "")).lower() in _MUSIC_SITES)
+    ]  # fmt: skip
+
+
+def actions_said(outcomes: list[Outcome], executor: Executor) -> str:
+    """What two or more actions did, each in its own words ("Playing "Zulfein" on YouTube
+    Music. I'll remind you at 18:20: "stretch"."), and what couldn't be done. The model's own
+    summary left one out (you asked for music and a reminder; it mentioned only one)."""
+    acted = [o for o in outcomes
+             if (t := executor.registry.get(o.tool)) is not None and t.tier > Tier.READ]  # fmt: skip
+    parts = []
+    for o in acted:
+        message = str(o.message).strip().rstrip(".")
+        message = message[:1].upper() + message[1:]  # "volume 40%" said as a sentence
+        if o.ok:
+            parts.append(message + ".")
+        elif o.status == "pending":
+            parts.append(f"{o.preview or o.tool} needs your OK first.")
+        elif o.status not in ("declined", "cancelled", "stopped"):
+            parts.append(f"I couldn't {o.preview or o.tool.replace('_', ' ')}: "
+                         f"{message.split(':')[-1].strip()}.")  # fmt: skip
+    return " ".join(parts)
+
+
+def acting_count(outcomes: list[Outcome], executor: Executor) -> int:
+    return sum(
+        1 for o in outcomes
+        if (t := executor.registry.get(o.tool)) is not None and t.tier > Tier.READ
+    )  # fmt: skip
 
 
 def commitment_offer(request: str, executor: Executor, out: AgentReply) -> AgentReply | None:

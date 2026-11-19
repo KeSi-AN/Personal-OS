@@ -58,9 +58,14 @@ class BrowserOpen(Tool):
             if not args.url.startswith(("http://", "https://")):
                 return "https://" + args.url
             return args.url
+        named = recipes.find(args.site)
         if not args.query:
+            # "Open YouTube Music": the site itself. It used to fail here, and the model's retry
+            # became a Google search for "youtube music" (19 Nov).
+            if named is not None and named.home and named.name != "google":
+                return named.home
             raise ActionError("give a web address or something to search for")
-        site = recipes.find(args.site) or recipes.find("google")
+        site = named or recipes.find("google")
         assert site is not None
         return recipes.search_url(site, args.query)
 
@@ -70,8 +75,12 @@ class BrowserOpen(Tool):
     def run(self, args: OpenArgs, ctx: ToolContext) -> Result:
         url = self._url(args)
         _send(ctx, "tabs.open", {"url": url, "newTab": args.new_tab})
-        what = f'a {args.site} search for "{args.query}"' if args.query and not args.url else url
-        return Result(f"Opened {what}")
+        if args.query and not args.url:
+            return Result(f'Opened a {args.site} search for "{args.query}"')
+        named = recipes.find(args.site)
+        if not args.url and named is not None and url == named.home:
+            return Result(f"Opened {args.site.title()}")
+        return Result(f"Opened {url}")
 
 
 class PlayArgs(Args):
@@ -94,7 +103,10 @@ class PlayMedia(Tool):
     def _source(self, args: PlayArgs, ctx: ToolContext) -> Any:
         from personal_os.actions import music
 
-        return music.named(args.site, ctx.config.music.source)
+        # A service you named wins over the model's pick: "play blood sport on youtube music"
+        # was played on YouTube (19 Nov).
+        said = music.site_in(ctx.request_text)
+        return music.named(said or args.site, ctx.config.music.source)
 
     def preview(self, args: PlayArgs, ctx: ToolContext) -> str:
         return f'play "{args.query}" on {self._source(args, ctx).name}'

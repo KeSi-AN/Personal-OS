@@ -32,6 +32,7 @@ def no_real_app_list(monkeypatch: pytest.MonkeyPatch) -> None:
     from personal_os.actions import apps
 
     monkeypatch.setattr(apps, "installed", lambda *_a, **_k: [])
+    monkeypatch.setattr(apps, "installed_now", lambda *_a, **_k: [])
 
 
 @pytest.fixture(autouse=True)

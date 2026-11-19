@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,15 +60,22 @@ def _key(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", name.lower().removesuffix(".exe"))
 
 
+SCAN_TIMEOUT_S = 25  # it took 7 s here warm; a stalled scan gives up rather than hang a turn
+
+
 def read_installed() -> list[InstalledApp]:
-    """Ask Windows (one PowerShell call, about a second)."""
-    r = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _SCRIPT],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+    """Ask Windows (one PowerShell call: about 7 s here, far longer when PowerShell is cold).
+    [] if it doesn't answer in time."""
+    try:
+        r = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _SCRIPT],
+            capture_output=True,
+            text=True,
+            timeout=SCAN_TIMEOUT_S,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return []
     try:
         rows = json.loads(r.stdout or "[]")
     except ValueError:
@@ -83,6 +91,37 @@ def read_installed() -> list[InstalledApp]:
 
 
 _memo: tuple[float, list[InstalledApp]] | None = None
+_refreshing = threading.Lock()
+
+
+def _cached(runtime_dir: Path) -> tuple[float, list[InstalledApp]] | None:
+    """The last list and when it was made, whatever its age (memory first, then the file)."""
+    if _memo is not None:
+        return _memo
+    try:
+        data = json.loads((runtime_dir / CACHE).read_text("utf-8"))
+        apps = [InstalledApp(a["name"], a["app_id"], a.get("exe")) for a in data["apps"]]
+        return float(data["at"]), apps
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def installed_now(runtime_dir: Path) -> list[InstalledApp]:
+    """The installed apps without ever waiting for Windows: the last list, however old, with
+    a fresh one made in the background when it's stale ([] the very first time). For a turn
+    in progress ("play music"), which once waited 60 s on a stalled scan (17 Nov)."""
+    cached = _cached(runtime_dir)
+    stale = cached is None or time.time() - cached[0] >= CACHE_HOURS * 3600
+    if stale and _refreshing.acquire(blocking=False):  # one refresh at a time
+
+        def refresh() -> None:
+            try:
+                installed(runtime_dir, refresh=True)
+            finally:
+                _refreshing.release()
+
+        threading.Thread(target=refresh, name="pos-apps-refresh", daemon=True).start()
+    return cached[1] if cached is not None else []
 
 
 def installed(runtime_dir: Path, *, refresh: bool = False) -> list[InstalledApp]:

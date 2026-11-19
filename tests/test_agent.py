@@ -283,7 +283,9 @@ def test_a_claim_with_no_action_behind_it_is_corrected(home: Path, config: Confi
     script = Script(
         use(("set_reminder", {"text": "stretch", "minutes": 5})), answer("I've set it.")
     )
-    assert agent.respond("remind me", env.ex, FakeProvider(script)).reply == "I've set it."
+    # A real action is said in its own words (no second model call since 19 Nov).
+    reply = agent.respond("remind me", env.ex, FakeProvider(script)).reply
+    assert reply.startswith("I'll remind you") and "stretch" in reply
 
 
 def test_typed_chat_shares_the_conversation(home: Path, config: Config):

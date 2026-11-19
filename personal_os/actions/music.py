@@ -24,6 +24,7 @@ any of them (tests/test_music.py).
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -68,6 +69,25 @@ SOURCES = {
 }  # fmt: skip
 # What "play X on <site>" can name, beside "music" (= the source you chose).
 SITE_NAMES = {"youtube music": "youtube_music", "youtube": "youtube", "spotify": "spotify"}
+
+
+_SAID_SITE = re.compile(
+    r"\b(?:on|in|from|using|with|via)\s+(?:the\s+)?(youtube\s*music|yt\s*music|ytmusic|spotify|"
+    r"youtube|yt)\b",
+    re.I,
+)
+
+
+def site_in(text: str) -> str:
+    """The service your words name ("... on YouTube Music", "from Spotify"), as play_media
+    names it, or "" when they name none."""
+    m = _SAID_SITE.search(text or "")
+    if not m:
+        return ""
+    s = re.sub(r"\s+", " ", m[1].lower())
+    if "music" in s:
+        return "youtube music"
+    return "spotify" if s == "spotify" else "youtube"
 
 
 def chosen(source: str) -> Source | None:
@@ -287,7 +307,11 @@ def play(src: Source, b: Backend, query: str, *, open_in: str = "auto") -> Reply
                 b.wait(0.5)
                 waited += 0.5
         data = b.open_first(recipes.search_url(site, query), site.first, host)
-        title = _tidy(str((data or {}).get("title") or query), src)
+        title = _tidy(str((data or {}).get("title") or ""), src)
+        if not title or title == src.name:
+            # The tab still had the site's own title ("Playing "YouTube Music"", 17 Nov):
+            # say what you asked for instead.
+            title = query
         return Reply(f'Playing "{title}" on {src.name}', True)
     # Spotify: open its search, in its app if that's where you listen.
     app = None if open_in == "browser" else next(iter(apps_for(src, b)), None)
@@ -354,8 +378,8 @@ class LiveBackend:
     def installed(self) -> list[App]:
         from personal_os.actions import apps
 
-        try:
-            return [App(a.name, a.app_id) for a in apps.installed(self.runtime_dir)]
+        try:  # never waits on Windows' list: a stalled scan once held "play music" 60 s
+            return [App(a.name, a.app_id) for a in apps.installed_now(self.runtime_dir)]
         except Exception:
             return []
 

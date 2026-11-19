@@ -239,3 +239,21 @@ Measured with en_US-hfc_female-medium: making the set takes about 7.6 s once, in
 - **Undo:** removes it.
 
 Measured with qwen3:4b: offering one and answering about them take no model call (0.0 s), and "I've sent the invoice to Ravi" ticked off the right one.
+
+## Speed on the GTX 1650 (19 Nov audit)
+
+With `llm.keep_on_gpu`, qwen3:4b is entirely on the GPU (3.79 GB of 3.79 GB, "100% GPU", kept until unloaded) and stays there. Measured with Donna's real prompt (about 3,700 tokens of rules and 51 tools):
+
+| What | Time |
+|---|---|
+| Reading a prompt afresh (the GPU at 100%, full clock 1,785 MHz, on mains) | about 121 tokens/s: **~30 s** for the agent's prompt |
+| Reading it again once Ollama has it | 0.1-0.5 s |
+| Writing (the JSON step, 60-120 tokens) | about 32 tokens/s: **2-4 s** |
+| A step that reads tool results (500 new tokens) | 5-7 s |
+
+The card has no tensor cores, so reading is its limit, not a setting. The slow requests in the log (26-85 s) were a fresh read (~30 s, after the model reloaded or another model job used the GPU), a second step only to word a reply, and a 60 s wait on Windows' app list. The fixes:
+- **Primed:** voice has the model read the agent's prompt right after it starts, after its own recall lookups, and every 5 minutes while idle. It only does this while the model is kept on the GPU anyway, and never in gaming mode. A first request then takes about 3-5 s, not about 32 s.
+- **No second step after plain actions:** when a step's calls are all actions and none failed, each says what it did and the reply is built from them, saving 5-7 s. A failure still gets a second step, which can try another way.
+- **The app list never blocks a turn** (`apps.installed_now`): the last list, refreshed in the background.
+
+What to expect: a rules command takes under a second plus the action itself; one model step 2-4 s; a lookup with an answer 8-15 s; a fresh prompt read adds about 30 s. Gemma 4 E2B loaded only 1.71 GB onto the GPU and wrote faster (50 tokens/s), but read prompts no faster (about 115 tokens/s). E4B is 6.1-6.6 GB to download and wasn't measured.

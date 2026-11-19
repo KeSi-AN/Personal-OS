@@ -84,10 +84,12 @@ def test_a_claim_of_a_different_action_is_replaced_by_what_ran(home: Path, confi
     env = Env(home, config)
     script = Script(use(("set_volume", {"percent": 40})), answer("I've closed VS Code for you."))
     r = agent.respond("volume 40", env.ex, FakeProvider(script))
-    assert r.reply == "volume 40%."  # what actually happened, not the claim
+    assert r.reply == "Volume 40%."  # what actually happened, not the claim
+    # An action that worked is said in its own words, with no second model call (19 Nov), so
+    # a model's wrong claim never reaches you at all.
     env2 = Env(home.parent / "h2", config)
     script = Script(use(("set_volume", {"percent": 40})), answer("I've set the volume to 40."))
-    assert agent.respond("volume 40", env2.ex, FakeProvider(script)).reply.startswith("I've set")
+    assert agent.respond("volume 40", env2.ex, FakeProvider(script)).reply == "Volume 40%."
 
 
 def test_an_app_name_said_with_different_spacing_is_not_borrowed():
