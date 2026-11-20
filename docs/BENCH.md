@@ -187,3 +187,13 @@ Typed, all 37 pass. The spoken failures point at two things to try next: `stt_hi
 Whisper your project and app names) and matching a heard project name by sound ("Cordis" to
 chordus) before answering.
 
+### 2026-11-21 02:52-02:54 (ADR-094): typed 37/37, spoken 31/37
+
+With `stt_hints` on (now the default, without her own name in the prompt) and names put back
+by sound where a name goes. Every project and app name was heard or put back right ("shop-app",
+"Chordus", "vscode"). The six spoken failures: three song titles Whisper can't know ("Raaton"
+as "Rotten", "Saccharine" as "Sackarin", "Zulfe" as "ZOLF"), and "Claude" in reminders as
+"claw", "clog" or a lost "check" (Claude is past the first 40 names the hints carry). Piper
+adds a little randomness, so a spoken run differs slightly each time: the no-hints run heard
+"Chordus" right where the first one wrote "Cordis".
+

@@ -55,9 +55,14 @@ def test_a_wake_turn_does_not_prompt_whisper_with_her_name(home: Path, config: C
 
     v.stt = v.stt_fast = Model()  # type: ignore[assignment]
     assert v.transcribe(object(), wake=True) == "Donna, open Brave."
-    assert got[-1] == {}
+    assert "donna" not in str(got[-1].get("vocabulary", "")).lower()  # names, never hers
     v.transcribe(object())
-    assert got[-1] == {}  # other turns are transcribed as before
+    assert "donna" not in str(got[-1].get("vocabulary", "")).lower()
+    v.index.current = lambda: type(
+        "I", (), {"names_for_hints": lambda s, n=40: ["donna", "Brave"]}
+    )()  # type: ignore[method-assign]
+    v.transcribe(object())
+    assert got[-1]["vocabulary"] == "Open Brave."  # a folder called donna doesn't put it back
 
 
 def test_the_wake_listen_passes_it_on(home: Path, config: Config, monkeypatch: pytest.MonkeyPatch):

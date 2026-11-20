@@ -165,7 +165,7 @@ def test_the_request_after_the_wake_word():
 
 def test_the_recogniser_is_whisper_small_as_in_jarvis(home: Path, config: Config):
     assert config.voice.stt_model == "small" and config.voice.stt_fast_model == ""
-    assert not config.voice.stt_hints  # no prompt
+    assert config.voice.stt_hints  # your names as a prompt (21 Nov: 32/37 spoken against 29)
     t = make_transcriber(home, config.voice.stt_model)
     assert isinstance(t, Transcriber) and not t.available  # nothing downloaded here
 

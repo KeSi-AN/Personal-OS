@@ -174,7 +174,7 @@ tags = ["reminder"]
 [[case]]
 id = "remind-at-time"
 say = "remind me to call mum at 7 pm"
-calls = [{ tool = "set_reminder", text = "call mum", at = "7" }]
+calls = [{ tool = "set_reminder", text = "call m[ou]m", at = "7" }]
 only = true
 reply = ["remind you"]
 max_s = 5

@@ -183,7 +183,7 @@ Only speech while a reply is actually sounding counts, after the first ~0.3 s of
 
 ### Speech recognition
 
-As in JARVIS: **Whisper "small"**, the multilingual model, told the language is English, with no prompt. It was trained on many more accents than the English-only models: here it heard "Can you open Brave for me?" where `small.en` heard "open pray for me". It runs through faster-whisper (the same model weights as JARVIS's openai-whisper, without PyTorch), about 1.7 s a phrase on this laptop. `voice.stt_model` chooses it; `voice.stt_hints = true` adds a prompt of your app and folder names.
+As in JARVIS: **Whisper "small"**, the multilingual model, told the language is English, with no prompt. It was trained on many more accents than the English-only models: here it heard "Can you open Brave for me?" where `small.en` heard "open pray for me". It runs through faster-whisper (the same model weights as JARVIS's openai-whisper, without PyTorch), about 1.7 s a phrase on this laptop. `voice.stt_model` chooses it; `voice.stt_hints` (on by default since 21 Nov) adds a prompt of your project, folder and app names: on the bench's spoken run it heard "shop-app" and "Chordus" right where it had written "Shapa" and "Cordis" (32 of 37 cases against 29). Whatever it hears, a name in a place a name goes ("leave off on X", "open X") that sounds like one of yours is put back (`voice/names.py`); `voice log` shows when (`names_fixed`).
 
 After a reply, voice keeps listening for 10 seconds (`voice.followup_s`), as JARVIS does, so a follow-up needs no wake word.
 

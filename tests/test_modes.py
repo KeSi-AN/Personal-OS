@@ -125,7 +125,7 @@ def test_work_mode_nudges_while_chill_is_in_front(home: Path, config: Config, mo
     env, fake, shown, tick = _nudge_world(home, config, monkeypatch, _watching())
     tick()
     assert shown and "17 min of chill (anime-site.example) in work mode" in shown[0]
-    assert "say 'chill mode'" in shown[0]
+    assert "Say 'snooze' for 5 more minutes, or 'chill mode'" in shown[0]
     tick()
     assert len(shown) == 1  # not again within 30 minutes
     modes.set_mode(env.config.runtime_dir, "chill", by="voice", now=T0 - timedelta(hours=1))

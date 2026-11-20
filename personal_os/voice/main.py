@@ -91,6 +91,7 @@ class Voice:
         self._priming = threading.Lock()  # one prime_agent at a time
         self._provider: Any = None  # the model, made on first use (provider())
         self._ended = False  # this turn ended the conversation (respond)
+        self.name_fixes: list[tuple[str, str]] = []  # (heard, name), last transcript
         self._prime_stop: threading.Event | None = None  # the running prime's stop signal
         # A question asked in a typed turn ("Hold you to it? Say yes or no") waits here for
         # the next typed text instead of the mic (typed_answer_to).
@@ -392,12 +393,22 @@ class Voice:
         calculator."), so real requests were thrown away as having no wake word (16 Nov).
         Its sound-alikes ("Don't know", "Done up") are recognised instead (_WAKE_ONLY)."""
         model = self.stt if accurate else self.stt_fast
-        name = ""
         if not self.cfg.voice.stt_hints:  # as in JARVIS: no prompt, just English
-            return model.transcribe(audio, vocabulary=name) if name else model.transcribe(audio)
+            return self.own_names(model.transcribe(audio))
         names = self.index.current().names_for_hints(40)
-        vocabulary = f"{name} {self.vocabulary(names)}".strip()
-        return model.transcribe(audio, vocabulary=vocabulary, hotwords=", ".join(names[:25]))
+        vocabulary = self.vocabulary(names)
+        heard = model.transcribe(audio, vocabulary=vocabulary, hotwords=", ".join(names[:25]))
+        return self.own_names(heard)
+
+    def own_names(self, heard: str) -> str:
+        """Your project, folder and app names put back where Whisper wrote a sound-alike
+        ("Shapa" for shop-app: voice/names.py). What was changed is kept for the history."""
+        from personal_os.voice import names
+
+        fixed, self.name_fixes = names.correct(heard, self.index.current().names_for_hints(120))
+        if self.name_fixes:
+            _log.info("names corrected", extra={"fields": {"n": len(self.name_fixes)}})
+        return fixed
 
     def accurate_text(self) -> str | None:
         """The last utterance as the accurate model hears it (once per utterance), or None
@@ -410,10 +421,13 @@ class Voice:
         return self._accurate[1]
 
     def vocabulary(self, names: list[str] | None = None) -> str:
-        """A prompt of names that exist here, so "open brave" isn't heard as "open brat"."""
+        """A prompt of names that exist here, so "open brave" isn't heard as "open brat". Never
+        her own name: told "Donna", Whisper takes it as already said and leaves it out of a
+        wake turn, which is then thrown away as having no wake word (16 Nov)."""
         if names is None:
             names = self.index.current().names_for_hints(40)
-        return "Donna. Open " + ", ".join(names) + "."
+        names = [n for n in names if n.strip().lower() not in ("donna", "hey donna")]
+        return "Open " + ", ".join(names) + "."
 
     # --- handling --------------------------------------------------------------------------------
 
@@ -563,10 +577,19 @@ class Voice:
 
     def fast(self, text: str) -> str | None:
         """A command the router can run without the LLM; the reply to say, or None."""
+        from personal_os.core import nudge
         from personal_os.voice import rest, router
 
+        rt, now = self.cfg.runtime_dir, self.clock.now()
+        nudged = nudge.recent(rt, now)
+        snooze = nudge.parse(text) if nudged else None
+        if snooze is not None:  # "snooze", "5 more minutes", right after a work-mode nudge
+            nudge.snooze(rt, snooze, now)
+            return nudge.reply(snooze)
         minutes = rest.parse(text)
         if minutes is not None:  # "take 10", "rest up for 20 minutes" (ADR-085)
+            if nudged:  # "take 5" to a nudge means leave me be for 5, too
+                nudge.snooze(rt, minutes, now)
             return self.take_rest(minutes, announce=rest.tell_when_back(text))
         both = self.several(text)
         if both is not None:  # "pause the music and take 10": each part by rules, in order
@@ -1268,6 +1291,8 @@ class Voice:
                     return False
             assert text is not None
             entry["heard"] = text
+            if not given and self.name_fixes:
+                entry["names_fixed"] = [f"{a} -> {b}" for a, b in self.name_fixes]
             entry["listen_s"] = round(time.monotonic() - t0, 1)
             if self.last_listen:
                 entry["audio"] = dict(self.last_listen)

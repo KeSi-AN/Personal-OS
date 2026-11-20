@@ -117,7 +117,7 @@ class VoiceConfig(_Section):
     # Heard first, if set (a smaller Whisper size); "" uses stt_model alone, as in JARVIS.
     stt_fast_model: str = ""
     # A prompt of your app and folder names for recognition. Off, as in JARVIS.
-    stt_hints: bool = False
+    stt_hints: bool = True
     # The wake word, always listening (Vosk, as in JARVIS): any of these as a word.
     wake_word_enabled: bool = True
     wake_words: list[str] = Field(default_factory=lambda: ["donna"])

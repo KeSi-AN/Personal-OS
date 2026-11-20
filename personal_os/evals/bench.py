@@ -56,7 +56,9 @@ class Result:
         return [c for c in self.checks if not c.ok]
 
 
-def make_home(real: Config, into: Path, *, keep_on_gpu: bool = False) -> Config:
+def make_home(
+    real: Config, into: Path, *, keep_on_gpu: bool = False, stt_hints: bool | None = None
+) -> Config:
     """A copy of your settings and database to run against; your own are only read.
     `keep_on_gpu`: the copy keeps the model loaded and reads the prompt ahead, as Donna does
     with the tray's "Keep on GPU", whatever your setting is."""
@@ -70,6 +72,10 @@ def make_home(real: Config, into: Path, *, keep_on_gpu: bool = False) -> Config:
     if keep_on_gpu:
         llm = cfg.llm.model_copy(update={"keep_on_gpu": True})
         cfg = cfg.model_copy(update={"llm": llm})
+    if stt_hints is not None:
+        cfg = cfg.model_copy(
+            update={"voice": cfg.voice.model_copy(update={"stt_hints": stt_hints})}
+        )
     cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
     if real.db_path.exists():
         copy_db(real.db_path, cfg.db_path)
@@ -341,6 +347,11 @@ def main(argv: list[str] | None = None, *, emit: Callable[[str], None] = print) 
         help="read the prompt ahead as with Keep on GPU, whatever your setting",
     )
     ap.add_argument(
+        "--stt-hints",
+        action="store_true",
+        help="spoken: give Whisper your names (voice.stt_hints), whatever your setting",
+    )
+    ap.add_argument(
         "--spoken",
         action="store_true",
         help="say each request with the Piper voice and hear it with Whisper",
@@ -360,7 +371,8 @@ def main(argv: list[str] | None = None, *, emit: Callable[[str], None] = print) 
     os.environ[ENV_HOME] = str(tmp)  # anything that looks up the data folder gets the copy
     results: list[Result] = []
     try:
-        cfg = make_home(real, tmp, keep_on_gpu=args.keep_on_gpu)
+        cfg = make_home(real, tmp, keep_on_gpu=args.keep_on_gpu,
+                        stt_hints=True if args.stt_hints else None)  # fmt: skip
         emit(f"{len(cases)} cases, model {cfg.llm.fast_model}, copy of your data in {tmp}")
         world_ref: list[World] = [World(apps)]
         with patched(world_ref):

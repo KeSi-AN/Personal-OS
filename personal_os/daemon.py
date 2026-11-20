@@ -130,7 +130,6 @@ class Daemon:
         )
         self.llm_status: dict[str, Any] = {"gate": "not checked yet"}
         self.pipeline_task: asyncio.Task[None] | None = None  # the capture writer, for health
-        self.last_nudge: datetime | None = None
         self.restart_requested = False
         self.interfaces = use_platform  # web dashboard, tray (never in tests without a desktop)
         self.tray: Tray | None = None
@@ -659,14 +658,17 @@ class Daemon:
                 b = activity.breakdown(self.control_conn, now - timedelta(minutes=20), now, cache)
                 chill = b.by_category.get("chill", 0)
                 if chill >= fx.nudge_chill_min * 60_000:
-                    self.last_nudge = now
                     self._nudge(chill // 60_000, b)
         except Exception as exc:  # never let this take the loop down
             _log.warning("mode tick failed", extra={"fields": {"exc_type": type(exc).__name__}})
 
     def _nudge_due(self, rt: Any, now: datetime) -> bool:
-        """Not twice within 30 minutes, and not in the first 10 minutes of work mode."""
-        if self.last_nudge is not None and now - self.last_nudge <= timedelta(minutes=30):
+        """Not twice within 30 minutes (unless a snooze just ran out), not while snoozed
+        ("snooze", "5 more minutes": core/nudge.py), and not in the first 10 minutes of work
+        mode."""
+        from personal_os.core import nudge
+
+        if not nudge.due(rt, now):
             return False
         since = str(modes.state(rt).get("since") or "")
         try:
@@ -686,7 +688,10 @@ class Daemon:
         project = get_project(self.control_conn, row[0]) if row else None
         back = f" Back to {project.name}?" if project else ""
         text = (f"{minutes} min of chill ({top}) in work mode.{back} "
-                "If it's a break, say 'chill mode'.")  # fmt: skip
+                "Say 'snooze' for 5 more minutes, or 'chill mode' if it's a break.")  # fmt: skip
+        from personal_os.core import nudge
+
+        nudge.said(self.config.runtime_dir, self.clock.now())
         alerts.show(
             self.config, f"nudge-{self.clock.now():%H%M}", "Work mode", text, self.clock.now()
         )

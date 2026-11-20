@@ -166,7 +166,7 @@ edge = ['%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe']
 enabled = false            # push-to-talk Ctrl+Alt+Shift+V; runs in its own process
 stt_model = "small"        # Whisper small, multilingual, told it's English: as in JARVIS
 stt_fast_model = ""        # a smaller Whisper heard first, if set; "" = stt_model only (JARVIS)
-stt_hints = false          # prompt recognition with your app/folder names (JARVIS: no prompt)
+stt_hints = true           # give Whisper your project, folder and app names (spoken bench: 32/37 vs 29/37)
 wake_word_enabled = true   # Vosk listens for the wake word, as in JARVIS: "Donna", "hey Donna" ...
 wake_words = ["donna"]     # each counts as a whole word ("Madonna" doesn't)
 wake_grammar = false       # listen only for the wake words, stop phrases and look-alikes: about a
