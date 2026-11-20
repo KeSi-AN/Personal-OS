@@ -7,6 +7,11 @@
 Samples the daemon process (found via the health file in the data dir) every 5 s.
 CPU is reported as a percentage of the whole machine (all cores), like Task Manager.
 
+    uv run python scripts/measure_budget.py --all 15 [--out docs/BUDGET.md]
+
+--all MINUTES samples every Personal OS process that runs all the time (launcher, daemon,
+voice, the island with its WebView2 processes) every 5 s, each on its own line.
+
 --popup SECONDS opens the voice popup (the demo, pinned and looping, so its animations run),
 samples it with its WebView2 child processes every second, closes it, and checks that every
 one of those processes is gone: the popup costs nothing while closed.
@@ -39,9 +44,12 @@ def main() -> int:
     ap.add_argument("--interval", type=float, default=5)
     ap.add_argument("--out", type=Path, help="Append a Markdown result section to this file.")
     ap.add_argument("--popup", type=float, metavar="SECONDS", help="Measure the voice popup.")
+    ap.add_argument("--all", type=float, metavar="MINUTES", help="Measure every process.")
     args = ap.parse_args()
 
     cfg = load_config()
+    if args.all:
+        return measure_all(args.all, args.interval, args.out)
     if args.popup:
         return measure_popup(cfg, args.popup, args.out)
     info = runtime.daemon_info(cfg.runtime_dir)
@@ -90,6 +98,80 @@ def main() -> int:
     print(report)
     if args.out:
         with args.out.open("a", encoding="utf-8") as fh:
+            fh.write(report + "\n")
+    return 0 if ok else 2
+
+
+GROUPS = {
+    "launcher": "personal_os.launcher",
+    "daemon": "personal_os.daemon",
+    "voice": "personal_os.voice.main",
+    "island": "personal_os.interfaces.island",
+}
+
+
+def _find(module: str) -> psutil.Process | None:
+    for p in psutil.process_iter(["cmdline"]):
+        with contextlib.suppress(psutil.Error, TypeError):
+            cmd = p.info["cmdline"] or []
+            if (cmd and cmd[-1] == module) or module in cmd:
+                return p
+    return None
+
+
+def measure_all(minutes: float, interval: float, out: Path | None) -> int:
+    """Every always-on process, each with its children (the island's WebView2), side by side.
+    The daemon's budget is checked; the others are reported."""
+    found = {name: _find(mod) for name, mod in GROUPS.items()}
+    missing = [n for n, p in found.items() if p is None]
+    if "daemon" in missing:
+        print("Daemon not running. Start it with `personal-os daemon start`.", file=sys.stderr)
+        return 1
+    ncpu = psutil.cpu_count() or 1
+    seen: dict[int, psutil.Process] = {}
+    cpu: dict[str, list[float]] = {n: [] for n, p in found.items() if p}
+    uss: dict[str, list[float]] = {n: [] for n in cpu}
+    started = datetime.now().astimezone()
+    end = time.monotonic() + minutes * 60
+    print(f"Sampling {', '.join(cpu)} every {interval:.0f}s for {minutes:g} min...")
+    first = True
+    while time.monotonic() < end:
+        for name in cpu:
+            root = found[name]
+            assert root is not None
+            total_cpu = total_uss = 0.0
+            # Each process alone (they start one another); the island with its WebView2.
+            for p in _tree(root) if name == "island" else [root]:
+                with contextlib.suppress(psutil.Error):
+                    q = seen.setdefault(p.pid, p)
+                    c = q.cpu_percent(None)
+                    total_cpu += 0.0 if first else c / ncpu
+                    total_uss += q.memory_full_info().uss / 1e6
+            if not first:
+                cpu[name].append(total_cpu)
+                uss[name].append(total_uss)
+        first = False
+        time.sleep(interval)
+    lines = [f"### {started:%Y-%m-%d %H:%M} — every process, {minutes:g} min", "",
+             "| process | CPU median | CPU p95 | memory (private) median | max |",
+             "|---|---|---|---|---|"]  # fmt: skip
+    for name in cpu:
+        cs, m = sorted(cpu[name]), uss[name]
+        if not cs:
+            continue
+        p95 = cs[max(0, int(len(cs) * 0.95) - 1)]
+        lines.append(f"| {name} | {statistics.median(cs):.2f}% | {p95:.2f}% | "
+                     f"{statistics.median(m):.0f} MB | {max(m):.0f} MB |")  # fmt: skip
+    if missing:
+        lines += ["", f"Not running: {', '.join(missing)}."]
+    d = cpu.get("daemon") or [0.0]
+    ok = statistics.median(d) < CPU_BUDGET and max(uss.get("daemon") or [0.0]) < RSS_BUDGET_MB
+    lines += ["", f"- Daemon budget (< {CPU_BUDGET}% CPU idle, < {RSS_BUDGET_MB} MB): "
+              f"**{'within budget' if ok else 'OVER BUDGET'}**", ""]  # fmt: skip
+    report = "\n".join(lines)
+    print(report)
+    if out:
+        with out.open("a", encoding="utf-8") as fh:
             fh.write(report + "\n")
     return 0 if ok else 2
 

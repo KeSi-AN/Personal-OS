@@ -90,6 +90,7 @@ class Voice:
         self.was_resting = False  # what watch_rest saw last
         self._priming = threading.Lock()  # one prime_agent at a time
         self._provider: Any = None  # the model, made on first use (provider())
+        self._ended = False  # this turn ended the conversation (respond)
         self._prime_stop: threading.Event | None = None  # the running prime's stop signal
         # A question asked in a typed turn ("Hold you to it? Say yes or no") waits here for
         # the next typed text instead of the mic (typed_answer_to).
@@ -297,6 +298,7 @@ class Voice:
                     self.cfg.data_dir, list(v.wake_words), on_wake=self._woke,
                     on_stop=self._stop_talking, busy=self.recording.is_set,
                     speaking=lambda: self.state in ("speaking", "thinking"), engine=self.engine,
+                    use_grammar=v.wake_grammar,
                 )  # fmt: skip
                 self.wake.start()
             except Exception as exc:
@@ -1239,8 +1241,6 @@ class Voice:
     def respond(self, trigger: str, text: str | None = None) -> bool:
         """One exchange. `text`: a request to handle without listening. Returns True when a
         reply was spoken in full, so a follow-up can be listened for."""
-        from personal_os.context.route import incomplete, route
-
         entry: dict[str, Any] = {"at": self.clock.now().isoformat(), "trigger": trigger}
         t0 = time.monotonic()
         if self._prime_stop is not None:
@@ -1258,130 +1258,31 @@ class Voice:
         }  # fmt: skip
         self.write_status("listening", trigger=trigger)
         self.launch_popup()
-        spoke = ended = False
+        spoke = False
+        self._ended = False  # the conversation ended with this turn ("thanks, that's all")
         given = text is not None
         try:
-            if given:
-                pass  # a request already made: "no, at 5 pm instead"
-            elif trigger == "hotkey" and mic_muted():
-                # A muted mic records silence: say so, rather than "nothing heard".
-                entry["route"] = "mic muted"
-                entry["reply"] = MIC_MUTED
-                self.turn_update(reply=MIC_MUTED, state="speaking")
-                self.say(MIC_MUTED)
-                return False
-            elif trigger == "followup":
-                self.speaker.earcon("more")  # softer: "anything else?"
-                text = self.listen(start_timeout_s=self.cfg.voice.followup_s)
-            else:
-                if trigger != "barge":  # when you interrupted, you're already talking
-                    self.speaker.earcon("listen")  # the canceller keeps it out of the mic
-                carry = trigger in ("barge", "wake") and bool(preroll)
-                text = self.listen(preroll, wake=trigger == "wake") if carry else self.listen()
-                if trigger == "barge" and text and own_words(text, self.said_last):
-                    # Her own voice, leaking past the echo canceller ("Did you mean?" while
-                    # she asked "Did you mean vscode?"): not you, so nothing is done.
-                    entry["heard"] = text
-                    entry["route"] = "her own voice (ignored)"
+            if not given:
+                text = self._hear(trigger, preroll, entry)
+                if text is None:
                     return False
-                if (
-                    trigger == "wake" and carry and text
-                    and not mentions_wake(text, list(self.cfg.voice.wake_words))
-                    and not self.clearly_a_request(text)
-                ):  # fmt: skip
-                    # The wake word fired, but there's no "Donna" in what was recorded: it
-                    # was something else (a video, people talking), so it isn't acted on.
-                    entry["heard"] = text
-                    entry["route"] = "no wake word in it"
-                    return False
-                if trigger == "wake" and text and not _without_wake(text):
-                    self.speaker.earcon("listen")  # still only "Donna": ask with the tone
-                    text = self.listen()
-                elif trigger == "wake" and text:
-                    text = _without_wake(text)  # what came before "Donna" isn't the request
             assert text is not None
             entry["heard"] = text
             entry["listen_s"] = round(time.monotonic() - t0, 1)
             if self.last_listen:
                 entry["audio"] = dict(self.last_listen)
-            if not text:
-                entry["route"] = "nothing heard"
-                if trigger == "followup":
-                    entry["quiet"] = True  # the window closed unused: not worth a log line
+            if self._not_a_request(text, given, trigger, entry):
                 return False
-            if not given and _STOP_WORDS.match(_without_wake(text) or text):
-                # "Stop" as the request: end it all here. Not "pause the music" (that's
-                # "pause"), and nothing is said back; the popup closes.
-                entry["route"] = "stopped by you"
-                self.cancel_turn()
-                return False
-            if trigger == "followup" and not given and dialogue.closing(text):
-                entry["route"] = "end of conversation"
-                self.convo.clear()
-                ended = True
-                return False
-            # Cut off by a pause ("Can you open the-"). Typed text can't be: "play" typed in
-            # the island is a whole request (17 Nov: it got no answer at all).
-            if trigger != "typed" and incomplete(text):
-                entry["route"] = "incomplete"
-                self.say(f"Sorry, I only caught: {text.rstrip('-. ')}. Please say it again.")
-                return False
-            self.turn["heard"] = text
-            self.turn["state"] = "thinking"
-            self.write_status("thinking", heard=text)
+            self._start_thinking(text, t0)
             t1 = time.monotonic()
-            self.asked = {}
-            self.announced = ""
-            self.streamed, self.first_said_s = "", None
-            self.beat_said = ""
-            self.turn_t0 = t0
-            self.last_trace = []
-            # A typed prompt gets the quick commands too ("open brave"), as speech does.
-            reply = None if given and trigger != "typed" else self.fast(text)
-            if self.asked:
-                entry["asked"] = self.asked
-            if reply is not None:
-                entry["route"] = "fast"
-            elif not given and trigger in ("barge", "followup") and _fragment(text):
-                # One stray word while talking over a reply or after one ("Not."): not a
-                # request, so it isn't sent to the model to be answered.
-                entry["route"] = "ignored (one word)"
+            reply = self._reply(text, given, trigger, entry)
+            if reply is None:
                 return False
-            elif not given and _fragment(text):
-                # One word that isn't a command ("code."): most of it was missed. Ask again
-                # rather than have the model guess, with the old conversation, for 40 s.
-                entry["route"] = "asked again (one word)"
-                reply = f"Sorry, I only caught “{text.strip(' .,!?')}”. Please say it again."
-            else:
-                # Not a quick command: questions and requests get the accurate transcript.
-                if not given:
-                    text = self.accurate_text() or text
-                entry["heard"] = text
-                self.turn_update(heard=text)
-                entry["route"] = route(text)
-                reply = self.handle(text)
-            if self.unanswered and reply and "declined" in reply:
-                reply = "I didn't hear a yes or no, so I didn't do it."
             entry["reply"] = reply
             entry["handle_s"] = round(time.monotonic() - t1, 1)
             if self.interrupt.is_set():
                 return False
-            if self.streamed:
-                entry["first_words_s"] = self.first_said_s
-            if self.beat_said:
-                entry["beat"] = self.beat_said
-            if reply and reply == self.announced:
-                spoke = True  # already said before the action ran
-            elif reply:
-                self.turn.update(reply=reply, state="speaking", progress="")
-                self.write_status("speaking")
-                rest = unsaid(spoken(reply), self.streamed)
-                t2 = time.monotonic()
-                if rest:
-                    self.wait_for_popup(reply)
-                    self.say(rest)
-                entry["speak_s"] = round(time.monotonic() - t2, 1)
-                spoke = not self.interrupt.is_set()
+            spoke = self._speak_reply(reply, entry)
         except Exception as exc:  # never let one request kill the voice process
             if not self.interrupt.is_set():  # a stopped model call isn't a failure
                 entry["error"] = f"{type(exc).__name__}: {exc}"[:300]
@@ -1390,44 +1291,183 @@ class Voice:
                 )
                 self.say("Sorry, something went wrong.")
         finally:
-            entry["total_s"] = round(time.monotonic() - t0, 1)
-            stopped = self.interrupt.is_set() and "error" not in entry
-            if stopped:
-                cut = "stopped" if self.stopped_by_you else "interrupted"
-                if not str(entry.get("route", "")).startswith("stopped"):
-                    entry["route"] = f"{entry.get('route') or 'listening'} ({cut})"
-            if self.turn is not None:
-                if self.stopped_by_you:
-                    self.turn["dismissed"] = True  # the popup closes now
-                said = entry.get("reply") or self.turn["reply"]
-                self.turn.update(
-                    state="done", done_at=self.clock.now().isoformat(), progress="",
-                    question="", heard=entry.get("heard") or self.turn["heard"],
-                    reply="Stopped." if stopped and self.stopped_by_you else said,
-                    **({"error": "Something went wrong."} if "error" in entry else {}),
-                )  # fmt: skip
-            if self.last_trace:
-                entry["trace"] = self.last_trace
-            if not entry.get("quiet"):
-                record_history(self.cfg.runtime_dir, entry)
-            if self.triggers.empty():  # (one waiting is the next turn's: it reads that tap)
-                self.close_bridge()  # a wake word's tap the recording didn't use
-            if self.stopped_by_you:
-                ended = True  # a stopped exchange isn't something to build on later
-            if entry.get("heard") and "error" not in entry and not ended:
-                self.convo.add(entry["heard"], entry.get("reply", ""), str(entry.get("route", "")))
-            _log.info(
-                "voice request",
-                extra={
-                    "fields": {
-                        "route": entry.get("route"),
-                        "total_s": entry["total_s"],
-                        "failed": "error" in entry,
-                    }
-                },
-            )
-            self.write_status("ready")
+            self._close_turn(entry, t0)
         return spoke
+
+    def _hear(self, trigger: str, preroll: list[Any], entry: dict[str, Any]) -> str | None:
+        """Listen for the request, as the trigger calls for. None: nothing is to be done (a
+        muted mic, her own voice, a wake word with no "Donna" in it)."""
+        if trigger == "hotkey" and mic_muted():
+            # A muted mic records silence: say so, rather than "nothing heard".
+            entry["route"] = "mic muted"
+            entry["reply"] = MIC_MUTED
+            self.turn_update(reply=MIC_MUTED, state="speaking")
+            self.say(MIC_MUTED)
+            return None
+        if trigger == "followup":
+            self.speaker.earcon("more")  # softer: "anything else?"
+            return self.listen(start_timeout_s=self.cfg.voice.followup_s)
+        if trigger != "barge":  # when you interrupted, you're already talking
+            self.speaker.earcon("listen")  # the canceller keeps it out of the mic
+        carry = trigger in ("barge", "wake") and bool(preroll)
+        text = self.listen(preroll, wake=trigger == "wake") if carry else self.listen()
+        if trigger == "barge" and text and own_words(text, self.said_last):
+            # Her own voice, leaking past the echo canceller ("Did you mean?" while she
+            # asked "Did you mean vscode?"): not you, so nothing is done.
+            entry["heard"] = text
+            entry["route"] = "her own voice (ignored)"
+            return None
+        if trigger != "wake" or not text:
+            return text
+        if (
+            carry
+            and not mentions_wake(text, list(self.cfg.voice.wake_words))
+            and not self.clearly_a_request(text)
+        ):
+            # The wake word fired, but there's no "Donna" in what was recorded: it was
+            # something else (a video, people talking), so it isn't acted on.
+            entry["heard"] = text
+            entry["route"] = "no wake word in it"
+            return None
+        if not _without_wake(text):
+            self.speaker.earcon("listen")  # still only "Donna": ask with the tone
+            return self.listen()
+        return _without_wake(text)  # what came before "Donna" isn't the request
+
+    def _not_a_request(self, text: str, given: bool, trigger: str, entry: dict[str, Any]) -> bool:
+        """True when what was heard ends the turn here: nothing, "stop", a goodbye after a
+        reply, or half a sentence."""
+        from personal_os.context.route import incomplete
+
+        if not text:
+            entry["route"] = "nothing heard"
+            if trigger == "followup":
+                entry["quiet"] = True  # the window closed unused: not worth a log line
+            return True
+        if not given and _STOP_WORDS.match(_without_wake(text) or text):
+            # "Stop" as the request: end it all here. Not "pause the music" (that's "pause"),
+            # and nothing is said back; the popup closes.
+            entry["route"] = "stopped by you"
+            self.cancel_turn()
+            return True
+        if trigger == "followup" and not given and dialogue.closing(text):
+            entry["route"] = "end of conversation"
+            self.convo.clear()
+            self._ended = True
+            return True
+        # Cut off by a pause ("Can you open the-"). Typed text can't be: "play" typed in the
+        # island is a whole request (17 Nov: it got no answer at all).
+        if trigger != "typed" and incomplete(text):
+            entry["route"] = "incomplete"
+            self.say(f"Sorry, I only caught: {text.rstrip('-. ')}. Please say it again.")
+            return True
+        return False
+
+    def _start_thinking(self, text: str, t0: float) -> None:
+        assert self.turn is not None
+        self.turn["heard"] = text
+        self.turn["state"] = "thinking"
+        self.write_status("thinking", heard=text)
+        self.asked = {}
+        self.announced = ""
+        self.streamed, self.first_said_s = "", None
+        self.beat_said = ""
+        self.turn_t0 = t0
+        self.last_trace = []
+
+    def _reply(self, text: str, given: bool, trigger: str, entry: dict[str, Any]) -> str | None:
+        """The reply: by rules when they know it, else the model's. None: one stray word while
+        talking over a reply or after one, which isn't answered."""
+        from personal_os.context.route import route
+
+        # A typed prompt gets the quick commands too ("open brave"), as speech does.
+        reply = None if given and trigger != "typed" else self.fast(text)
+        if self.asked:
+            entry["asked"] = self.asked
+        if reply is not None:
+            entry["route"] = "fast"
+        elif not given and trigger in ("barge", "followup") and _fragment(text):
+            # One stray word while talking over a reply or after one ("Not."): not a request,
+            # so it isn't sent to the model to be answered.
+            entry["route"] = "ignored (one word)"
+            return None
+        elif not given and _fragment(text):
+            # One word that isn't a command ("code."): most of it was missed. Ask again rather
+            # than have the model guess, with the old conversation, for 40 s.
+            entry["route"] = "asked again (one word)"
+            reply = f"Sorry, I only caught “{text.strip(' .,!?')}”. Please say it again."
+        else:
+            # Not a quick command: questions and requests get the accurate transcript.
+            if not given:
+                text = self.accurate_text() or text
+            entry["heard"] = text
+            self.turn_update(heard=text)
+            entry["route"] = route(text)
+            reply = self.handle(text)
+        if self.unanswered and reply and "declined" in reply:
+            reply = "I didn't hear a yes or no, so I didn't do it."
+        return reply
+
+    def _speak_reply(self, reply: str, entry: dict[str, Any]) -> bool:
+        """Say what's left of the reply; True when it was said in full."""
+        if self.streamed:
+            entry["first_words_s"] = self.first_said_s
+        if self.beat_said:
+            entry["beat"] = self.beat_said
+        if reply and reply == self.announced:
+            return True  # already said before the action ran
+        if not reply:
+            return False
+        assert self.turn is not None
+        self.turn.update(reply=reply, state="speaking", progress="")
+        self.write_status("speaking")
+        rest = unsaid(spoken(reply), self.streamed)
+        t2 = time.monotonic()
+        if rest:
+            self.wait_for_popup(reply)
+            self.say(rest)
+        entry["speak_s"] = round(time.monotonic() - t2, 1)
+        return not self.interrupt.is_set()
+
+    def _close_turn(self, entry: dict[str, Any], t0: float) -> None:
+        """Whatever happened: the history, the popup's last state, the conversation, the log."""
+        entry["total_s"] = round(time.monotonic() - t0, 1)
+        stopped = self.interrupt.is_set() and "error" not in entry
+        if stopped:
+            cut = "stopped" if self.stopped_by_you else "interrupted"
+            if not str(entry.get("route", "")).startswith("stopped"):
+                entry["route"] = f"{entry.get('route') or 'listening'} ({cut})"
+        if self.turn is not None:
+            if self.stopped_by_you:
+                self.turn["dismissed"] = True  # the popup closes now
+            said = entry.get("reply") or self.turn["reply"]
+            self.turn.update(
+                state="done", done_at=self.clock.now().isoformat(), progress="",
+                question="", heard=entry.get("heard") or self.turn["heard"],
+                reply="Stopped." if stopped and self.stopped_by_you else said,
+                **({"error": "Something went wrong."} if "error" in entry else {}),
+            )  # fmt: skip
+        if self.last_trace:
+            entry["trace"] = self.last_trace
+        if not entry.get("quiet"):
+            record_history(self.cfg.runtime_dir, entry)
+        if self.triggers.empty():  # (one waiting is the next turn's: it reads that tap)
+            self.close_bridge()  # a wake word's tap the recording didn't use
+        # A stopped exchange isn't something to build on later.
+        ended = self._ended or self.stopped_by_you
+        if entry.get("heard") and "error" not in entry and not ended:
+            self.convo.add(entry["heard"], entry.get("reply", ""), str(entry.get("route", "")))
+        _log.info(
+            "voice request",
+            extra={
+                "fields": {
+                    "route": entry.get("route"),
+                    "total_s": entry["total_s"],
+                    "failed": "error" in entry,
+                }
+            },
+        )
+        self.write_status("ready")
 
 
 # "Donna" as Whisper writes it. Seen on 13 Nov: the wake word engine heard "donna" every time,

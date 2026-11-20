@@ -144,6 +144,22 @@ def doctor() -> None:
     info = runtime.daemon_info(cfg.runtime_dir)
     h: dict[str, Any] = info.health or {}
     typer.echo("Personal OS doctor\n")
+    _doctor_daemon(info, h, problems)
+    _doctor_storage(cfg)
+    _doctor_observers(h, problems)
+    _doctor_hooks(cfg, problems)
+    _doctor_connections(cfg, h, problems)
+    _doctor_voice(cfg, problems)
+    _doctor_models(cfg, h, problems)
+
+    if problems:
+        typer.echo("\nproblems:\n  - " + "\n  - ".join(problems))
+        raise typer.Exit(1)
+    typer.echo("\nAll good.")
+
+
+def _doctor_daemon(info: Any, h: dict[str, Any], problems: list[str]) -> None:
+    """The daemon: running, its heartbeat, CPU and memory."""
     if info.running:
         cpu = h.get("cpu_percent")
         rss = (h.get("rss_bytes") or 0) / 1e6
@@ -165,12 +181,19 @@ def doctor() -> None:
         typer.echo("daemon     NOT RUNNING. Start it with `personal-os daemon start`.")
         problems.append("daemon not running")
 
+
+def _doctor_storage(cfg: Config) -> None:
+    """Capture paused or not, and the database."""
     conn = connect(cfg.db_path)
     paused = pause_mod.is_paused(conn, SystemClock())
+    conn.close()
     typer.echo(f"capture    {'PAUSED' if paused else 'active'}")
     db_mb = cfg.db_path.stat().st_size / 1e6 if cfg.db_path.exists() else 0
     typer.echo(f"database   {cfg.db_path} ({db_mb:.1f} MB)")
 
+
+def _doctor_observers(h: dict[str, Any], problems: list[str]) -> None:
+    """Each observer, the bus, the privacy filter and the writer."""
     typer.echo("\nobservers")
     for name, o in (h.get("observers") or {}).items():
         state = o.get("state", "?")
@@ -220,6 +243,9 @@ def doctor() -> None:
     elif bus.get("queued", 0) > 1000:
         problems.append(f"{bus['queued']} events waiting to be written (is the database locked?)")
 
+
+def _doctor_hooks(cfg: Config, problems: list[str]) -> None:
+    """Terminal hooks and their spool."""
     typer.echo("\nhooks")
     policy = installer.execution_policy()
     for shell in ("powershell", "bash"):
@@ -241,6 +267,10 @@ def doctor() -> None:
         else 0
     )
     typer.echo(f"spool      {pending} file(s) waiting")
+
+
+def _doctor_connections(cfg: Config, h: dict[str, Any], problems: list[str]) -> None:
+    """The browser, autostart, hotkeys and the tray."""
     for b in browser_install.BROWSERS:
         host = browser_install.status(b)
         reg = "registered" if host.registered else "not registered"
@@ -265,6 +295,10 @@ def doctor() -> None:
             problems.append("hotkey taken by another app: " + ", ".join(taken))
     if "tray" in h:
         typer.echo(f"tray       {'shown' if h['tray'] else 'not shown'}")
+
+
+def _doctor_voice(cfg: Config, problems: list[str]) -> None:
+    """Voice, the microphone and the popup (when voice is on)."""
     if cfg.voice.enabled:
         from personal_os.voice.main import status as voice_status
 
@@ -286,6 +320,10 @@ def doctor() -> None:
         typer.echo(f"popup      {pline}")
         if pproblem:
             problems.append(pproblem)
+
+
+def _doctor_models(cfg: Config, h: dict[str, Any], problems: list[str]) -> None:
+    """Ollama and the background model jobs."""
     line, problem = _ollama(cfg)
     typer.echo(f"ollama     {line}")
     if problem:
@@ -295,11 +333,6 @@ def doctor() -> None:
         last = f", last run {_ago(llm['last_run'])}" if llm.get("last_run") else ""
         error = f", error: {llm['error']}" if llm.get("error") else ""
         typer.echo(f"llm jobs   {llm.get('gate', '?')}{last}{error}")
-
-    if problems:
-        typer.echo("\nproblems:\n  - " + "\n  - ".join(problems))
-        raise typer.Exit(1)
-    typer.echo("\nAll good.")
 
 
 # --- hooks ---------------------------------------------------------------------------------

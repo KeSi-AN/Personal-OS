@@ -35,8 +35,13 @@ _UNIT = r"(minutes?|mins?|hours?|hrs?|seconds?|secs?)"
 _HALF_HOUR = re.compile(r"\b(?:in|for|after)\s+(?:half an hour|a half hour|30 min\w*)\b", re.I)
 _IN = re.compile(rf"\b(?:in|for|after|within)\s+(?:another\s+)?{_NUM_RE}\s+{_UNIT}\b", re.I)
 # "in 5 to check claude": a number with no unit right after "in" is minutes (19 Nov: it was
-# read as part of the message, with no time, and took four turns).
-_IN_BARE = re.compile(r"\b(?:in|after)\s+(\d{1,3})(?=\s+(?:to|that|about)\b|\s*$)", re.I)
+# read as part of the message, with no time, and took four turns). Spoken, Whisper writes it
+# as a word, "in five to check claude" (the bench's spoken run, 21 Nov).
+_BARE_WORDS = [k for k in _NUM if k not in ("a", "an", "few", "a few") and "couple" not in k]
+_BARE_NUM = (
+    r"(\d{1,3}|" + "|".join(sorted(map(re.escape, _BARE_WORDS), key=len, reverse=True)) + ")"
+)
+_IN_BARE = re.compile(rf"\b(?:in|after)\s+{_BARE_NUM}(?=\s+(?:to|that|about)\b|\s*$)", re.I)
 _BY = re.compile(rf"\b(?:by|back|another|for another)\s+{_NUM_RE}\s+{_UNIT}\b", re.I)
 _CLOCK = r"(\d{1,2}(?:[:.]\d{2})?\s*(?:[ap]\.?\s*m\.?)?|noon|midday|midnight)"
 _AT = re.compile(rf"\b(?:at|for|to|till|until)\s+{_CLOCK}(?=$|[\s,.!?])", re.I)
@@ -143,7 +148,7 @@ def _take_time(rest: str) -> tuple[str, int | None, str | None]:
         return rest[: m.start()] + " " + rest[m.end() :], _minutes(_number(m[1]), m[2]), None
     m = _IN_BARE.search(rest)
     if m:
-        return rest[: m.start()] + " " + rest[m.end() :], int(m[1]), None
+        return rest[: m.start()] + " " + rest[m.end() :], _number(m[1]), None
     m = _AT.search(rest)
     if m:
         return rest[: m.start()] + " " + rest[m.end() :], None, _clock(m[1])

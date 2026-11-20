@@ -49,6 +49,24 @@ ship without a reason. When a real request goes wrong, add it as a case first.
 The bench shares Ollama with a running Donna, so her prompt has to be read again afterwards
 (about 30 s on the GTX 1650, done by her next priming).
 
+## Spoken cases
+
+`--spoken` says each request with your Piper voice (`voice.piper_voice`), turns it into the
+16 kHz audio the mic gives, and lets Donna's own speech recognition (your Whisper models and
+settings) hear it, through the hotkey path of a turn. The line shows what was heard when it
+differs from what was said. A clean synthetic voice finds names and numbers Whisper writes
+differently ("five" for 5, "VRES code" for VS Code); it doesn't show what your own voice,
+accent, mic or room do.
+
+## The gate before pushing
+
+Each full run (no `--only`) records a fingerprint of the code that decides what Donna
+understands and does (routing, rules, the agent and its tools, recall, projects, the model
+client, the cases) in `<data dir>/bench/latest-meta.json`.
+`uv run python -m personal_os.evals.gate` fails when that code changed since, or when that
+run didn't pass every case. `uv run python scripts/install_git_hooks.py` installs it as a
+git pre-push hook (in `.git/hooks`, not committed; `--remove` takes it out).
+
 ## Results
 
 ### 2026-11-20 02:46 (first baseline): 30/34 pass, 0 slow, 4 wrong
@@ -150,3 +168,22 @@ side summaries still waiting to be written in the background. The first run pass
 on the word "shop" alone while saying "I don't have data": "recently" was read as today, at
 1 a.m. It now means the last 7 days ("You made 8 commits to shop-app between 11-16 and
 11-20...", 11.9 s), and the case rejects "I don't have data".
+
+### 2026-11-21 02:07-02:09 (audit phase 4, ADR-093): typed 37/37, spoken 29/37
+
+The first spoken run (Piper's voice, your Whisper models, `stt_hints` off as configured). A
+short spoken run before it had already found one bug: Whisper writes "in five", which the
+reminder rule only read as digits; fixed. The eight spoken failures are all words the speech
+recognition wrote differently, taken at face value afterwards:
+
+- song titles it can't know: "Raaton" as "Rotten", "Saccharine" as "Place Akarin" ("play" as
+  "place"), and "play zulfe" as "Please auth", which then opened VS Code;
+- your project names: "shop-app" as "Shapa", "Chordus" as "Cordis", so the history answers
+  were about something else;
+- "Claude" as "claw", "remind me in a minute" as "Remind Mia in a minute";
+- "call mom" against the case's "call mum" (the case is too strict).
+
+Typed, all 37 pass. The spoken failures point at two things to try next: `stt_hints` (giving
+Whisper your project and app names) and matching a heard project name by sound ("Cordis" to
+chordus) before answering.
+

@@ -49,6 +49,7 @@ class Result:
     asked: list[str]
     trace: list[str]
     error: str = ""
+    heard: str = ""  # spoken mode: what speech recognition made of it
 
     @property
     def failed(self) -> list[Check]:
@@ -80,12 +81,16 @@ class Bench:
 
     def __init__(
         self, cfg: Config, apps: list[Any], world_ref: list[World], *, prime: bool = True,
-        busy: bool = False,
+        busy: bool = False, spoken_from: Path | None = None,
     ) -> None:  # fmt: skip
         from personal_os.voice.main import Voice
 
         self.cfg, self.apps, self.prime, self.world_ref = cfg, apps, prime, world_ref
         self.busy = busy
+        # Spoken mode: your data folder, for the Piper voice and the speech models (read only).
+        self.spoken_from = spoken_from
+        self.spoken = spoken_from is not None
+        self.audio: Any = None  # the next utterance "heard" (spoken mode)
         self.voice = v = Voice(cfg)
 
         def say(text: str) -> None:
@@ -107,6 +112,23 @@ class Bench:
             return said
 
         v.take_rest = take_rest  # type: ignore[method-assign]
+
+        def listen(*_a: Any, **_k: Any) -> str:
+            # Spoken mode: the request, as speech, through Donna's own speech recognition.
+            audio, self.audio = self.audio, None
+            if audio is None:
+                return ""
+            v.last_audio = audio
+            return str(v.transcribe(audio))
+
+        v.listen = listen  # type: ignore[method-assign]
+        if spoken_from is not None:
+            from personal_os.voice.stt import make_transcriber
+
+            vc = cfg.voice
+            v.stt = make_transcriber(spoken_from, vc.stt_model)
+            fast = make_transcriber(spoken_from, vc.stt_fast_model or vc.stt_model)
+            v.stt_fast = fast if vc.stt_fast_model and fast.available else v.stt
         # Nothing is heard, said or shown: the turn's words go to the world instead.
         for name, fn in [("say", say), ("ask_aloud", ask), ("beat", nothing),
                          ("wait_for_popup", nothing), ("launch_popup", nothing),
@@ -153,9 +175,15 @@ class Bench:
         if self.busy:
             self.background_job()
         t0 = time.monotonic()
-        v.respond("typed", case.say)
+        if self.spoken:
+            assert self.spoken_from is not None
+            self.audio = speech(case.say, self.spoken_from / "voice" / "piper", self.cfg)
+            v.respond("hotkey")
+        else:
+            v.respond("typed", case.say)
         took = time.monotonic() - t0
         entry = last_entry(rt)
+        heard = str(entry.get("heard") or "")
         run = Run(
             route=str(entry.get("route", "")),
             reply=str(entry.get("reply") or ""),
@@ -170,7 +198,34 @@ class Bench:
         return Result(
             case.id, case.say, verdict(checks), run.route, run.reply, run.total_s, checks,
             [c.render() for c in run.calls], run.effects, run.asked, run.trace, run.error,
+            heard if self.spoken else "",
         )  # fmt: skip
+
+
+_VOICES: dict[str, Any] = {}
+
+
+def speech(text: str, voice_dir: Path, cfg: Config) -> Any:
+    """`text` spoken by the local Piper voice, as 16 kHz mono float32 (what the mic gives
+    speech recognition). A clean synthetic voice: it finds names Whisper mishears, not what
+    your own voice, accent or room do to it."""
+    import wave
+
+    import numpy as np
+
+    from personal_os.voice.tts import PiperVoice
+
+    piper = PiperVoice(voice_dir, cfg.voice.piper_voice)
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d) / "say.wav"
+        piper.synthesize(text, out)
+        with wave.open(str(out), "rb") as w:
+            rate, frames = w.getframerate(), w.readframes(w.getnframes())
+    pcm = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+    n = int(len(pcm) * 16000 / rate)
+    resampled = np.interp(np.linspace(0, len(pcm) - 1, n), np.arange(len(pcm)), pcm)
+    pad = np.zeros(4000, dtype=np.float32)  # a quarter second of quiet either side
+    return np.concatenate([pad, resampled.astype(np.float32), pad])
 
 
 def last_entry(runtime_dir: Path) -> dict[str, Any]:
@@ -196,6 +251,8 @@ def selected(cases: list[Case], only: list[str]) -> list[Case]:
 def line(r: Result) -> str:
     mark = {"pass": "PASS", "slow": "SLOW", "fail": "FAIL"}[r.verdict]
     out = f"{mark}  {r.id:<28} {r.total_s:>5.1f} s  {r.route:<10} {r.reply[:70]!r}"
+    if r.heard and r.heard.strip(" .").lower() != r.said.strip(" .?").lower():
+        out += f"\n        heard: {r.heard!r}"
     for c in r.failed:
         out += f"\n        x {c.name}" + (f": {c.detail}" if c.detail else "")
     return out
@@ -283,6 +340,11 @@ def main(argv: list[str] | None = None, *, emit: Callable[[str], None] = print) 
         action="store_true",
         help="read the prompt ahead as with Keep on GPU, whatever your setting",
     )
+    ap.add_argument(
+        "--spoken",
+        action="store_true",
+        help="say each request with the Piper voice and hear it with Whisper",
+    )
     ap.add_argument("--busy", action="store_true",
                     help="run a background summary before each case (daemon work)")  # fmt: skip
     args = ap.parse_args(argv)
@@ -302,7 +364,8 @@ def main(argv: list[str] | None = None, *, emit: Callable[[str], None] = print) 
         emit(f"{len(cases)} cases, model {cfg.llm.fast_model}, copy of your data in {tmp}")
         world_ref: list[World] = [World(apps)]
         with patched(world_ref):
-            bench = Bench(cfg, apps, world_ref, prime=not args.cold, busy=args.busy)
+            bench = Bench(cfg, apps, world_ref, prime=not args.cold, busy=args.busy,
+                          spoken_from=real.data_dir if args.spoken else None)  # fmt: skip
             bench.voice.index.refresh(wait=True)
             for case in cases:
                 r = bench.run(case)
@@ -326,6 +389,13 @@ def main(argv: list[str] | None = None, *, emit: Callable[[str], None] = print) 
     before = save(results, real.data_dir / "bench")
     for c in changes(before, results):
         emit(c)
+    if not args.only and not args.cases:  # a full run: what the pre-push gate checks
+        from personal_os.evals import gate
+
+        flags = [f for f, on in (("spoken", args.spoken), ("busy", args.busy),
+                                 ("cold", args.cold)) if on]  # fmt: skip
+        passed = sum(r.verdict == "pass" for r in results)
+        gate.record(real.data_dir / "bench", passed=passed, total=len(results), flags=flags)
     if args.out:
         with args.out.open("a", encoding="utf-8") as f:
             f.write("\n" + text)

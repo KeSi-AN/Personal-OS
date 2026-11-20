@@ -282,28 +282,14 @@ def respond(
         return False
 
     killed = killswitch.engaged(executor.runtime_dir)
-    offered = commitment_offer(request, executor, out)
-    if offered:
-        return offered
-    from personal_os.context import commitments
-
-    if commitments.asked_about(request):  # by rules: instant, and an overdue one is overdue
-        out.reply, out.details = commitments.answer(executor.conn, executor.clock.now())
-        out.trace.append("answered from the commitments list (no model)")
-        return out
+    by_rules = _commitments_by_rules(request, executor, out)
+    if by_rules is not None:
+        return by_rules
     steps = max_steps or executor.config.agent.max_steps
     schema = agent_schema(executor)
     system = agent_prompt(executor)
     check = plan_checker(executor, request, strict_steps=False)
-    user = f"User: {request}"
-    if context:
-        user = (
-            "Earlier in this conversation (for words like 'it' or 'instead'; act only on what "
-            f"the user says now):\n{context}\n\n{user}"
-        )
-    owed = _commitments_block(executor)
-    if owed:  # after the fixed system prompt, so Ollama still reuses what it read (ADR-080)
-        user = f"{owed}\n\n{user}"
+    user = _user_message(request, context, executor)
     transcript = user
     read_texts: list[str] = []
     seen: dict[str, str] = {}
@@ -378,19 +364,82 @@ def respond(
         if killed:
             out.reply = "Actions are switched off right now (the kill switch is on)."
             break
-        results: list[str] = []
-        fresh: list[Outcome] = []
         calls = route_app_names(list(plan.calls), executor)
         calls = drop_redundant_opens(merge_opens(project_paths(calls, executor)))
-        calls = calls[:MAX_CALLS]
+        run = _Calls(executor, out, request, context, seen, read_texts)
+        if run.all(calls[:MAX_CALLS], stopped, announce, progress, before_tool):
+            return out  # stopped, or the kill switch
+        results, fresh = run.results, run.fresh
+        if _reply_without_a_second_step(fresh, out, executor):
+            break
+        if not fresh:
+            final_only = True  # it only repeated itself: answer from what it has
+            continue
+        gathered.extend(results)
+        transcript = f"{user}\n\n" + CONTINUE.format(results="\n\n".join(gathered))
+    return _finish(out, executor, asking=asking, streamed=streamed)
+
+
+def _commitments_by_rules(request: str, executor: Executor, out: AgentReply) -> AgentReply | None:
+    """An offer to hold you to something you just said, or a question about what you said
+    you'd do: both answered by rules, before any model call. None otherwise."""
+    from personal_os.context import commitments
+
+    offered = commitment_offer(request, executor, out)
+    if offered:
+        return offered
+    if commitments.asked_about(request):  # by rules: instant, and an overdue one is overdue
+        out.reply, out.details = commitments.answer(executor.conn, executor.clock.now())
+        out.trace.append("answered from the commitments list (no model)")
+        return out
+    return None
+
+
+def _user_message(request: str, context: str, executor: Executor) -> str:
+    """What the model is given after the fixed system prompt: what you said you'd do, the
+    earlier conversation when there is one, and the request."""
+    user = f"User: {request}"
+    if context:
+        user = (
+            "Earlier in this conversation (for words like 'it' or 'instead'; act only on what "
+            f"the user says now):\n{context}\n\n{user}"
+        )
+    owed = _commitments_block(executor)
+    if owed:  # after the fixed system prompt, so Ollama still reuses what it read (ADR-080)
+        user = f"{owed}\n\n{user}"
+    return user
+
+
+class _Calls:
+    """One step's tool calls, run through the executor in order (respond)."""
+
+    def __init__(
+        self, executor: Executor, out: AgentReply, request: str, context: str,
+        seen: dict[str, str], read_texts: list[str],
+    ) -> None:  # fmt: skip
+        self.executor, self.out, self.request, self.context = executor, out, request, context
+        self.seen, self.read_texts = seen, read_texts
+        self.results: list[str] = []
+        self.fresh: list[Outcome] = []
+
+    def all(
+        self,
+        calls: list[Any],
+        stopped: Callable[[], bool],
+        announce: Callable[[str], None] | None,
+        progress: Callable[[str], None] | None,
+        before_tool: Callable[[str], None] | None,
+    ) -> bool:
+        """Run them; True when the turn must end here (stopped, or the kill switch)."""
+        executor, out = self.executor, self.out
         for call in calls:
             args = dict(call.args)
             key = _key(executor, call.tool, args)
-            if key in seen:
+            if key in self.seen:
                 continue  # already have it: shown again below
             if stopped():
-                return out
-            from_context = bool(context) and borrowed(args, request, context)
+                return True
+            from_context = bool(self.context) and borrowed(args, self.request, self.context)
             line = announcement(call.tool, args) if call.tool in ANNOUNCED else ""
             if progress is not None:
                 progress(f"Using {call.tool.replace('_', ' ')}…")
@@ -398,43 +447,54 @@ def respond(
                 before_tool(call.tool)
             o = executor.request(
                 call.tool, args, origin=Origin.PLANNED, tainted=out.tainted or from_context,
-                request_text=request, read_so_far=read_texts,
+                request_text=self.request, read_so_far=self.read_texts,
                 # Said once it's approved, just before it runs: never "Opening X" and then
                 # "shall I open X?", and never for something you then decline.
                 on_run=functools.partial(announce, line) if announce and line else None,
             )  # fmt: skip
-            out.outcomes.append(o)
-            out.trace.append(f"  {o.tool}: {o.status}: {str(o.message)[:200]}")
-            fresh.append(o)
-            if o.result is not None and o.result.captured:
-                out.tainted = True
-                read_texts.append(str(o.result.data))
-            data = clean(str(o.result.data), DATA_MAX) if o.result and o.result.data else ""
-            seen[key] = f"{call.tool}: {o.status}: {o.message}" + (f"\n{data}" if data else "")
-            results.append(seen[key])
+            self._record(key, call.tool, o)
             if killswitch.engaged(executor.runtime_dir):
                 out.reply = "Stopped: the kill switch is on."
-                return out
-        if fresh and all(o.tool == "recall" and o.ok for o in fresh) and len(fresh) == 1:
-            out.reply = str(fresh[0].message)
-            out.details = _data(fresh[0])  # the answer with its evidence
-            break  # the cited answer is the reply: no second model call
-        if (
-            fresh
-            and acting_count(fresh, executor) == len(fresh)
-            and not any(o.status in ("failed", "blocked", "invalid") for o in fresh)
-        ):
-            # Only actions, and none failed: each says what it did, so a second model call
-            # (about 5-7 s on this GPU, mostly re-reading the results) would only reword it.
-            # A failure still gets the second step, which can try another way.
-            out.reply = actions_said(out.outcomes, executor)
-            out.trace.append("reply from the actions (no second model call)")
-            break
-        if not fresh:
-            final_only = True  # it only repeated itself: answer from what it has
-            continue
-        gathered.extend(results)
-        transcript = f"{user}\n\n" + CONTINUE.format(results="\n\n".join(gathered))
+                return True
+        return False
+
+    def _record(self, key: str, tool: str, o: Outcome) -> None:
+        out = self.out
+        out.outcomes.append(o)
+        out.trace.append(f"  {o.tool}: {o.status}: {str(o.message)[:200]}")
+        self.fresh.append(o)
+        if o.result is not None and o.result.captured:
+            out.tainted = True
+            self.read_texts.append(str(o.result.data))
+        data = clean(str(o.result.data), DATA_MAX) if o.result and o.result.data else ""
+        self.seen[key] = f"{tool}: {o.status}: {o.message}" + (f"\n{data}" if data else "")
+        self.results.append(self.seen[key])
+
+
+def _reply_without_a_second_step(fresh: list[Outcome], out: AgentReply, ex: Executor) -> bool:
+    """A cited recall answer, or only actions none of which failed: the reply is already
+    there, so no second model call (about 5-7 s on this GPU, mostly re-reading the results,
+    to reword it). A failure still gets the second step, which can try another way."""
+    if fresh and all(o.tool == "recall" and o.ok for o in fresh) and len(fresh) == 1:
+        out.reply = str(fresh[0].message)
+        out.details = _data(fresh[0])  # the answer with its evidence
+        return True
+    if (
+        fresh
+        and acting_count(fresh, ex) == len(fresh)
+        and not any(o.status in ("failed", "blocked", "invalid") for o in fresh)
+    ):
+        out.reply = actions_said(out.outcomes, ex)
+        out.trace.append("reply from the actions (no second model call)")
+        return True
+    return False
+
+
+def _finish(
+    out: AgentReply, executor: Executor, *, asking: bool, streamed: list[str]
+) -> AgentReply:
+    """The reply as said: no promise to check, no claim no tool made, every action named,
+    the details on screen, and never nothing."""
     out.streamed = " ".join(streamed)
     if streamed:
         out.trace.append(f"spoke while writing: {len(streamed)} sentence(s)")
@@ -456,18 +516,21 @@ def respond(
         shown = [_data(o) for o in out.outcomes if o.ok and o.tool in DETAIL_TOOLS]
         out.details = "\n\n".join(x for x in shown if x)[:DETAILS_MAX]
     if not out.reply:
-        acts = [
-            o
-            for o in out.outcomes
-            if o.ok and (t := executor.registry.get(o.tool)) is not None and t.tier > Tier.READ
-        ]
-        if acts:
-            out.reply = " ".join(str(o.message).rstrip(".") + "." for o in acts)
-        elif out.error:
-            out.reply = "Sorry, I couldn't work that out."
-        else:
-            out.reply = "I'm not sure how to help with that."
+        out.reply = _fallback_reply(out, executor)
     return out
+
+
+def _fallback_reply(out: AgentReply, executor: Executor) -> str:
+    acts = [
+        o
+        for o in out.outcomes
+        if o.ok and (t := executor.registry.get(o.tool)) is not None and t.tier > Tier.READ
+    ]
+    if acts:
+        return " ".join(str(o.message).rstrip(".") + "." for o in acts)
+    if out.error:
+        return "Sorry, I couldn't work that out."
+    return "I'm not sure how to help with that."
 
 
 NUDGE = (

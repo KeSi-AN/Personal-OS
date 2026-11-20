@@ -52,3 +52,31 @@ This opens the demo pinned and looping (so the listening, thinking and speaking 
 - Closed: **every popup process exited**, so the cost while closed is zero.
 
 A first run, with the speaker bars animating `height`, used 2.65% median CPU. Animating `transform` instead (no layout every frame) brought it to 1.71%. A real turn keeps the popup open only for the turn plus 5 seconds.
+
+## Every always-on process (audit phase 4)
+
+The daemon was last measured in phase 1. Since then voice (the mic, echo cancelling, the
+wake word) and the island run all day too, so `measure_budget.py --all MINUTES` samples each
+of them on its own (the island with its WebView2 processes), in normal use with the model
+kept on the GPU (Ollama's own memory isn't counted here).
+
+### 2026-11-21 01:44 — every process, 10 min
+
+| process | CPU median | CPU p95 | memory (private) median | max |
+|---|---|---|---|---|
+| launcher | 0.00% | 0.00% | 22 MB | 22 MB |
+| daemon | 0.11% | 2.05% | 77 MB | 79 MB |
+| voice | 2.40% | 3.44% | 376 MB | 447 MB |
+| island | 0.28% | 2.94% | 154 MB | 197 MB |
+
+- Daemon budget (< 2.0% CPU idle, < 300 MB): **within budget**
+
+- The daemon has grown from 53 to about 78 MB with phases 3-11 (projects, sessions, model
+  jobs, modes, dashboard) and stays inside its budget.
+- Voice is the steady cost: about 2.4% of the machine (a fifth of one core) with the wake word
+  on. Most of that is Vosk decoding every word it hears: offline, free-form decoding took 14%
+  of a core against 3.4% with a phrase list (`voice.wake_grammar`, off by default: in 8
+  synthetic sentences it woke once on "I don't know", where free-form never did; see
+  `voice/wake.py`). Its 376 MB are mostly the two Whisper models and the echo canceller.
+- A first run of `--all` counted each process with its children, which here means launcher,
+  daemon, voice and island all over again (900 MB "each"); it now samples each one alone.

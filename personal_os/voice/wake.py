@@ -67,6 +67,24 @@ def recent(chunks: list[np.ndarray], seconds: float, rate: int = 16000) -> list[
     return out[::-1]
 
 
+# Words that sound like "Donna", in the phrase list so a near miss lands on them, not on her
+# name; and short common words, so ordinary speech has somewhere else to go. Measured on 21
+# Nov with Piper speech: free-form decoding took 14% of a core and caught 4 of 5 "Donna"s with
+# no false wake in 8 sentences; the list without these took 3.8% with 2 false wakes ("donut
+# shop", "dawn"); with them, 3.4%, 5 of 5, and 1 ("I don't know").
+LOOK_ALIKES = ("dawn", "donut", "don", "don't", "know", "done", "gonna", "madonna", "down",
+               "dona", "donor", "doing", "the", "a", "and", "to", "i", "you", "it", "so", "yeah",
+               "okay", "hey", "what", "is")  # fmt: skip
+
+
+def grammar(words: list[str]) -> str:
+    """The phrase list for `voice.wake_grammar`: the wake words (alone and after "hey" and
+    "okay"), the stop phrases, the look-alikes, and anything else as unknown."""
+    wake = [w.strip().lower() for w in words if w.strip()] or ["donna"]
+    phrases = [*wake, *(f"{p} {w}" for w in wake for p in ("hey", "okay")), *STOP_PHRASES]
+    return json.dumps([*dict.fromkeys([*phrases, *LOOK_ALIKES]), "[unk]"])
+
+
 def wake_pattern(words: list[str]) -> re.Pattern[str]:
     """The wake words as whole words: "donna" matches "hey donna", not "madonna"."""
     alts = "|".join(re.escape(w.strip().lower()) for w in words if w.strip()) or "donna"
@@ -87,6 +105,7 @@ class VoskWake:
         busy: Callable[[], bool],
         speaking: Callable[[], bool],
         engine: Any = None,
+        use_grammar: bool = False,
     ) -> None:
         self.data_dir = data_dir
         self.pattern = wake_pattern(words)
@@ -95,6 +114,8 @@ class VoskWake:
         self.busy = busy
         self.speaking = speaking
         self.engine = engine
+        self.words = list(words)
+        self.use_grammar = use_grammar
         self.stop = threading.Event()
         self.ring: deque[np.ndarray] = deque(maxlen=int(RING_S * 16000 / 512))
         self.last_wake = 0.0
@@ -108,7 +129,10 @@ class VoskWake:
 
         vosk.SetLogLevel(-1)
         self._model = vosk.Model(str(model_path(self.data_dir)))
-        self._rec = vosk.KaldiRecognizer(self._model, 16000)
+        if self.use_grammar:
+            self._rec = vosk.KaldiRecognizer(self._model, 16000, grammar(self.words))
+        else:
+            self._rec = vosk.KaldiRecognizer(self._model, 16000)
         self.thread = threading.Thread(target=self._run, name="pos-wake", daemon=True)
         self.thread.start()
 

@@ -169,6 +169,8 @@ stt_fast_model = ""        # a smaller Whisper heard first, if set; "" = stt_mod
 stt_hints = false          # prompt recognition with your app/folder names (JARVIS: no prompt)
 wake_word_enabled = true   # Vosk listens for the wake word, as in JARVIS: "Donna", "hey Donna" ...
 wake_words = ["donna"]     # each counts as a whole word ("Madonna" doesn't)
+wake_grammar = false       # listen only for the wake words, stop phrases and look-alikes: about a
+                           # quarter of the CPU, a little likelier to wake on a near miss (BENCH.md)
 echo_cancel = true         # take the speakers out of the mic, so you can talk over a reply
 mic_floor = 0.002          # quietest level counted as speech; `personal-os voice mic` shows yours
 vad_silence_ms = 800       # quiet this long ends your turn (it waits longer after "open ...")

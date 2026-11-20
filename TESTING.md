@@ -153,6 +153,8 @@ uv run ruff check .
 uv run mypy personal_os
 uv run python -m personal_os.evals.bench   # your real requests on the real model (docs/BENCH.md)
 uv run python -m personal_os.evals.bench --keep-on-gpu --busy   # with background work between
+uv run python -m personal_os.evals.bench --spoken   # said by Piper, heard by Whisper
+uv run python -m personal_os.evals.gate   # has the bench run on this code? (the pre-push hook)
 ```
 
 ## Daemon control

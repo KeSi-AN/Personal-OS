@@ -121,6 +121,7 @@ class VoiceConfig(_Section):
     # The wake word, always listening (Vosk, as in JARVIS): any of these as a word.
     wake_word_enabled: bool = True
     wake_words: list[str] = Field(default_factory=lambda: ["donna"])
+    wake_grammar: bool = False  # Vosk hears only a phrase list (less CPU, more false wakes)
     # Take the speakers out of the mic (the assistant and other apps), so the wake word and
     # talking over a reply work without headphones.
     echo_cancel: bool = True

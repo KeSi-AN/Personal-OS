@@ -198,237 +198,298 @@ def lines_from_rows(
     rarely in the first 200 characters ("which STT model was suggested?" is in the middle of
     a search engine's AI answer).
     """
-    windows: dict[tuple[str, str], EvidenceLine] = {}
-    files: dict[str, tuple[EvidenceLine, dict[str, int]]] = {}
-    commands: dict[tuple[str, str], tuple[EvidenceLine, dict[str, int]]] = {}
-    pages: dict[str, EvidenceLine] = {}
-    page_rows: dict[str, tuple[sqlite3.Row, dict[str, Any]]] = {}  # the fullest capture per page
-    searches: dict[tuple[str, str], EvidenceLine] = {}
-    editors: dict[str, EvidenceLine] = {}
-    states: dict[str, EvidenceLine] = {}
-    out: list[EvidenceLine] = []
-
     rows = list(rows)
-    for r in rows:  # first pass: which visit of each page captured the most text
+    folder = _Folder(_fullest_pages(rows), git_state, focus)
+    for r in rows:
+        folder.add(r)
+    return folder.finish()
+
+
+def _fullest_pages(rows: list[sqlite3.Row]) -> dict[str, tuple[sqlite3.Row, dict[str, Any]]]:
+    """Which visit of each page captured the most text."""
+    page_rows: dict[str, tuple[sqlite3.Row, dict[str, Any]]] = {}
+    for r in rows:
         if r["source"] == "browser" and r["type"] == "page_visit" and r["x_text"]:
             p = json.loads(r["payload"])
             key = p.get("url") or r["id"]
             have = page_rows.get(key)
             if have is None or len(r["x_text"]) > len(have[0]["x_text"] or ""):
                 page_rows[key] = (r, p)
+    return page_rows
 
-    for r in rows:
+
+@dataclass
+class _Row:
+    """One event row, read once."""
+
+    r: sqlite3.Row
+    p: dict[str, Any]
+    ts: datetime
+    span: int
+    sensitive: bool
+    eid: str
+    pid: str | None
+    kind: str
+
+
+class _Folder:
+    """Folds rows into evidence lines, one kind of record at a time (lines_from_rows)."""
+
+    def __init__(
+        self,
+        page_rows: dict[str, tuple[sqlite3.Row, dict[str, Any]]],
+        git_state: bool,
+        focus: Sequence[str],
+    ) -> None:
+        self.page_rows, self.git_state, self.focus = page_rows, git_state, focus
+        self.windows: dict[tuple[str, str], EvidenceLine] = {}
+        self.files: dict[str, tuple[EvidenceLine, dict[str, int]]] = {}
+        self.commands: dict[tuple[str, str], tuple[EvidenceLine, dict[str, int]]] = {}
+        self.pages: dict[str, EvidenceLine] = {}
+        self.searches: dict[tuple[str, str], EvidenceLine] = {}
+        self.editors: dict[str, EvidenceLine] = {}
+        self.states: dict[str, EvidenceLine] = {}
+        self.out: list[EvidenceLine] = []
+
+    def add(self, r: sqlite3.Row) -> None:
         p = json.loads(r["payload"])
-        ts = from_ms(r["ts_start"])
-        span = max(0, r["ts_stop"] - r["ts_start"])
-        sensitive = r["privacy_class"] != "normal"
-        eid, pid = r["id"], r["project_id"]
-        kind = f"{r['source']}.{r['type']}"
-        if _own(kind, p):
-            continue  # Personal OS's own questions and dashboard aren't things you did
-
-        if kind == "window.focus":
-            app = clean(p.get("app") or p.get("exe") or "?", 40)
-            hide = sensitive or p.get("title") == "[redacted]"
-            title = "" if hide else clean(p.get("title"), 120)
-            line = windows.get((app, title))
-            if line is None:
-                text = f"{app}: {title}" if title else app
-                line = windows[(app, title)] = EvidenceLine(ts, "window", text, [], project_id=pid)
-            line.weight += span
-            if len(line.event_ids) < 5:
-                line.event_ids.append(eid)
-
-        elif kind == "browser.page_visit":
-            active = int(p.get("active_dwell_ms") or 0)
-            if active < MIN_PAGE_MS and not p.get("searched") and not p.get("bookmarked"):
-                continue
-            domain = clean(p.get("domain"), 60)
-            hidden = sensitive or p.get("title") in ("", "[redacted]")
-            key = domain if hidden else (p.get("url") or eid)
-            line = pages.get(key)
-            if line is None:
-                title = "" if hidden else clean(p.get("title"), 140)
-                text = f"'{title}' ({domain})" if title else f"visited {domain} (content hidden)"
-                fullest = page_rows.get(key, (r, p))
-                detail = "" if hidden else _page_detail(fullest[0], fullest[1], focus)
-                line = pages[key] = EvidenceLine(ts, "page", text, [], detail, pid)
-                out.append(line)
-            line.weight += active
-            line.event_ids.append(eid)
-
-        elif r["source"] == "browser" and not sensitive:
-            text = clean(p.get("text"), 160)
-            site = clean(p.get("engine") or p.get("domain"), 40)
-            if r["type"] == "search" and text:
-                done = searches.get((text.lower(), site))
-                if done is not None:  # the same search, re-sent as the page updates
-                    done.event_ids.append(eid)
-                    continue
-                line = EvidenceLine(ts, "search", f"'{text}' on {site}", [eid], project_id=pid)
-                searches[(text.lower(), site)] = line
-                out.append(line)
-            elif r["type"] in ("selection", "copy") and text:
-                out.append(
-                    EvidenceLine(ts, "selection", f"'{text}' from {site}", [eid], project_id=pid)
-                )
-
-        elif kind == "terminal.command":
-            if sensitive:
-                continue
-            cmd = clean(p.get("command"), 160)
-            folder = _name(p.get("cwd")) or "?"
-            entry = commands.get((cmd, folder))
-            failed = p.get("success") is False
-            if entry is None:
-                line = EvidenceLine(ts, "command", "", [], project_id=pid)
-                entry = commands[(cmd, folder)] = (line, {"n": 0, "failed": 0, "exit": 0})
-                out.append(line)
-            line, c = entry
-            c["n"] += 1
-            if failed:
-                c["failed"] += 1
-                c["exit"] = int(p.get("exit_code") or 1)
-                line.ts = ts  # a failure is the moment that matters
-            line.event_ids.append(eid)
-            line.weight = c["n"]
-            line.kind = "failed_command" if c["failed"] else "command"
-            result = (
-                f" -> failed (exit {c['exit']})"
-                if failed
-                else (" -> ok" if p.get("success") else "")
-            )
-            if c["n"] > 1:
-                result += f" [{c['n']} runs, {c['failed']} failed]"
-            line.text = f"`{cmd}` in {folder}{result}"
-
-        elif kind == "git.commit" and not own_commit(p):
-            # Brought in by a pull (or someone else's): one line per pull, never "you made".
-            msg = clean((p.get("message") or "").splitlines()[0] if p.get("message") else "", 140)
-            repo = _name(p.get("repo_root"))
-            same = next(
-                (
-                    x for x in reversed(out[-40:])
-                    if x.kind == "pulled" and x.project_id == pid
-                    and abs((ts - x.ts).total_seconds()) < 120
-                ),
-                None,
-            )  # fmt: skip
-            if same is None:
-                same = EvidenceLine(ts, "pulled", "", [], "", pid)
-                same.weight = 0
-                out.append(same)
-            same.event_ids.append(eid)
-            same.weight += 1
-            n = same.weight
-            same.text = (
-                f"pulled {n} commit{'s' * (n != 1)} into {repo}, made elsewhere or by someone "
-                f"else, not work done here (latest: '{msg}')"
-            )
-
-        elif kind == "git.commit":
-            msg = clean((p.get("message") or "").splitlines()[0] if p.get("message") else "", 140)
-            repo = _name(p.get("repo_root"))
-            stats = (
-                f"{p.get('files_changed', 0)} files, "
-                f"+{p.get('insertions', 0)}/-{p.get('deletions', 0)}"
-            )
-            names = ", ".join(_name(f) for f in (p.get("files") or [])[:6])
-            out.append(
-                EvidenceLine(
-                    ts,
-                    "commit",
-                    f"'{msg}' in {repo}"
-                    + (f" on {p['branch']}" if p.get("branch") else "")
-                    + f" ({stats})",
-                    [eid],
-                    clean(f"files: {names}", 200) if names else "",
-                    pid,
-                )
-            )
-
-        elif kind == "git.state" and git_state:
-            repo = _name(p.get("repo_root"))
-            parts = [f"branch {p['branch']}"] if p.get("branch") else []
-            for k in ("staged", "unstaged", "untracked"):
-                if p.get(k):
-                    parts.append(f"{p[k]} {k}")
-            if not any(p.get(k) for k in ("staged", "unstaged", "untracked")):
-                parts.append("no uncommitted changes")
-            if p.get("ahead") or p.get("behind"):
-                parts.append(f"ahead {p.get('ahead', 0)}, behind {p.get('behind', 0)}")
-            if p.get("op") not in (None, "none"):
-                parts.append(f"{p['op']} in progress")
-            changed = [x if isinstance(x, str) else x.get("path", "") for x in p.get("files") or []]
-            detail = clean("changed: " + ", ".join(_name(f) for f in changed[:8]), 200)
-            states[repo] = EvidenceLine(
-                ts,
-                "git_state",
-                f"{repo}: " + ", ".join(parts),
-                [eid],
-                detail if changed else "",
-                pid,
-            )
-
-        elif kind == "git.branch_switch":
+        e = _Row(
+            r, p, from_ms(r["ts_start"]), max(0, r["ts_stop"] - r["ts_start"]),
+            r["privacy_class"] != "normal", r["id"], r["project_id"], f"{r['source']}.{r['type']}",
+        )  # fmt: skip
+        if _own(e.kind, p):
+            return  # Personal OS's own questions and dashboard aren't things you did
+        if e.kind == "window.focus":
+            self._window(e)
+        elif e.kind == "browser.page_visit":
+            self._page(e)
+        elif r["source"] == "browser":
+            if not e.sensitive:
+                self._browser_text(e)
+        elif e.kind == "terminal.command":
+            if not e.sensitive:
+                self._command(e)
+        elif e.kind == "git.commit":
+            if own_commit(p):
+                self._commit(e)
+            else:
+                self._pulled(e)
+        elif e.kind == "git.state":
+            if self.git_state:
+                self._git_state(e)
+        elif e.kind == "git.branch_switch":
             repo = _name(p.get("repo_root"))
             text = f"{repo}: switched from {p.get('from_branch')} to {p.get('to_branch')}"
-            out.append(EvidenceLine(ts, "branch", text, [eid], project_id=pid))
-
-        elif kind == "fs.change":
-            if p.get("via_git"):
-                continue
-            path = p.get("path") or ""
-            entry2 = files.get(path)
-            if entry2 is None:
-                line = EvidenceLine(ts, "file", "", [], project_id=pid)
-                entry2 = files[path] = (line, {"n": 0, "added": 0, "removed": 0})
-                out.append(line)
-            line, c = entry2
-            c["n"] += 1
-            c["added"] = max(c["added"], p.get("lines_added") or 0)
-            c["removed"] = max(c["removed"], p.get("lines_removed") or 0)
-            if len(line.event_ids) < 5:
-                line.event_ids.append(eid)
-            line.weight = c["n"]
-            verb = {"created": "created", "deleted": "deleted", "moved": "moved"}.get(
-                p.get("change", ""), "edited"
-            )
-            sym = [*p.get("symbols_added", []), *p.get("symbols_changed", [])][:4]
-            diff = f", +{c['added']}/-{c['removed']} lines" if c["added"] or c["removed"] else ""
-            name = clean(_name(path), 80) if sensitive or p.get("sensitive") else clean(path, 140)
-            line.text = f"{verb} {name} ({c['n']} saves{diff})"
-            line.detail = clean("symbols: " + ", ".join(sym), 160) if sym else ""
-
-        elif kind == "fs.bulk_change":
+            self.out.append(EvidenceLine(e.ts, "branch", text, [e.eid], project_id=e.pid))
+        elif e.kind == "fs.change":
+            if not p.get("via_git"):
+                self._file(e)
+        elif e.kind == "fs.bulk_change":
             text = f"{p.get('count', 0)} files changed under {clean(p.get('dir'), 120)}"
-            out.append(EvidenceLine(ts, "bulk", text, [eid], project_id=pid))
-
+            self.out.append(EvidenceLine(e.ts, "bulk", text, [e.eid], project_id=e.pid))
         elif r["source"] == "editor":
-            target = _name(p.get("file")) or _name(p.get("workspace")) or p.get("name") or ""
-            if not target:
-                continue
-            line = editors.get(target)
-            if line is None:
-                line = editors[target] = EvidenceLine(
-                    ts, "editor", f"editor: {clean(target, 100)}", [], project_id=pid
-                )
-                out.append(line)
-            if len(line.event_ids) < 5:
-                line.event_ids.append(eid)
-            line.weight += 1
+            self._editor(e)
 
-    for line in windows.values():
-        if line.weight >= MIN_WINDOW_MS:
-            line.text += f" ({_dur(line.weight)})"
-            out.append(line)
-    for line in pages.values():
-        if line.weight:
-            line.text += f", {_dur(line.weight)}"
-    out.extend(states.values())
-    if len(files) > MAX_FILE_LINES:
-        out = _fold_files(out, files)
-    return out
+    def _window(self, e: _Row) -> None:
+        p = e.p
+        app = clean(p.get("app") or p.get("exe") or "?", 40)
+        hide = e.sensitive or p.get("title") == "[redacted]"
+        title = "" if hide else clean(p.get("title"), 120)
+        line = self.windows.get((app, title))
+        if line is None:
+            text = f"{app}: {title}" if title else app
+            line = self.windows[(app, title)] = EvidenceLine(
+                e.ts, "window", text, [], project_id=e.pid
+            )
+        line.weight += e.span
+        if len(line.event_ids) < 5:
+            line.event_ids.append(e.eid)
+
+    def _page(self, e: _Row) -> None:
+        p = e.p
+        active = int(p.get("active_dwell_ms") or 0)
+        if active < MIN_PAGE_MS and not p.get("searched") and not p.get("bookmarked"):
+            return
+        domain = clean(p.get("domain"), 60)
+        hidden = e.sensitive or p.get("title") in ("", "[redacted]")
+        key = domain if hidden else (p.get("url") or e.eid)
+        line = self.pages.get(key)
+        if line is None:
+            title = "" if hidden else clean(p.get("title"), 140)
+            text = f"'{title}' ({domain})" if title else f"visited {domain} (content hidden)"
+            fullest = self.page_rows.get(key, (e.r, p))
+            detail = "" if hidden else _page_detail(fullest[0], fullest[1], self.focus)
+            line = self.pages[key] = EvidenceLine(e.ts, "page", text, [], detail, e.pid)
+            self.out.append(line)
+        line.weight += active
+        line.event_ids.append(e.eid)
+
+    def _browser_text(self, e: _Row) -> None:
+        p = e.p
+        text = clean(p.get("text"), 160)
+        site = clean(p.get("engine") or p.get("domain"), 40)
+        if e.r["type"] == "search" and text:
+            done = self.searches.get((text.lower(), site))
+            if done is not None:  # the same search, re-sent as the page updates
+                done.event_ids.append(e.eid)
+                return
+            line = EvidenceLine(e.ts, "search", f"'{text}' on {site}", [e.eid], project_id=e.pid)
+            self.searches[(text.lower(), site)] = line
+            self.out.append(line)
+        elif e.r["type"] in ("selection", "copy") and text:
+            self.out.append(
+                EvidenceLine(e.ts, "selection", f"'{text}' from {site}", [e.eid], project_id=e.pid)
+            )
+
+    def _command(self, e: _Row) -> None:
+        p = e.p
+        cmd = clean(p.get("command"), 160)
+        folder = _name(p.get("cwd")) or "?"
+        entry = self.commands.get((cmd, folder))
+        failed = p.get("success") is False
+        if entry is None:
+            line = EvidenceLine(e.ts, "command", "", [], project_id=e.pid)
+            entry = self.commands[(cmd, folder)] = (line, {"n": 0, "failed": 0, "exit": 0})
+            self.out.append(line)
+        line, c = entry
+        c["n"] += 1
+        if failed:
+            c["failed"] += 1
+            c["exit"] = int(p.get("exit_code") or 1)
+            line.ts = e.ts  # a failure is the moment that matters
+        line.event_ids.append(e.eid)
+        line.weight = c["n"]
+        line.kind = "failed_command" if c["failed"] else "command"
+        result = (
+            f" -> failed (exit {c['exit']})" if failed else (" -> ok" if p.get("success") else "")
+        )
+        if c["n"] > 1:
+            result += f" [{c['n']} runs, {c['failed']} failed]"
+        line.text = f"`{cmd}` in {folder}{result}"
+
+    def _pulled(self, e: _Row) -> None:
+        """Brought in by a pull (or someone else's): one line per pull, never "you made"."""
+        p = e.p
+        msg = clean((p.get("message") or "").splitlines()[0] if p.get("message") else "", 140)
+        repo = _name(p.get("repo_root"))
+        same = next(
+            (
+                x for x in reversed(self.out[-40:])
+                if x.kind == "pulled" and x.project_id == e.pid
+                and abs((e.ts - x.ts).total_seconds()) < 120
+            ),
+            None,
+        )  # fmt: skip
+        if same is None:
+            same = EvidenceLine(e.ts, "pulled", "", [], "", e.pid)
+            same.weight = 0
+            self.out.append(same)
+        same.event_ids.append(e.eid)
+        same.weight += 1
+        n = same.weight
+        same.text = (
+            f"pulled {n} commit{'s' * (n != 1)} into {repo}, made elsewhere or by someone "
+            f"else, not work done here (latest: '{msg}')"
+        )
+
+    def _commit(self, e: _Row) -> None:
+        p = e.p
+        msg = clean((p.get("message") or "").splitlines()[0] if p.get("message") else "", 140)
+        repo = _name(p.get("repo_root"))
+        stats = (
+            f"{p.get('files_changed', 0)} files, +{p.get('insertions', 0)}/-{p.get('deletions', 0)}"
+        )
+        names = ", ".join(_name(f) for f in (p.get("files") or [])[:6])
+        self.out.append(
+            EvidenceLine(
+                e.ts,
+                "commit",
+                f"'{msg}' in {repo}"
+                + (f" on {p['branch']}" if p.get("branch") else "")
+                + f" ({stats})",
+                [e.eid],
+                clean(f"files: {names}", 200) if names else "",
+                e.pid,
+            )
+        )
+
+    def _git_state(self, e: _Row) -> None:
+        p = e.p
+        repo = _name(p.get("repo_root"))
+        parts = [f"branch {p['branch']}"] if p.get("branch") else []
+        for k in ("staged", "unstaged", "untracked"):
+            if p.get(k):
+                parts.append(f"{p[k]} {k}")
+        if not any(p.get(k) for k in ("staged", "unstaged", "untracked")):
+            parts.append("no uncommitted changes")
+        if p.get("ahead") or p.get("behind"):
+            parts.append(f"ahead {p.get('ahead', 0)}, behind {p.get('behind', 0)}")
+        if p.get("op") not in (None, "none"):
+            parts.append(f"{p['op']} in progress")
+        changed = [x if isinstance(x, str) else x.get("path", "") for x in p.get("files") or []]
+        detail = clean("changed: " + ", ".join(_name(f) for f in changed[:8]), 200)
+        self.states[repo] = EvidenceLine(
+            e.ts,
+            "git_state",
+            f"{repo}: " + ", ".join(parts),
+            [e.eid],
+            detail if changed else "",
+            e.pid,
+        )
+
+    def _file(self, e: _Row) -> None:
+        p = e.p
+        path = p.get("path") or ""
+        entry = self.files.get(path)
+        if entry is None:
+            line = EvidenceLine(e.ts, "file", "", [], project_id=e.pid)
+            entry = self.files[path] = (line, {"n": 0, "added": 0, "removed": 0})
+            self.out.append(line)
+        line, c = entry
+        c["n"] += 1
+        c["added"] = max(c["added"], p.get("lines_added") or 0)
+        c["removed"] = max(c["removed"], p.get("lines_removed") or 0)
+        if len(line.event_ids) < 5:
+            line.event_ids.append(e.eid)
+        line.weight = c["n"]
+        verb = {"created": "created", "deleted": "deleted", "moved": "moved"}.get(
+            p.get("change", ""), "edited"
+        )
+        sym = [*p.get("symbols_added", []), *p.get("symbols_changed", [])][:4]
+        diff = f", +{c['added']}/-{c['removed']} lines" if c["added"] or c["removed"] else ""
+        sensitive = e.sensitive or p.get("sensitive")
+        name = clean(_name(path), 80) if sensitive else clean(path, 140)
+        line.text = f"{verb} {name} ({c['n']} saves{diff})"
+        line.detail = clean("symbols: " + ", ".join(sym), 160) if sym else ""
+
+    def _editor(self, e: _Row) -> None:
+        p = e.p
+        target = _name(p.get("file")) or _name(p.get("workspace")) or p.get("name") or ""
+        if not target:
+            return
+        line = self.editors.get(target)
+        if line is None:
+            line = self.editors[target] = EvidenceLine(
+                e.ts, "editor", f"editor: {clean(target, 100)}", [], project_id=e.pid
+            )
+            self.out.append(line)
+        if len(line.event_ids) < 5:
+            line.event_ids.append(e.eid)
+        line.weight += 1
+
+    def finish(self) -> list[EvidenceLine]:
+        out = self.out
+        for line in self.windows.values():
+            if line.weight >= MIN_WINDOW_MS:
+                line.text += f" ({_dur(line.weight)})"
+                out.append(line)
+        for line in self.pages.values():
+            if line.weight:
+                line.text += f", {_dur(line.weight)}"
+        out.extend(self.states.values())
+        if len(self.files) > MAX_FILE_LINES:
+            out = _fold_files(out, self.files)
+        return out
 
 
 def _fold_files(
