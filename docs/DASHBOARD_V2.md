@@ -87,4 +87,4 @@ Everything from the old Privacy and Sources pages moves here, so nothing is lost
 2. Today and Projects pages, with the old dashboard kept at `/old` until you're happy.
 3. The Donna page (full answers, actions, undo, confirmations).
 4. Notes, Settings, the extension's **Add to project**, and tab-group sync.
-5. Remove the old dashboard.
+5. Remove the old dashboard. Done 21 Nov: its home, timeline, projects and ask pages are gone; privacy, memory, actions and the activity inbox are drawn in this layout, under Settings.

@@ -47,9 +47,6 @@ PHONE_ROUTES = {
     ("GET", "/"),
     ("GET", "/p"),
     ("GET", "/brief"),
-    ("GET", "/timeline"),
-    ("GET", "/projects"),
-    ("GET", "/ask"),
     ("POST", "/api/ask"),
     ("POST", "/api/pause"),
     ("POST", "/api/resume"),
@@ -247,27 +244,6 @@ def create_app(state: WebState, *, lan: bool = False) -> FastAPI:
         return resp
 
     # --- pages -------------------------------------------------------------------------------
-
-    @app.get("/old", response_class=HTMLResponse)
-    def today() -> str:
-        with state.db() as conn:
-            return pages.today(state, conn, phone=lan)
-
-    @app.get("/timeline", response_class=HTMLResponse)
-    def timeline(day: str | None = None) -> str:
-        with state.db() as conn:
-            return pages.timeline(state, conn, day, phone=lan)
-
-    @app.get("/projects", response_class=HTMLResponse)
-    def projects(id: str | None = None) -> str:
-        with state.db() as conn:
-            if id:
-                return pages.project(state, conn, id, phone=lan)
-            return pages.projects(state, conn, phone=lan)
-
-    @app.get("/ask", response_class=HTMLResponse)
-    def ask_page(q: str = "") -> str:
-        return pages.ask_page(q, phone=lan)
 
     @app.get("/inbox", response_class=HTMLResponse)
     def inbox_page() -> str:

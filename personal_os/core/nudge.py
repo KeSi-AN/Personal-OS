@@ -20,6 +20,7 @@ from pathlib import Path
 from personal_os.core import runtime
 
 FILE = "nudge.json"
+ALERT_PREFIX = "nudge-"  # the island's alert for a nudge (interfaces/alerts.py ids)
 DEFAULT_MIN = 5
 MAX_MIN = 120
 RECENT = timedelta(minutes=10)  # what's said this soon after a nudge can be about it
@@ -43,6 +44,17 @@ _MORE = re.compile(
 )
 _NOT_NOW = re.compile(_LEAD + r"(?:not\s+now|later|in\s+a\s+(?:bit|minute|sec)|not\s+yet)" + _TAIL,
                       re.I)  # fmt: skip
+_MINS = r"(?:\s*(?:minutes?|mins?))?"
+# "gimme 5", "give me ten minutes" (21 Nov: "gimme 5" became a to-do "get back in 5").
+_GIVE = re.compile(_LEAD + rf"(?:gimme|give\s+me|let\s+me\s+have)\s+(?:a\s+)?{_NUM}{_MINS}" + _TAIL,
+                   re.I)  # fmt: skip
+# "I'll get back in 5", "I'll be back to work in ten minutes", "back in 5" (21 Nov: "i'll get
+# back in 5" became a commitment Donna would hold you to).
+_BACK_IN = re.compile(
+    _LEAD + r"(?:i'?ll\s+|i\s+will\s+|i'?m\s+going\s+to\s+|gonna\s+)?(?:get\s+|be\s+|go\s+)?"
+    rf"back(?:\s+(?:to\s+(?:it|work|work\s+mode)|on\s+it))?\s+in\s+(?:a\s+)?{_NUM}{_MINS}" + _TAIL,
+    re.I,
+)
 
 
 def _n(word: str | None) -> int:
@@ -55,7 +67,7 @@ def _n(word: str | None) -> int:
 def parse(text: str) -> int | None:
     """Minutes to snooze the nudge for, or None if this isn't a snooze."""
     t = " ".join(text.split())
-    m = _SNOOZE.match(t) or _MORE.match(t)
+    m = _SNOOZE.match(t) or _MORE.match(t) or _GIVE.match(t) or _BACK_IN.match(t)
     if m:
         return max(1, min(MAX_MIN, _n(m[1])))
     if _NOT_NOW.match(t):
@@ -88,7 +100,22 @@ def recent(rt: Path, now: datetime) -> bool:
     return at is not None and timedelta(0) <= now - at <= RECENT
 
 
+def clear(rt: Path) -> int:
+    """Take the nudge off the island. It's an alert, and alerts stay until dismissed, so
+    after "snooze" it stayed up and had to be closed by hand (21 Nov)."""
+    gone = 0
+    for f in (rt / "alerts").glob(f"{ALERT_PREFIX}*.json"):
+        f.unlink(missing_ok=True)
+        gone += 1
+    return gone
+
+
+def showing(rt: Path) -> bool:
+    return any((rt / "alerts").glob(f"{ALERT_PREFIX}*.json"))
+
+
 def snooze(rt: Path, minutes: int, now: datetime) -> datetime:
+    clear(rt)
     st = _state(rt)
     until = now + timedelta(minutes=minutes)
     st["snoozed_until"] = until.isoformat()
@@ -108,4 +135,5 @@ def due(rt: Path, now: datetime) -> bool:
 
 
 def reply(minutes: int) -> str:
-    return f"Okay, {minutes} more minute{'s' * (minutes != 1)}. I'll check in after that."
+    return (f"Okay, {minutes} more minute{'s' * (minutes != 1)}. I'll nudge you again then if "
+            "you're still on it.")  # fmt: skip

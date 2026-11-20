@@ -360,3 +360,12 @@ no_reply = ["youtube", "claude in 20", "3d print", "scammer"]
 max_s = 30
 tags = ["recall", "projects"]
 
+[[case]]
+id = "recall-summarise-today"
+say = "summarise today"
+from = "21 Nov, typed: looked in an empty project, said 'no open projects for you today'"
+no_reply = ["no open projects", "don't have data"]
+no_calls = ["project_items"]
+max_s = 30
+tags = ["recall"]
+

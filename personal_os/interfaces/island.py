@@ -478,7 +478,7 @@ class IslandApi(popup.Api):
             return "Capture isn't running, so the dashboard isn't either."
         from personal_os.interfaces import app
 
-        path = {"today": "/", "projects": "/projects", "donna": "/donna"}.get(str(page), "/")
+        path = {"today": "/", "projects": "/p", "donna": "/donna"}.get(str(page), "/")
         app.open_app(self._cfg, path)
         self._island.collapse()
         return ""

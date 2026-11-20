@@ -130,10 +130,24 @@ _NOT_HISTORY = re.compile(
 )  # the conversation and reminders have their own answers
 
 
+# "Summarise today", "recap yesterday", "sum up my week": a summary of your own time, said as a
+# request (21 Nov: "summarise today" went to the agent, which looked in an empty project and
+# said there were "no open projects for you today").
+_SUMMARY = re.compile(
+    r"^(?:give\s+me\s+|can\s+i\s+get\s+)?(?:a\s+)?(?:summari[sz]e|sum\s+up|recap|run\s+me\s+through|"
+    r"summary\s+of|recap\s+of|rundown\s+of)\s+(?:of\s+)?(?:my\s+|the\s+)?"
+    r"(?:today|yesterday|day|week|this\s+week|last\s+week|morning|afternoon|evening|"
+    r"what\s+i\s+did\b.*)\W*$",
+    re.I,
+)
+
+
 def about_my_past(text: str) -> bool:
     """Is this a question about your own past activity? Those are answered from your history
     with evidence, the same way `personal-os ask` answers them, never by the model's guess."""
     t = strip_polite(normalize(text))
+    if _SUMMARY.match(t):
+        return True
     return bool(_QUESTION.match(t) and _MY_PAST.search(t) and not _NOT_HISTORY.search(t))
 
 

@@ -7,9 +7,10 @@ link, X-POS header and same-origin on changes, strict CSP, no network loads), no
     /p/<id>         A project: overview, sources, notes, to-dos, timeline, resume
     /donna          The conversation with Donna, in full; ask her anything
     /notes          Notes and to-dos everywhere, and the unfiled inbox
-    /settings       Voice, browser, and the classic privacy/memory/actions pages
+    /settings       Voice, music, browser; and from there privacy, memory, actions and the
+                    activity inbox (pages.py, drawn in this layout)
 
-The old dashboard's home is at /old until v2 has replaced all of it.
+The old dashboard (its home, timeline, projects and ask pages) was removed on 21 Nov.
 """
 
 from __future__ import annotations
@@ -87,7 +88,45 @@ NAV = [("/", "Today"), ("/brief", "Brief"), ("/p", "Projects"), ("/donna", "Donn
 PHONE_PAGES = {"/", "/brief", "/p"}
 
 
-def shell(title: str, active: str, body: str, *, phone: bool = False) -> str:
+# What the privacy, memory, actions and inbox pages (pages.py) use beyond the styles above,
+# kept to their own part of the page.
+CLASSIC_CSS = """
+.classic .card { margin:10px 0; } .classic h2 { margin:22px 0 8px; }
+.classic .row { border-bottom:none; flex-wrap:wrap; }
+.classic .pill { display:inline-block; padding:1px 9px; border-radius:99px;
+  background:var(--accent-soft); font-size:12px; margin:0 4px 4px 0; }
+.classic .ok { color:var(--ok); } .classic .warn { color:var(--warn); } .classic .bad { color:var(--bad); }
+.classic button.danger { color:var(--bad); }
+.classic input[type=checkbox], .classic input[type=radio] { width:auto; }
+.classic details summary { cursor:pointer; color:var(--muted); }
+.classic table { width:100%; border-collapse:collapse; }
+.classic td, .classic th { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line);
+  vertical-align:top; } .classic th { color:var(--muted); font-weight:500; }
+.classic .evidence { font-size:13px; color:var(--muted); margin:2px 0 0; }
+.classic .bar { display:inline-block; }
+.classic pre { white-space:pre-wrap; font-size:13px; background:var(--bg); padding:8px; border-radius:8px; }
+"""
+
+
+def classic(title: str, body: str, *, status: str = "", phone: bool = False) -> str:
+    """A page from pages.py (privacy, memory, actions, inbox) in this layout, under Settings."""
+    head = f"<h1>{e(title)}</h1>" + (f"<p class='sub'>{status}</p>" if status else "")
+    return shell(title, "/settings", f"{head}<div class='classic'>{body}</div>", phone=phone,
+                 extra_css=CLASSIC_CSS)  # fmt: skip
+
+
+def bare(title: str, body: str) -> str:
+    """Signing in and pairing a phone: no navigation."""
+    return (
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        f"<title>{e(title)} · Personal OS</title><style>{CSS}{CLASSIC_CSS}</style>"
+        f"<script>{JS}</script></head><body><main><h1>{e(title)}</h1>"
+        f"<div class='classic'>{body}</div></main><div id='toast'></div></body></html>"
+    )
+
+
+def shell(title: str, active: str, body: str, *, phone: bool = False, extra_css: str = "") -> str:
     links = "".join(
         f"<a href='{href}' class='{'on' if href == active else ''}'>{e(label)}</a>"
         for href, label in NAV
@@ -96,8 +135,8 @@ def shell(title: str, active: str, body: str, *, phone: bool = False) -> str:
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>{e(title)} · Personal OS</title><style>{CSS}</style><script>{JS}</script></head>"
-        f"<body><div class='app'><nav class='rail'><div class='brand'>Personal OS</div>{links}"
+        f"<title>{e(title)} · Personal OS</title><style>{CSS}{extra_css}</style>"
+        f"<script>{JS}</script></head><body><div class='app'><nav class='rail'><div class='brand'>Personal OS</div>{links}"
         "<div class='foot'>Ctrl+K: jump</div></nav>"
         f"<main>{body}</main></div><div id='toast'></div>{KEYS}</body></html>"
     )
@@ -661,8 +700,6 @@ def settings_page(state: Any, conn: sqlite3.Connection) -> str:
             ("/memory", "Memory", "facts you asked Donna to remember"),
             ("/actions", "Actions", "the action log, undo, approvals"),
             ("/inbox", "Activity inbox", "activity the tracker couldn't place"),
-            ("/timeline", "Timeline (classic)", "every session in detail"),
-            ("/old", "Old dashboard", "the previous home page"),
         ]
     )  # fmt: skip
     body = (

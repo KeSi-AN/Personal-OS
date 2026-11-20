@@ -626,6 +626,7 @@ class Daemon:
         nudge when chill has taken over."""
         from personal_os.context import activity
         from personal_os.context import now as now_mod
+        from personal_os.core import nudge
 
         rt = self.config.runtime_dir
         now = self.clock.now()
@@ -649,11 +650,10 @@ class Daemon:
                     _log.info("mode changed", extra={"fields": {"auto": change}})
             fx = modes.effects(rt)
             cache = activity.load_cache(self.config.data_dir)
-            if (
-                fx.nudge_chill_min
-                and self._nudge_due(rt, now)
-                and activity.in_front(snap, cache) == "chill"
-            ):
+            front_kind = activity.in_front(snap, cache)
+            if front_kind not in (None, "chill") and nudge.showing(rt):
+                nudge.clear(rt)  # back at work: the "back to work?" is answered
+            if fx.nudge_chill_min and self._nudge_due(rt, now) and front_kind == "chill":
                 # Only while the chill is still in front: back at work already means no nudge.
                 b = activity.breakdown(self.control_conn, now - timedelta(minutes=20), now, cache)
                 chill = b.by_category.get("chill", 0)
@@ -691,6 +691,7 @@ class Daemon:
                 "Say 'snooze' for 5 more minutes, or 'chill mode' if it's a break.")  # fmt: skip
         from personal_os.core import nudge
 
+        nudge.clear(self.config.runtime_dir)  # a new nudge replaces the last one
         nudge.said(self.config.runtime_dir, self.clock.now())
         alerts.show(
             self.config, f"nudge-{self.clock.now():%H%M}", "Work mode", text, self.clock.now()

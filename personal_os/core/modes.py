@@ -95,6 +95,10 @@ def set_mode(runtime_dir: Path, mode: Mode, *, by: str, now: datetime | None = N
     )
     with (runtime_dir / LOG).open("a", encoding="utf-8") as fh:
         fh.write(json.dumps({"at": at, "mode": mode, "by": by}) + "\n")
+    if mode != "work":  # out of work mode, a "back to work?" on the island means nothing
+        from personal_os.core import nudge
+
+        nudge.clear(runtime_dir)
     return True
 
 

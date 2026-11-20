@@ -56,7 +56,9 @@ def test_voice_snoozes_right_after_a_nudge(home: Path, config: Config):
     v = voice_with_clock(home, config)
     rt = v.cfg.runtime_dir
     nudge.said(rt, T0)
-    assert v.fast("give me 10 more minutes") == "Okay, 10 more minutes. I'll check in after that."
+    assert v.fast("give me 10 more minutes") == (
+        "Okay, 10 more minutes. I'll nudge you again then if you're still on it."
+    )
     assert not nudge.due(rt, T0 + timedelta(minutes=10))
     assert nudge.due(rt, T0 + timedelta(minutes=11))
 
@@ -74,3 +76,81 @@ def test_snooze_without_a_nudge_is_not_taken_for_one(home: Path, config: Config)
     v = voice_with_clock(home, config)
     reply = v.fast("not now")
     assert reply is None or "more minute" not in reply
+
+
+def _nudge_alert(rt: Path) -> None:
+    from personal_os.interfaces import alerts
+
+    alerts.add(rt, "nudge-0130", "Work mode", "17 min of chill in work mode.", T0)
+    alerts.add(rt, "reminder-1", "Reminder", "stretch", T0)
+
+
+def test_a_snooze_takes_the_nudge_off_the_island(home: Path, config: Config):
+    from personal_os.interfaces import alerts
+
+    v = voice_with_clock(home, config)
+    rt = v.cfg.runtime_dir
+    nudge.said(rt, T0)
+    _nudge_alert(rt)
+    v.fast("snooze")
+    left = [a["id"] for a in alerts.pending(rt, T0)]
+    assert left == ["reminder-1"]  # the nudge is gone; a reminder isn't touched
+
+
+def test_chill_mode_takes_the_nudge_off_the_island(tmp_path: Path):
+    from personal_os.core import modes
+
+    _nudge_alert(tmp_path)
+    assert nudge.showing(tmp_path)
+    modes.set_mode(tmp_path, "chill", by="voice", now=T0)
+    assert not nudge.showing(tmp_path)
+
+
+def test_back_at_work_takes_the_nudge_off_the_island(home: Path, config: Config, monkeypatch: Any):
+    from personal_os.context.now import Window
+    from tests.test_modes import _nudge_world
+
+    env, _fake, shown, tick = _nudge_world(
+        home, config, monkeypatch, ([Window("Code", "main.py", front=True, exe="Code.exe")], [])
+    )
+    _nudge_alert(env.config.runtime_dir)
+    tick()
+    assert shown == [] and not nudge.showing(env.config.runtime_dir)
+
+
+@pytest.mark.parametrize(
+    ("said", "minutes"),
+    [("gimme 5", 5), ("give me ten minutes", 10), ("i'll get back in 5", 5),
+     ("I'll be back to work in ten minutes", 10), ("back in 5", 5)],
+)  # fmt: skip
+def test_what_you_said_on_21_nov_snoozes(said: str, minutes: int):
+    """ "gimme 5" became a to-do and "i'll get back in 5" a commitment (21 Nov)."""
+    assert nudge.parse(said) == minutes
+
+
+@pytest.mark.parametrize("said", ["i'll call mum in 5", "give me the file", "take 5"])
+def test_other_requests_with_numbers_arent_snoozes(said: str):
+    assert nudge.parse(said) is None
+
+
+def test_ill_get_back_in_5_after_a_nudge_is_a_snooze_not_a_commitment(home: Path, config: Config):
+    v = voice_with_clock(home, config)
+    nudge.said(v.cfg.runtime_dir, T0)
+    assert v.fast("i'll get back in 5") == (
+        "Okay, 5 more minutes. I'll nudge you again then if you're still on it."
+    )
+
+
+@pytest.mark.parametrize("said", ["summarise today", "recap today", "sum up yesterday",
+                                  "give me a summary of today"])  # fmt: skip
+def test_a_summary_of_your_day_is_answered_from_your_history(said: str):
+    from personal_os.context.route import about_my_past
+
+    assert about_my_past(said)
+
+
+@pytest.mark.parametrize("said", ["summarize this article", "summarise the meeting notes"])
+def test_other_summaries_are_not_history(said: str):
+    from personal_os.context.route import about_my_past
+
+    assert not about_my_past(said)

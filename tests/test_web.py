@@ -93,14 +93,23 @@ def test_wrong_host_and_cross_site_posts_are_refused(site: Site):
 
 def test_every_page_renders(site: Site):
     site.login()
-    for path in ("/", "/timeline", "/timeline?day=2026-11-02", "/projects", "/projects?id=auth-service",
-                 "/ask", "/inbox", "/actions", "/memory", "/privacy"):  # fmt: skip
+    for path in ("/", "/p", "/p/auth-service", "/donna", "/notes", "/settings", "/brief",
+                 "/inbox", "/actions", "/memory", "/privacy"):  # fmt: skip
         r = site.client.get(path)
         assert r.status_code == 200, path
         assert "<script" in r.text and "Personal OS" in r.text
         assert r.headers["X-Frame-Options"] == "DENY"
-    assert "auth-service" in site.client.get("/projects").text
-    assert "Add OAuth token refresh" in site.client.get("/timeline?day=2026-11-02").text
+    assert "auth-service" in site.client.get("/p").text
+    # The kept pages are in the dashboard's layout, under Settings.
+    privacy = site.client.get("/privacy").text
+    assert "class='rail'" in privacy and "class='on'>Settings" in privacy.replace('"', "'")
+
+
+def test_the_old_dashboard_is_gone(site: Site):
+    site.login()
+    for path in ("/old", "/timeline", "/projects", "/ask"):
+        assert site.client.get(path).status_code == 404, path
+    assert "/old" not in site.client.get("/settings").text
 
 
 def test_captured_text_is_escaped_in_pages(site: Site):
@@ -110,7 +119,8 @@ def test_captured_text_is_escaped_in_pages(site: Site):
     site.world.resolve()
     rebuild_sessions(site.conn, site.clock, T0.replace(hour=0), T0.replace(hour=23))
     site.login()
-    assert "<script>alert(1)" not in site.client.get("/timeline?day=2026-11-02").text
+    for path in ("/", "/p/auth-service", "/inbox"):
+        assert "<script>alert(1)" not in site.client.get(path).text, path
 
 
 # --- features ----------------------------------------------------------------------------------
@@ -238,7 +248,7 @@ def test_phone_pairing_and_limited_routes(site: Site):
     code = site.post("/api/lan/pair").json()["code"]  # a fresh one
     r = phone.post("/pair", data={"code": code, "name": "Pixel"}, follow_redirects=False)
     assert r.status_code == 303 and "pos_device" in r.cookies
-    assert phone.get("/").status_code == 200 and phone.get("/timeline").status_code == 200
+    assert phone.get("/").status_code == 200 and phone.get("/p").status_code == 200
     for path in ("/actions", "/privacy", "/memory", "/export/json"):
         assert phone.get(path).status_code == 403, path
     headers = {"X-POS": "1", "Origin": phone_base}

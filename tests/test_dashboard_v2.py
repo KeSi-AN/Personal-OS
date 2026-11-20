@@ -14,7 +14,7 @@ from personal_os.projects.registry import add_project, load_projects
 from personal_os.web.app import create_app
 from tests.test_web import POST, Site, site  # noqa: F401  (fixture)
 
-PAGES = ["/", "/p", "/donna", "/notes", "/settings", "/old"]
+PAGES = ["/", "/p", "/donna", "/notes", "/settings", "/privacy"]
 
 
 def test_every_v2_page_renders_and_needs_a_session(site: Site):  # noqa: F811
