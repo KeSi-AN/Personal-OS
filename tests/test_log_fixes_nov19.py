@@ -139,7 +139,7 @@ class Primer:
     def __init__(self) -> None:
         self.primed: list[str] = []
 
-    def prime(self, system: str) -> float:
+    def prime(self, system: str, cancel: Any = None) -> float:
         self.primed.append(system)
         return 0.1
 

@@ -24,7 +24,7 @@ import psutil
 from personal_os.actions import killswitch
 from personal_os.config.loader import ensure_dirs, load_config
 from personal_os.config.schema import Config
-from personal_os.context.gate import JobGate
+from personal_os.context.gate import JobGate, voice_busy
 from personal_os.context.jobs import JobReport, run_llm_jobs
 from personal_os.core import modes, runtime
 from personal_os.core import pause as pause_mod
@@ -126,6 +126,7 @@ class Daemon:
             fullscreen=getattr(probe_, "fullscreen", None),
             paused=self.paused.is_set,
             mode_allows=lambda: modes.effects(config.runtime_dir).background_jobs,
+            voice_busy=lambda: voice_busy(config.runtime_dir),
         )
         self.llm_status: dict[str, Any] = {"gate": "not checked yet"}
         self.pipeline_task: asyncio.Task[None] | None = None  # the capture writer, for health
@@ -852,12 +853,33 @@ class Daemon:
                 )
 
     def _llm_jobs(self) -> JobReport:
+        """The jobs, given up mid-call the moment Donna is spoken to: a summary takes about
+        16 s on this GPU and her next step used to wait behind it (Ollama does one at a time).
+        Between items, the gate is checked as before."""
         assert self.llm is not None
+        cancel = threading.Event()
+        done = threading.Event()
+
+        def watch() -> None:
+            while not done.wait(0.5):
+                if self.stop_event.is_set() or voice_busy(self.config.runtime_dir):
+                    cancel.set()
+                    return
 
         def should_stop() -> bool:
-            return self.stop_event.is_set() or not self.gate.check().ok
+            return cancel.is_set() or self.stop_event.is_set() or not self.gate.check().ok
 
-        return run_llm_jobs(self.llm_conn, self.llm, self.clock, self.config.llm, should_stop)
+        watcher = threading.Thread(target=watch, name="pos-llm-watch", daemon=True)
+        with contextlib.suppress(AttributeError):
+            self.llm.cancel = cancel  # type: ignore[attr-defined]  # Ollama streams, then
+        watcher.start()
+        try:
+            return run_llm_jobs(self.llm_conn, self.llm, self.clock, self.config.llm, should_stop)
+        finally:
+            done.set()
+            watcher.join(timeout=2)
+            with contextlib.suppress(AttributeError):
+                self.llm.cancel = None  # type: ignore[attr-defined]
 
     def _retention(self) -> None:
         conn = connect(self.config.db_path)

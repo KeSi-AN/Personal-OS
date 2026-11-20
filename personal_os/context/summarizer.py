@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from personal_os.context.evidence import EvidencePack, fetch_rows, finalize, lines_from_rows
 from personal_os.core.clock import Clock, from_ms, to_ms
-from personal_os.llm.provider import LLMError, LLMProvider, LLMUnavailable
+from personal_os.llm.provider import LLMCancelled, LLMError, LLMProvider, LLMUnavailable
 from personal_os.projects.sessions import Session, load_sessions
 from personal_os.storage.db import transaction
 
@@ -286,7 +286,7 @@ def summarize_session(
             SYSTEM, session_prompt(session, pack), SessionSummary, validate=_check(valid)
         )
         summary: SessionSummary | None = ground(raw, valid)
-    except LLMUnavailable:
+    except (LLMUnavailable, LLMCancelled):  # cancelled: tried again later, not failed
         raise
     except LLMError:
         summary = None

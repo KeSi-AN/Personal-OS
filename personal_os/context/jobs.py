@@ -15,7 +15,7 @@ from personal_os.context import rollups
 from personal_os.context.embeddings import embed_pending
 from personal_os.context.summarizer import pending_sessions, summarize_session
 from personal_os.core.clock import Clock
-from personal_os.llm.provider import LLMProvider
+from personal_os.llm.provider import LLMCancelled, LLMProvider
 
 
 @dataclass
@@ -38,8 +38,28 @@ def run_llm_jobs(
     max_embeddings: int = 256,
     max_rollups: int = 3,
 ) -> JobReport:
-    """LLMUnavailable propagates (the caller backs off); other model errors are per item."""
+    """LLMUnavailable propagates (the caller backs off); other model errors are per item. A
+    call cancelled because Donna is now in use ends the run early; nothing is marked failed."""
     report = JobReport()
+    try:
+        return _run(conn, provider, clock, cfg, should_stop, report, max_sessions,
+                    max_embeddings, max_rollups)  # fmt: skip
+    except LLMCancelled:
+        report.stopped_early = True
+        return report
+
+
+def _run(
+    conn: sqlite3.Connection,
+    provider: LLMProvider,
+    clock: Clock,
+    cfg: LLMConfig,
+    should_stop: Callable[[], bool],
+    report: JobReport,
+    max_sessions: int,
+    max_embeddings: int,
+    max_rollups: int,
+) -> JobReport:
     min_active = cfg.summarize_min_active_s * 1000
     for session, pack in pending_sessions(conn, clock, min_active_ms=min_active)[:max_sessions]:
         if should_stop():

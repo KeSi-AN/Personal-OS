@@ -165,9 +165,13 @@ class OllamaProvider:
                 conn.close()
 
     def _send(
-        self, path: str, body: dict[str, Any], on_text: Callable[[str], None] | None = None
+        self,
+        path: str,
+        body: dict[str, Any],
+        on_text: Callable[[str], None] | None = None,
+        cancel: threading.Event | None = None,
     ) -> dict[str, Any]:
-        cancel = self.cancel
+        cancel = cancel if cancel is not None else self.cancel
         if path == "/api/chat" and (cancel is not None or on_text is not None):
             return self._chat_cancellable(body, cancel or threading.Event(), on_text)
         return self._request(path, body, self.cfg.timeout_s)
@@ -181,10 +185,14 @@ class OllamaProvider:
         return opts
 
     def _with_gpu_fallback(
-        self, path: str, body: dict[str, Any], on_text: Callable[[str], None] | None = None
+        self,
+        path: str,
+        body: dict[str, Any],
+        on_text: Callable[[str], None] | None = None,
+        cancel: threading.Event | None = None,
     ) -> dict[str, Any]:
         try:
-            return self._send(path, body, on_text)
+            return self._send(path, body, on_text, cancel)
         except (LLMUnavailable, LLMCancelled):
             raise
         except LLMError:
@@ -192,7 +200,7 @@ class OllamaProvider:
                 raise
             self._gpu_layers = None  # e.g. out of VRAM: let Ollama choose from now on
             body["options"].pop("num_gpu")
-            return self._send(path, body)  # not streamed again: some of it may have been said
+            return self._send(path, body, cancel=cancel)  # not streamed: some may have been said
 
     # --- chat ----------------------------------------------------------------------------------
 
@@ -298,11 +306,12 @@ class OllamaProvider:
         }
         self._with_gpu_fallback("/api/generate", body)  # no prompt: just loads the model
 
-    def prime(self, system: str) -> float:
+    def prime(self, system: str, cancel: threading.Event | None = None) -> float:
         """Have Ollama read `system` now (a one-token answer), so the next chat that starts
         with it reuses that reading. On the GTX 1650 reading Donna's ~3,700-token prompt afresh
         takes about 30 s (121 tokens/s, GPU at 100% and full clock), and about 0.3 s once read.
-        Same model options as chat_json, so it never reloads the model. Returns seconds taken."""
+        Same model options as chat_json, so it never reloads the model. Returns seconds taken.
+        `cancel`: give up the moment it's set (a turn started: it mustn't wait behind this)."""
         body = {
             "model": self.chat_model, "stream": False, "think": False,
             "messages": [{"role": "system", "content": system},
@@ -311,7 +320,7 @@ class OllamaProvider:
             "options": self._options(gpu=True, num_ctx=self.cfg.num_ctx, temperature=0.2)
             | {"num_predict": 1},
         }  # fmt: skip
-        reply = self._with_gpu_fallback("/api/chat", body)
+        reply = self._with_gpu_fallback("/api/chat", body, cancel=cancel)
         return int(reply.get("total_duration") or 0) / 1e9
 
     def unload(self) -> None:

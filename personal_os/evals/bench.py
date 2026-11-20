@@ -55,8 +55,10 @@ class Result:
         return [c for c in self.checks if not c.ok]
 
 
-def make_home(real: Config, into: Path) -> Config:
-    """A copy of your settings and database to run against; your own are only read."""
+def make_home(real: Config, into: Path, *, keep_on_gpu: bool = False) -> Config:
+    """A copy of your settings and database to run against; your own are only read.
+    `keep_on_gpu`: the copy keeps the model loaded and reads the prompt ahead, as Donna does
+    with the tray's "Keep on GPU", whatever your setting is."""
     into.mkdir(parents=True, exist_ok=True)
     shutil.copy2(config_path(real.data_dir), config_path(into))
     text = config_path(into).read_text("utf-8")
@@ -64,6 +66,9 @@ def make_home(real: Config, into: Path) -> Config:
     lines = ['data_dir = ""' if ln.startswith("data_dir") else ln for ln in text.splitlines()]
     config_path(into).write_text("\n".join(lines) + "\n", "utf-8")
     cfg = load_config(into)
+    if keep_on_gpu:
+        llm = cfg.llm.model_copy(update={"keep_on_gpu": True})
+        cfg = cfg.model_copy(update={"llm": llm})
     cfg.runtime_dir.mkdir(parents=True, exist_ok=True)
     if real.db_path.exists():
         copy_db(real.db_path, cfg.db_path)
@@ -74,11 +79,13 @@ class Bench:
     """One Voice, reused across cases as Donna reuses hers, in a pretend world."""
 
     def __init__(
-        self, cfg: Config, apps: list[Any], world_ref: list[World], *, prime: bool = True
-    ) -> None:
+        self, cfg: Config, apps: list[Any], world_ref: list[World], *, prime: bool = True,
+        busy: bool = False,
+    ) -> None:  # fmt: skip
         from personal_os.voice.main import Voice
 
         self.cfg, self.apps, self.prime, self.world_ref = cfg, apps, prime, world_ref
+        self.busy = busy
         self.voice = v = Voice(cfg)
 
         def say(text: str) -> None:
@@ -113,6 +120,18 @@ class Bench:
         with v._priming:  # held by the priming thread until it's done
             pass
 
+    def background_job(self) -> None:
+        """What the daemon does while you're away: a session summary, with its own prompt
+        (about 2,000 tokens), on the same model. Before Ollama kept several read prompts, this
+        made the next request read Donna's again (about 30 s)."""
+        from personal_os.context.summarizer import SYSTEM, SessionSummary
+
+        provider = self.voice.provider()
+        filler = "\n".join(f"[{i}] window: Editor - notes {i}.md (2m)" for i in range(160))
+        user = f"Session records:\n<data>\n{filler}\n</data>"
+        with contextlib.suppress(Exception):  # the answer doesn't matter, only the reading
+            provider.chat_json(SYSTEM, user, SessionSummary, max_tokens=16)
+
     def run(self, case: Case) -> Result:
         from personal_os.voice import rest
 
@@ -131,6 +150,8 @@ class Bench:
         world.asked.clear()
         if self.prime:
             self.read_prompt_ahead()
+        if self.busy:
+            self.background_job()
         t0 = time.monotonic()
         v.respond("typed", case.say)
         took = time.monotonic() - t0
@@ -180,7 +201,7 @@ def line(r: Result) -> str:
     return out
 
 
-def summary(results: list[Result], model: str, primed: bool) -> str:
+def summary(results: list[Result], model: str, primed: bool, busy_: bool = False) -> str:
     n = len(results)
 
     def count(v: str) -> int:
@@ -198,9 +219,10 @@ def summary(results: list[Result], model: str, primed: bool) -> str:
         for t, rs in sorted(tags.items())
     ]
     when = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")
+    busy = ", a background summary before each case" if busy_ else ""
     head = (
         f"## {when}: {count('pass')}/{n} pass, {count('slow')} slow, {count('fail')} wrong\n\n"
-        f"Model {model}, prompt {'read ahead' if primed else 'not read ahead'}. Median "
+        f"Model {model}, prompt {'read ahead' if primed else 'not read ahead'}{busy}. Median "
         f"{statistics.median(times) if times else 0:.1f} s, 90th percentile {p90:.1f} s.\n\n"
         "| group | right and in time | median |\n|---|---|---|\n" + "\n".join(rows) + "\n"
     )
@@ -242,12 +264,27 @@ def save(results: list[Result], out_dir: Path) -> dict[str, str]:
     return before
 
 
+def release(real: Config) -> None:
+    """Let Ollama unload the model on your own setting's timer again."""
+    from personal_os.llm import make_provider
+
+    with contextlib.suppress(Exception):
+        make_provider(real.llm).warm(keep_alive=real.llm.keep_alive)
+
+
 def main(argv: list[str] | None = None, *, emit: Callable[[str], None] = print) -> int:
     ap = argparse.ArgumentParser(prog="bench", description=__doc__.split("\n\n")[0])
     ap.add_argument("--only", nargs="*", default=[], help="case ids or tags containing these")
     ap.add_argument("--cold", action="store_true", help="don't read the prompt ahead")
     ap.add_argument("--out", type=Path, help="append the summary to this Markdown file")
     ap.add_argument("--cases", type=Path, help="another cases file")
+    ap.add_argument(
+        "--keep-on-gpu",
+        action="store_true",
+        help="read the prompt ahead as with Keep on GPU, whatever your setting",
+    )
+    ap.add_argument("--busy", action="store_true",
+                    help="run a background summary before each case (daemon work)")  # fmt: skip
     args = ap.parse_args(argv)
 
     real = load_config(default_home(), create=False)
@@ -261,11 +298,11 @@ def main(argv: list[str] | None = None, *, emit: Callable[[str], None] = print) 
     os.environ[ENV_HOME] = str(tmp)  # anything that looks up the data folder gets the copy
     results: list[Result] = []
     try:
-        cfg = make_home(real, tmp)
+        cfg = make_home(real, tmp, keep_on_gpu=args.keep_on_gpu)
         emit(f"{len(cases)} cases, model {cfg.llm.fast_model}, copy of your data in {tmp}")
         world_ref: list[World] = [World(apps)]
         with patched(world_ref):
-            bench = Bench(cfg, apps, world_ref, prime=not args.cold)
+            bench = Bench(cfg, apps, world_ref, prime=not args.cold, busy=args.busy)
             bench.voice.index.refresh(wait=True)
             for case in cases:
                 r = bench.run(case)
@@ -279,10 +316,12 @@ def main(argv: list[str] | None = None, *, emit: Callable[[str], None] = print) 
         shutil.rmtree(tmp, ignore_errors=True)
     # Donna reads her prompt ahead only with llm.keep_on_gpu (the tray's "Keep on GPU"):
     # without it, the bench can't either, and says so (20 Nov: a run looked slow for this).
-    primed = not args.cold and real.llm.keep_on_gpu
+    primed = not args.cold and (real.llm.keep_on_gpu or args.keep_on_gpu)
     if not args.cold and not primed:
         emit("Note: llm.keep_on_gpu is off, so the prompt wasn't read ahead (as for Donna).")
-    text = summary(results, real.llm.fast_model, primed)
+    if args.keep_on_gpu and not real.llm.keep_on_gpu:
+        release(real)  # the copy pinned the model; your setting doesn't
+    text = summary(results, real.llm.fast_model, primed, args.busy)
     emit("\n" + text)
     before = save(results, real.data_dir / "bench")
     for c in changes(before, results):

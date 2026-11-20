@@ -90,6 +90,7 @@ class Voice:
         self.was_resting = False  # what watch_rest saw last
         self._priming = threading.Lock()  # one prime_agent at a time
         self._provider: Any = None  # the model, made on first use (provider())
+        self._prime_stop: threading.Event | None = None  # the running prime's stop signal
         # A question asked in a typed turn ("Hold you to it? Say yes or no") waits here for
         # the next typed text instead of the mic (typed_answer_to).
         self.awaiting_typed = threading.Event()
@@ -1201,8 +1202,12 @@ class Voice:
         if not self._priming.acquire(blocking=False):
             return
 
+        stop = threading.Event()  # set when a turn starts: it never waits behind this
+        self._prime_stop = stop
+
         def go() -> None:
             from personal_os.actions import agent
+            from personal_os.llm.provider import LLMCancelled
             from personal_os.storage.db import open_db
 
             try:
@@ -1215,9 +1220,11 @@ class Voice:
                     system = agent.agent_prompt(self.executor(conn, provider))
                 finally:
                     conn.close()
-                took = prime(system)
+                took = prime(system, cancel=stop)
                 self.primed_at = time.monotonic()
                 _log.info("agent prompt primed", extra={"fields": {"s": round(took, 1)}})
+            except LLMCancelled:
+                _log.info("priming gave way to a turn")
             except Exception as exc:
                 _log.warning("priming failed", extra={"fields": {"exc_type": type(exc).__name__}})
             finally:
@@ -1236,6 +1243,8 @@ class Voice:
 
         entry: dict[str, Any] = {"at": self.clock.now().isoformat(), "trigger": trigger}
         t0 = time.monotonic()
+        if self._prime_stop is not None:
+            self._prime_stop.set()  # a prompt read ahead gives way: Ollama does one at a time
         self.interrupt.clear()
         self.stopped_by_you = False
         self.unanswered = False

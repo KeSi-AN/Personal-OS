@@ -19,7 +19,7 @@ from personal_os.context.ask import summary_line
 from personal_os.context.evidence import EvidencePack, fetch_rows, finalize, lines_from_rows
 from personal_os.context.summarizer import Item, load_summaries
 from personal_os.core.clock import Clock, from_ms, to_ms
-from personal_os.llm.provider import LLMError, LLMProvider, LLMUnavailable
+from personal_os.llm.provider import LLMCancelled, LLMError, LLMProvider, LLMUnavailable
 from personal_os.projects.sessions import day_bounds
 from personal_os.storage.db import transaction
 
@@ -163,7 +163,7 @@ def write_project_state(
     user = STATE_TASK.format(project=project_id) + f"\n<data>\n{pack.render()}\n</data>"
     try:
         state = provider.chat_json(SYSTEM, user, ProjectState, max_tokens=900)
-    except LLMUnavailable:
+    except (LLMUnavailable, LLMCancelled):  # cancelled: tried again later, not failed
         raise
     except LLMError:
         state = None
@@ -189,7 +189,7 @@ def write_day(
     user = DAY_TASK.format(day=f"{start:%A %d %B}") + f"\n<data>\n{pack.render()}\n</data>"
     try:
         roll = provider.chat_json(SYSTEM, user, DayRollup, max_tokens=700)
-    except LLMUnavailable:
+    except (LLMUnavailable, LLMCancelled):  # cancelled: tried again later, not failed
         raise
     except LLMError:
         roll = None

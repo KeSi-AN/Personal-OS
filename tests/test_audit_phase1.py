@@ -111,7 +111,7 @@ def test_a_claim_with_no_tool_behind_it_is_corrected(home: Path, config: Config)
     env = Env(home, config)
 
     def model(system: str, user: str, schema: Any) -> Any:
-        return {"decide": "answer", "calls": [], "reply": "I'm playing your music now."}
+        return {"decide": "answer", "calls": [], "reply": "Playing your music now."}
 
     out = agent.respond("music please", env.ex, FakeProvider(model), max_steps=1)
     assert "Playing" not in out.reply and "haven't done that" in out.reply

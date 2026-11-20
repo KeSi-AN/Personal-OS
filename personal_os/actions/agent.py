@@ -34,6 +34,7 @@ from personal_os.actions.planner import (
     borrowed,
     merge_opens,
     plan_checker,
+    project_paths,
     route_app_names,
     tools_block,
 )
@@ -379,7 +380,8 @@ def respond(
             break
         results: list[str] = []
         fresh: list[Outcome] = []
-        calls = drop_redundant_opens(merge_opens(route_app_names(list(plan.calls), executor)))
+        calls = route_app_names(list(plan.calls), executor)
+        calls = drop_redundant_opens(merge_opens(project_paths(calls, executor)))
         calls = calls[:MAX_CALLS]
         for call in calls:
             args = dict(call.args)
@@ -633,6 +635,23 @@ def _data(o: Outcome) -> str:
 
 # What a claimed verb must find in the action that ran (its tool, message or arguments):
 # "I've closed VS Code" after open_app ran is a false claim, not a matching one.
+# The same claims said with no subject, at the start of a sentence: "Playing your music
+# now.", "Opened Brave." (audit: these passed as true with no tool behind them).
+_CLAIM_BARE = re.compile(
+    r"(?:^|[.!?]\s+)(play(?:ed|ing)|paus(?:ed|ing)|stopp(?:ed|ing)|open(?:ed|ing)|"
+    r"clos(?:ed|ing)|switch(?:ed|ing)|mut(?:ed|ing)|created|sav(?:ed|ing)|sent|"
+    r"cancel(?:l)?(?:ed|ing)|chang(?:ed|ing)|start(?:ed|ing)|turn(?:ed|ing)|"
+    r"search(?:ed|ing)|click(?:ed|ing)|typ(?:ed|ing))\b",
+    re.I,
+)
+
+
+def claims(reply: str) -> list[str]:
+    """The action verbs a reply claims, with a subject ("I've paused it") or without
+    ("Paused.")."""
+    return [m[1] for m in _CLAIM.finditer(reply)] + [m[1] for m in _CLAIM_BARE.finditer(reply)]
+
+
 _CLAIM_NEEDS = {
     "open": ("open", "start", "launch"),
     "clos": ("clos",),
@@ -674,7 +693,8 @@ def grounded(
         for o in outcomes
         if o.ok and (t := executor.registry.get(o.tool)) is not None and t.tier > Tier.READ
     ]
-    if not reply or not _CLAIM.search(reply):
+    said = claims(reply) if reply else []
+    if not said:
         return reply
     if asking:
         return reply  # "which tab did you close?": an answer about the past, not a claim
@@ -684,7 +704,7 @@ def grounded(
             f"That needs your OK first: {pending[0].preview or pending[0].tool}. Approve it below."
         )
     if acted:
-        if all(_claim_matches(m[1], acted) for m in _CLAIM.finditer(reply)):
+        if all(_claim_matches(verb, acted) for verb in said):
             return reply
         return " ".join(str(o.message).rstrip(".") + "." for o in acted)
     failed = [o for o in outcomes if not o.ok and o.status != "succeeded"]

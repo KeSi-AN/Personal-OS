@@ -132,3 +132,11 @@ didn't pass at first, none from the change:
 - `music-whats-playing` stays slower than this morning (6.7 s) because "Keep on GPU" had been
   switched off in the tray: then neither Donna nor the bench reads the prompt ahead, and a
   request reads part of it again. The bench now says when that's the case.
+
+### 2026-11-21 00:18 (audit phase 2, ADR-091): 35/35, with background work
+
+`--keep-on-gpu --busy`: the prompt read ahead, then a ~2,000-token session summary on the
+same model before every case, as the daemon does while you're away. All 35 right and in time;
+the model's steps took 5.6-15.4 s (what's playing 7.2 s, where you left off on shop-app 15.4 s).
+Before Ollama kept several read prompts, that summary made the next request read Donna's
+prompt again (about 30 s); now it's brought back in under a second.

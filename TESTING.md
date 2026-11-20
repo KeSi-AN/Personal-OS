@@ -152,6 +152,7 @@ uv run pytest -q
 uv run ruff check .
 uv run mypy personal_os
 uv run python -m personal_os.evals.bench   # your real requests on the real model (docs/BENCH.md)
+uv run python -m personal_os.evals.bench --keep-on-gpu --busy   # with background work between
 ```
 
 ## Daemon control

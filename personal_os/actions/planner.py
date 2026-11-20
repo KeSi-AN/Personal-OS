@@ -63,7 +63,7 @@ TOOLS = """
 Tools (name(arguments): what it does [tier]):
 {tools}
 
-Projects (id: folder): {projects}
+Projects (a project's id is its folder, for paths and targets): {projects}
 Apps for open_app: {apps}, or any other app installed on this PC, by its name
 Named commands for run_command: {commands}
 Notes are saved in: {notes}"""
@@ -101,10 +101,10 @@ def tools_block(executor: Executor) -> str:
         f"- {t.signature(choices=True)}: {t.summary} [{int(t.tier)}]"
         for t in executor.registry.for_planner()
     )
-    projects = "; ".join(
-        f"{p.id}: {p.roots[0]}"
-        for p in load_projects(executor.conn)
-        if p.roots and p.id != NONE_PROJECT
+    # Ids only: the folders (about 560 tokens for 30 projects, read afresh on every cold
+    # start) are filled in by project_paths when a call names one.
+    projects = ", ".join(
+        p.id for p in load_projects(executor.conn) if p.roots and p.id != NONE_PROJECT
     )
     cfg = executor.config.actions
     return TOOLS.format(
@@ -130,6 +130,33 @@ def merge_opens(calls: list[Any]) -> list[Any]:
     app, path = apps[0], paths[0]
     app.args = {**app.args, "target": path.args["path"]}
     return [c for c in calls if c is not path]
+
+
+_PATH_ARGS = {"open_path": "path", "open_app": "target", "reveal_path": "path",
+              "list_folder": "path"}  # fmt: skip
+
+
+def project_paths(calls: list[Any], executor: Executor) -> list[Any]:
+    """A project's id where a folder goes ("open shop-app in vscode" -> target shop-app) is
+    its folder: the prompt lists ids only. A real folder of that name inside your folders
+    wins."""
+    roots = {
+        p.id.lower(): p.roots[0]
+        for p in load_projects(executor.conn)
+        if p.roots and p.id != NONE_PROJECT
+    }
+    for call in calls:
+        key = _PATH_ARGS.get(call.tool)
+        raw = call.args.get(key) if key else None
+        if not isinstance(raw, str) or raw.lower().strip() not in roots:
+            continue
+        try:
+            if Path(executor.paths.locate(raw)).exists():
+                continue
+        except ActionError:
+            pass
+        call.args = {**call.args, key: str(roots[raw.lower().strip()])}
+    return calls
 
 
 def route_app_names(calls: list[Any], executor: Executor) -> list[Any]:
@@ -347,7 +374,8 @@ def _with_model(
         if not plan.calls:
             break
         only_reads = True
-        for call in merge_opens(route_app_names(list(plan.calls), executor))[:MAX_CALLS]:
+        calls = project_paths(route_app_names(list(plan.calls), executor), executor)
+        for call in merge_opens(calls)[:MAX_CALLS]:
             tool = executor.registry.get(call.tool)
             only_reads &= tool is not None and tool.tier == Tier.READ
             from_context = bool(context) and borrowed(dict(call.args), request, context)
