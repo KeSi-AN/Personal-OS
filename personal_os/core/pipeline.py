@@ -6,11 +6,14 @@ Live capture, the simulator and replays all go through this same pipeline.
 from __future__ import annotations
 
 import asyncio
+import logging
 import sqlite3
+import time
 from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any
 
 from personal_os.core.bus import EventBus
 from personal_os.core.clock import Clock
@@ -20,6 +23,10 @@ from personal_os.storage import repo
 from personal_os.storage.writer import EventWriter
 
 HintFn = Callable[[Event], Event]
+_log = logging.getLogger("personal_os.pipeline")
+RETRY_FIRST_S = 0.5
+RETRY_MAX_S = 30.0
+STOP_TRIES = 3  # once stopping, a batch that still can't be written is given up after this
 
 
 def rule_project_hint(event: Event) -> Event:
@@ -38,6 +45,10 @@ def rule_project_hint(event: Event) -> Event:
 class PipelineStats:
     received: int = 0
     stored: int = 0
+    failed: int = 0  # events in batches that could never be written (a filter bug)
+    retries: int = 0  # writes tried again (the database was locked, the disk full...)
+    last_error: str = ""
+    last_error_at: float = 0.0  # time.time() of last_error
 
 
 class Pipeline:
@@ -78,6 +89,11 @@ class Pipeline:
         return any(event.ts_start < end and last >= start for start, end in self.forgotten)
 
     def process(self, events: Iterable[Event]) -> int:
+        kept, dropped = self.prepare(events)
+        return self.store(kept, dropped)
+
+    def prepare(self, events: Iterable[Event]) -> tuple[list[Event], list[Any]]:
+        """Filter and hint a batch (counted once): what to write, and ids to retract."""
         batch = list(events)
         self.stats.received += len(batch)
         if self.forgotten:
@@ -87,6 +103,10 @@ class Pipeline:
         kept = [self.hint(e) for e in self.privacy.apply_many(batch)]
         kept_ids = {e.id for e in kept}
         dropped = [e.id for e in batch if e.id not in kept_ids and e.source != "meta"]
+        return kept, dropped
+
+    def store(self, kept: list[Event], dropped: list[Any]) -> int:
+        """Write a prepared batch in one transaction (safe to try again: rows are upserts)."""
         stored = self.writer.write(kept, retract=dropped)
         self.stats.stored += stored
         self.flush_counters()
@@ -120,13 +140,56 @@ class Pipeline:
         timeout_s: float = 1.0,
         linger_s: float = 0.5,
     ) -> None:
-        """Consume until `stop` is set and the bus is empty."""
+        """Consume until `stop` is set and the bus is empty. A write that fails is tried
+        again with backoff, keeping the batch, while the bus buffers (DESIGN.md §3.6); before,
+        one error ("database is locked" while voice held the write lock) ended this task and
+        capture stopped silently while every observer still showed "running" (audit B1)."""
         self.bus = bus
         while not (stop.is_set() and len(bus) == 0):
             batch = await bus.get_batch(max_batch, timeout=timeout_s, linger=linger_s)
-            if batch:
-                self.busy = True
-                try:
-                    await asyncio.to_thread(self.process, batch)
-                finally:
-                    self.busy = False
+            if not batch:
+                continue
+            self.busy = True
+            try:
+                await self._write_with_retry(batch, stop)
+            finally:
+                self.busy = False
+
+    async def _write_with_retry(self, batch: list[Event], stop: asyncio.Event) -> None:
+        try:
+            kept, dropped = await asyncio.to_thread(self.prepare, batch)
+        except Exception as exc:  # the filter itself failed: nothing to retry
+            self._failed(len(batch), exc)
+            return
+        wait, tries = RETRY_FIRST_S, 0
+        while True:
+            try:
+                await asyncio.to_thread(self.store, kept, dropped)
+                return
+            except ValueError as exc:  # a blocked event reached the writer: never retried
+                self._failed(len(kept), exc)
+                return
+            except Exception as exc:  # locked, busy, disk full: keep the batch and wait
+                tries += 1
+                self.stats.retries += 1
+                self._note(exc)
+                _log.warning(
+                    "write failed, retrying",
+                    extra={"fields": {"exc_type": type(exc).__name__, "wait_s": wait}},
+                )
+                if stop.is_set() and tries >= STOP_TRIES:
+                    self._failed(len(kept), exc)
+                    return
+                await asyncio.sleep(wait)
+                wait = min(wait * 2, RETRY_MAX_S)
+
+    def _note(self, exc: BaseException) -> None:
+        self.stats.last_error = f"{type(exc).__name__}: {exc}"[:200]
+        self.stats.last_error_at = time.time()
+
+    def _failed(self, n: int, exc: BaseException) -> None:
+        self.stats.failed += n
+        self._note(exc)
+        _log.error(
+            "batch not written", extra={"fields": {"events": n, "exc_type": type(exc).__name__}}
+        )

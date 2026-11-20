@@ -32,10 +32,14 @@ _UNIT = r"(minutes?|mins?|hours?|hrs?|hr)"
 _SPAN = rf"(?:{_NUM}(?:\s*-?\s*{_UNIT})?|half\s+an\s+hour|an\s+hour|a\s+half\s+hour)"
 _LEAD = r"^\W*(?:(?:hey|ok(?:ay)?|so)\W+)?(?:donna\W+)?(?:(?:can|could)\s+you\s+)?(?:please\s+)?"
 _TAIL = r"(?:\s+(?:please|now|donna))*\W*$"
-# "take 10", "take ten minutes", "take five", "take a 10 minute break", "take a break"
+# "take 10", "take ten minutes", "take five", "take a 10 minute break", "take a break",
+# "take 1 min off"
 _TAKE = re.compile(
-    _LEAD + rf"take\s+(?:(?:a|an)\s+)?(?:(?P<span>{_SPAN})(?:\s+(?:break|rest|breather))?"
-    r"|(?:break|rest|breather|nap|beat))" + rf"(?:\s+for\s+(?P<span2>{_SPAN}))?" + _TAIL,
+    _LEAD + rf"take\s+(?:(?:a|an)\s+)?(?:(?P<span>{_SPAN})(?:\s+(?:break|rest|breather|off))?"
+    r"|(?:break|rest|breather|nap|beat))"
+    + rf"(?:\s+for\s+(?P<span2>{_SPAN}))?"
+    + r"(?:\s+off)?"
+    + _TAIL,  # "take 1 min off" (20 Nov), "take a break for 10 off"
     re.I,
 )
 # "rest up for 20 mins", "go rest", "snooze 15", "go on a break": a rest even with no time.
@@ -85,23 +89,61 @@ def tell_when_back(text: str) -> bool:
 
 # The same, said as its own part of a longer sentence: "take 5, say hi once you're back, and
 # then pause music" (19 Nov: the agent played a song called "hi").
-_BACK_PART = re.compile(
-    r"^(?:and\s+|then\s+)*(?:say\s+(?:hi|hello|hey)(?:\s+to\s+me)?|greet\s+me|remind\s+me|"
-    r"tell\s+me|let\s+me\s+know|ping\s+me|wake\s+me(?:\s+up)?)\s+(?:once|when|after)\s+"
-    r"you(?:'re|\s+are|\s+get|\s+come)\s*(?:back|ready|done|up)?\W*$",
-    re.I,
+_WHEN_BACK = r"(?:once|when|after)\s+you(?:'re|\s+are|\s+get|\s+come)\s*(?:back|ready|done|up)"
+_GREET = (
+    r"(?:say\s+(?:hi|hello|hey)(?:\s+to\s+me)?|greet\s+me|remind\s+me|tell\s+me|"
+    r"let\s+me\s+know|ping\s+me|wake\s+me(?:\s+up)?)"
+)
+_BACK_PART = re.compile(rf"^(?:and\s+|then\s+)*{_GREET}\s+{_WHEN_BACK}\W*$", re.I)
+_GREET_ONLY = re.compile(rf"^(?:and\s+|then\s+)*{_GREET}\W*$", re.I)
+# Something to do once she's back ("pause media when you're back", "when you're back pause
+# the music"). Nothing can wait for that yet (a reminder is the only thing that waits), so it's
+# said, not dropped: 20 Nov, the pause was silently left out.
+_LATER = re.compile(
+    rf"^(?:and\s+|then\s+)*(?:{_WHEN_BACK}\s*,?\s+(?P<a>.+?)|(?P<b>.+?)\s+{_WHEN_BACK})\W*$", re.I
 )
 
 
+def plan_parts(parts: list[str]) -> tuple[list[str], list[str]]:
+    """Sort the parts of a sentence with a rest in it: (what to do now, what was asked for
+    later). "say hi once you're back" (or "say hi" beside something for later) is how the rest
+    ends: the rest part becomes "... and tell me when you're back". Without a rest, unchanged."""
+    if not any(parse(p) is not None for p in parts):
+        return parts, []
+    now: list[str] = []
+    later: list[str] = []
+    back = False
+    for p in parts:
+        t = p.strip()
+        if _BACK_PART.match(t):
+            back = True
+            continue
+        m = _LATER.match(t)
+        if m and parse(t) is None:
+            what = (m["a"] or m["b"] or "").strip(" ,.")
+            if _GREET_ONLY.match(what):
+                back = True
+            else:
+                later.append(what)
+            continue
+        now.append(p)
+    if later and any(_GREET_ONLY.match(p.strip()) for p in now):
+        back = True  # "pause media when you're back and say hi": the hi is for then too
+        now = [p for p in now if not _GREET_ONLY.match(p.strip())]
+    if back:
+        now = [f"{p} and tell me when you're back" if parse(p) is not None else p for p in now]
+    return now, later
+
+
 def with_back(parts: list[str]) -> list[str]:
-    """ "take 5" + "say hi once you're back" -> "take 5 and tell me when you're back": the
-    second part is how the rest ends, not a request of its own. Unchanged without a rest."""
-    if not any(_BACK_PART.match(p.strip()) for p in parts):
-        return parts
-    if not any(parse(p) is not None for p in parts if not _BACK_PART.match(p.strip())):
-        return parts
-    kept = [p for p in parts if not _BACK_PART.match(p.strip())]
-    return [f"{p} and tell me when you're back" if parse(p) is not None else p for p in kept]
+    """`plan_parts`' parts for now (tests and callers that don't say what waits)."""
+    return plan_parts(parts)[0]
+
+
+def later_reply(later: list[str]) -> str:
+    """What's said about things asked for once she's back, which nothing can do yet."""
+    what = " or ".join(later)
+    return f"I can't do things later yet, so I didn't {what}: ask me when I'm back."
 
 
 def parse(text: str) -> int | None:

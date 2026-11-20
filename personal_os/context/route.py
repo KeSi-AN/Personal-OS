@@ -91,6 +91,14 @@ def strip_polite(text: str) -> str:
     return _POLITE.sub("", text, count=1).strip()
 
 
+def is_question(text: str) -> bool:
+    """Phrased as a question ("what's playing?", "do I have reminders?"), as `route` decides
+    "ask" on purpose; not "ask" as its fallback for anything it can't place ("music please",
+    "louder"), which are requests (audit B2)."""
+    text = normalize(text)
+    return bool(_QUESTION.match(strip_polite(text)) and not _POLITE.match(text))
+
+
 def route(text: str) -> Route:
     whole = strip_wake(text)
     if _STOP.match(whole):

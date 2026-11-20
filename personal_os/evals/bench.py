@@ -200,7 +200,7 @@ def summary(results: list[Result], model: str, primed: bool) -> str:
     when = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")
     head = (
         f"## {when}: {count('pass')}/{n} pass, {count('slow')} slow, {count('fail')} wrong\n\n"
-        f"Model {model}, prompt {'read ahead' if primed else 'cold'}. Median "
+        f"Model {model}, prompt {'read ahead' if primed else 'not read ahead'}. Median "
         f"{statistics.median(times) if times else 0:.1f} s, 90th percentile {p90:.1f} s.\n\n"
         "| group | right and in time | median |\n|---|---|---|\n" + "\n".join(rows) + "\n"
     )
@@ -277,7 +277,12 @@ def main(argv: list[str] | None = None, *, emit: Callable[[str], None] = print) 
         else:
             os.environ[ENV_HOME] = old_home
         shutil.rmtree(tmp, ignore_errors=True)
-    text = summary(results, real.llm.fast_model, not args.cold)
+    # Donna reads her prompt ahead only with llm.keep_on_gpu (the tray's "Keep on GPU"):
+    # without it, the bench can't either, and says so (20 Nov: a run looked slow for this).
+    primed = not args.cold and real.llm.keep_on_gpu
+    if not args.cold and not primed:
+        emit("Note: llm.keep_on_gpu is off, so the prompt wasn't read ahead (as for Donna).")
+    text = summary(results, real.llm.fast_model, primed)
     emit("\n" + text)
     before = save(results, real.data_dir / "bench")
     for c in changes(before, results):

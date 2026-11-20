@@ -20,6 +20,7 @@ from typing import Any
 from personal_os.context.evidence import own_commit
 from personal_os.core.clock import Clock, from_ms, to_ms
 from personal_os.storage.db import transaction
+from personal_os.storage.repo import LONGEST_EVENT_MS
 
 BUCKET_MS = 60_000
 GAP_BUCKETS = 15
@@ -46,9 +47,9 @@ def _rows(conn: sqlite3.Connection, start_ms: int, end_ms: int) -> list[sqlite3.
     return conn.execute(
         "SELECT source, type, ts_start, coalesce(ts_end, last_seen, ts_start) AS ts_stop, "
         "project_id, project_confidence, payload FROM events "
-        "WHERE ts_start < ? AND coalesce(ts_end, last_seen, ts_start) >= ? AND source != 'meta' "
-        "ORDER BY ts_start",
-        (end_ms, start_ms),
+        "WHERE ts_start < ? AND ts_start >= ? AND coalesce(ts_end, last_seen, ts_start) >= ? "
+        "AND source != 'meta' ORDER BY ts_start",
+        (end_ms, start_ms - LONGEST_EVENT_MS, start_ms),
     ).fetchall()
 
 

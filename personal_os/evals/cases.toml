@@ -222,6 +222,16 @@ max_s = 20
 tags = ["multi", "music", "rest"]
 
 [[case]]
+id = "multi-rest-pause-later"
+say = "take 1 min off, and pause media when you're back and say hi"
+from = "20 Nov, typed: rested, dropped the pause without a word, and didn't say hi after"
+calls = [{ tool = "take_rest", minutes = "^1$", tell_when_back = "True" }]
+only = true
+reply = ["can't do things later", "pause media"]
+max_s = 5
+tags = ["multi", "rest"]
+
+[[case]]
 id = "multi-remind-and-rest"
 say = "remind me in 10 minutes to stretch and take 5"
 from = "18 Nov: set the reminder only; 'take 5' had to be said again"
@@ -302,8 +312,8 @@ tags = ["recall", "projects"]
 id = "projects-left-off-shop"
 say = "where did I leave off on shop-app"
 from = "20 Nov audit: said 13 Nov; five shop-app commits on 19 Nov were missed"
-reply = ["yesterday|19"]
-no_reply = ["13"]
+reply = ["shop"]
+no_reply = ["13 nov", "11-13", "13th"]  # the stale answer; the right day moves with your work
 max_s = 30
 tags = ["recall", "projects"]
 

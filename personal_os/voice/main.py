@@ -89,6 +89,7 @@ class Voice:
         self.wake_dirty = False  # a press ended a rest: restart the wake word after the turn
         self.was_resting = False  # what watch_rest saw last
         self._priming = threading.Lock()  # one prime_agent at a time
+        self._provider: Any = None  # the model, made on first use (provider())
         # A question asked in a typed turn ("Hold you to it? Say yes or no") waits here for
         # the next typed text instead of the mic (typed_answer_to).
         self.awaiting_typed = threading.Event()
@@ -532,9 +533,13 @@ class Voice:
         from personal_os.voice import rest, router
 
         said = split_requests(text)
-        parts = rest.with_back(music.open_then_play(said))
+        parts, later = rest.plan_parts(music.open_then_play(said))
+        note = rest.later_reply(later) if later else ""
         if len(said) >= 2 and len(parts) == 1:
-            return self.fast(parts[0])  # "open youtube music and play X there": one request
+            # "open youtube music and play X there": one request; "take 5, pause media when
+            # you're back": the rest now, and a word about what can't wait for later.
+            one = self.fast(parts[0])
+            return " ".join(x for x in (one, note) if x) if one is not None else None
         if len(parts) < 2:
             return None
         index, threshold = self.index.current(), self.cfg.voice.router_threshold
@@ -546,7 +551,7 @@ class Voice:
                 return None
         replies = [self.fast(part) for part in parts]
         _log.info("several requests", extra={"fields": {"parts": len(parts)}})
-        return " ".join(r for r in replies if r) or None
+        return " ".join(r for r in [*replies, note] if r) or None
 
     def resting(self) -> bool:
         from personal_os.voice import rest
@@ -1020,15 +1025,19 @@ class Voice:
         return f"Done {len(done)} of {len(report.outcomes)} steps."
 
     def provider(self) -> Any:
+        """The model, made once and kept: what it learns (that all layers on the GPU didn't
+        fit, so Ollama should choose) was lost on every call when it was made per call, and
+        each turn then failed a full-GPU load first (audit B3)."""
         if not self.cfg.llm.enabled:
             return None
-        from personal_os.llm import make_provider
+        if self._provider is None:
+            from personal_os.llm import make_provider
 
-        provider = make_provider(self.cfg.llm)
-        with contextlib.suppress(AttributeError):
-            # "stop" hangs up a model call mid-answer (Ollama's client streams then).
-            provider.cancel = self.interrupt  # type: ignore[attr-defined]
-        return provider
+            self._provider = make_provider(self.cfg.llm)
+            with contextlib.suppress(AttributeError):
+                # "stop" hangs up a model call mid-answer (Ollama's client streams then).
+                self._provider.cancel = self.interrupt
+        return self._provider
 
     def save_last(self, question: str, answer: str, evidence: list[str]) -> None:
         runtime.write_json_atomic(

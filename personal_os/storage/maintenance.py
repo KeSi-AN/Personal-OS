@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from personal_os.actions.audit import forget_window
 from personal_os.core.clock import Clock, to_ms
 from personal_os.core.events import Event, MetaEvent
+from personal_os.storage import repo
 from personal_os.storage.db import transaction
 
 MAINTENANCE_VERSION = "0.1.0"
@@ -31,6 +35,8 @@ def forget(
     *,
     marker: bool = True,
     undo_dir: Path | None = None,
+    data_dir: Path | None = None,
+    runtime_dir: Path | None = None,
 ) -> ForgetReport:
     """Delete everything captured that overlaps [start, end), then leave a content-free marker.
 
@@ -38,12 +44,24 @@ def forget(
     the deleted text is overwritten in the database file, and the WAL is truncated afterwards.
     The running daemon watches for the marker, purges its queue and observers' open intervals,
     and repeats the delete once (marker=False) to catch a checkpoint written in between.
+
+    `data_dir` / `runtime_dir`: also trim what was made from the window outside the database
+    (the voice history and last answer, the video-topic cache); the last briefing, kept as
+    a setting, goes too. Before, these kept captured text after a forget (audit B4).
     """
     if end <= start:
         raise ValueError("forget window must have end > start")
     now_ms = to_ms(clock.now())
     params = {"start": to_ms(start), "end": to_ms(end), "now": now_ms}
     overlap = "ts_start < :end AND coalesce(ts_end, :now) >= :start AND source != 'meta'"
+    titles = [
+        str(r[0])
+        for r in conn.execute(
+            f"SELECT DISTINCT json_extract(payload, '$.title') FROM events WHERE {overlap} "
+            "AND json_extract(payload, '$.title') IS NOT NULL",
+            params,
+        )
+    ]
     with transaction(conn):
         n_extracts = conn.execute(
             f"SELECT count(*) FROM page_extracts WHERE event_id IN "
@@ -74,6 +92,9 @@ def forget(
         conn.execute(
             "DELETE FROM reminders WHERE created_at >= :start AND created_at < :end", params
         )
+        last = repo.get_setting(conn, "briefings.last") or {}
+        if isinstance(last, dict) and _within(last.get("at"), start, end):
+            conn.execute("DELETE FROM kv_settings WHERE key = 'briefings.last'")
         if marker:
             event = Event.point(
                 MetaEvent(kind="meta.forget", range_start=start, range_end=end),
@@ -98,7 +119,53 @@ def forget(
     if undo_dir is not None:
         for action_id in edited:
             (undo_dir / f"{action_id}.orig").unlink(missing_ok=True)
+    if data_dir is not None or runtime_dir is not None:
+        forget_files(data_dir, runtime_dir, start, end, titles)
     return ForgetReport(start, end, n_events, int(n_extracts))
+
+
+def _within(iso: Any, start: datetime, end: datetime) -> bool:
+    try:
+        at = datetime.fromisoformat(str(iso))
+    except (TypeError, ValueError):
+        return False
+    return start <= at < end
+
+
+def forget_files(
+    data_dir: Path | None,
+    runtime_dir: Path | None,
+    start: datetime,
+    end: datetime,
+    titles: Sequence[str] = (),
+) -> None:
+    """The window's traces outside the database: voice exchanges said in it, the last answer
+    if it was given in it, and the video topics of titles seen in it (the cache is keyed by a
+    hash of the title, with no time, so the forgotten events' titles say which)."""
+    from personal_os.core import runtime
+
+    if runtime_dir is not None:
+        hist = runtime_dir / "voice_history.jsonl"
+        if hist.exists():
+            kept = []
+            for line in hist.read_text("utf-8").splitlines():
+                try:
+                    at = json.loads(line).get("at")
+                except ValueError:
+                    continue
+                if not _within(at, start, end):
+                    kept.append(line)
+            hist.write_text("".join(x + "\n" for x in kept), encoding="utf-8")
+        last = runtime_dir / "voice_last.json"
+        if _within((runtime.read_json(last) or {}).get("at"), start, end):
+            last.unlink(missing_ok=True)
+    if data_dir is not None and titles:
+        from personal_os.context import activity
+
+        cache = activity.load_cache(data_dir)
+        gone = {activity.media_key(t) for t in titles}
+        if gone & cache.keys():
+            activity.save_cache(data_dir, {k: v for k, v in cache.items() if k not in gone})
 
 
 def purge_undo(undo_dir: Path, older_than: datetime) -> int:

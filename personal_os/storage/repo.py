@@ -12,6 +12,12 @@ from personal_os.core.clock import Clock, from_ms, to_ms
 from personal_os.core.events import Event, PageExtract
 from personal_os.storage.db import transaction
 
+# The longest an event can last, for bounding time-range queries: a query for [start, end)
+# also asks ts_start >= start - this, so the index skips older history instead of reading all
+# of it before `end` (audit: 20 ms per query at 192k events, 0.6 ms bounded). The longest seen
+# here is 9.4 h (a page open all evening); 3 days leaves room for a long idle or a weekend.
+LONGEST_EVENT_MS = 3 * 24 * 3600 * 1000
+
 _EVENT_COLUMNS = (
     "e.id, e.source, e.type, e.ts_start, e.ts_end, e.last_seen, e.tz_offset_min, e.project_hint, "
     "e.confidence, e.privacy_class, e.retention, e.observer_version, e.truncated, e.payload"
@@ -82,8 +88,8 @@ def iter_events(
     where: list[str] = []
     params: list[Any] = []
     if start is not None:
-        where.append("coalesce(e.ts_end, e.last_seen, e.ts_start) >= ?")
-        params.append(to_ms(start))
+        where.append("coalesce(e.ts_end, e.last_seen, e.ts_start) >= ? AND e.ts_start >= ?")
+        params += [to_ms(start), to_ms(start) - LONGEST_EVENT_MS]
     if end is not None:
         where.append("e.ts_start < ?")
         params.append(to_ms(end))

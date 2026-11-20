@@ -437,7 +437,7 @@ Below 0.5 an event stays **unassigned** and goes to the inbox. System, idle and 
 |---|---|---|
 | Summaries and answers | `qwen3:4b`, thinking off | About 45 tokens/s and 680 prompt tokens/s with every layer on the GPU (3.8 GB at an 8k context). Ollama's own estimate put only 2.3 GB on the GPU and ran at 7.5 tokens/s, so the provider asks for all layers (`gpu_layers`) and retries without that if loading fails. |
 | Deeper answers | the same model with thinking on, only with `ask --think` | About 60 s per answer (2,000+ thinking tokens). Too slow to be the default. |
-| Embeddings | `qwen3-embedding:0.6b` | Background batches on the GPU (about 550 tokens/s). A question is embedded on the CPU (0.5 s), so it doesn't push the chat model out of the 4 GB. |
+| Embeddings | `qwen3-embedding:0.6b` | Always on the CPU (audit, 20 Nov): batches run while you're idle, a question takes about 0.5 s, and it never reloads between CPU and GPU or pushes the chat model out of the 4 GB. |
 
 Everything goes through an `LLMProvider` interface (`chat_json`, `embed`, `health`). The Ollama provider uses the standard library's HTTP client, so there's no new dependency. It accepts only a loopback `base_url`: captured context never leaves the machine. Structured output uses Ollama's JSON-schema `format`, then pydantic validation, with one retry that shows the model its validation error.
 

@@ -83,6 +83,7 @@ Use the earlier conversation for "it", "those", "that one", "the first three": i
 just talked about.
 Your own earlier replies in the conversation can be wrong (you may have lacked a tool then): decide from the tools you have now, never repeat an old "I can't".
 Never answer that you'll check, look or find out: call the tool now, in this step.
+Nothing can be done later ("when you're back", "in 10 minutes") except a reminder: do the rest now and say plainly that you can't do that part later.
 Only claim what a tool result shows. If no tool can do something, say plainly that you can't
 do it yet; never say you can, and never say you did something no tool did.
 
@@ -246,9 +247,11 @@ def respond(
     `AgentReply.streamed` says what was handed on. `before_tool`: the tool's name, just
     before it's asked to run (voice plays a beat before a slow lookup)."""
     out = AgentReply(reply="")
-    from personal_os.context.route import route as kind_of
+    from personal_os.context.route import is_question
 
-    asking = kind_of(request) == "ask"
+    # A question may say what tools found; a request may only claim what a tool did. "ask"
+    # is also route()'s fallback, so it can't decide this (audit B2).
+    asking = is_question(request)
     streamed: list[str] = []
     held = False  # a sentence failed the claim check: nothing more is handed on
 

@@ -20,6 +20,7 @@ from pathlib import PureWindowsPath
 from typing import Any
 
 from personal_os.core.clock import from_ms
+from personal_os.storage.repo import LONGEST_EVENT_MS
 
 MAX_LINES = 80
 MIN_WINDOW_MS = 20_000
@@ -161,10 +162,11 @@ def fetch_rows(
 ) -> list[sqlite3.Row]:
     where = [
         "e.ts_start < ?",
+        "e.ts_start >= ?",  # bounded, so the index skips older history (LONGEST_EVENT_MS)
         "coalesce(e.ts_end, e.last_seen, e.ts_start) >= ?",
         "e.source NOT IN ('meta', 'system', 'idle')",
     ]
-    params: list[Any] = [end_ms, start_ms]
+    params: list[Any] = [end_ms, start_ms - LONGEST_EVENT_MS, start_ms]
     if project_id is not None:
         where.append("e.project_id = ?")
         params.append(project_id)

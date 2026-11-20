@@ -119,3 +119,16 @@ now cases too. A song by name, opening a service and playing on it, and "say hi 
 back" are now rules, so 30 of 34 cases never reach the model; the four that do (what's
 playing, recall, where you left off, what's in a tab) take 5-13 s. The reminder cases now
 also check the reply's words.
+
+### 2026-11-20 23:50 (audit phase 1, ADR-090): 32/35, then 35/35 right
+
+35 cases with "take 1 min off, and pause media when you're back and say hi" added. Three
+didn't pass at first, none from the change:
+- `projects-left-off-shop` expected "yesterday": you worked on shop-app again that evening,
+  so the right answer had moved on. The case now checks only that it isn't the stale 13 Nov.
+- `remind-no-me` (31 s) and `music-whats-playing` (78 s) ran while the Donna in use was still
+  on the old code, reading a different prompt on the same Ollama. Rerun after restarting her:
+  2.9 s, and 18-22 s.
+- `music-whats-playing` stays slower than this morning (6.7 s) because "Keep on GPU" had been
+  switched off in the tray: then neither Donna nor the bench reads the prompt ahead, and a
+  request reads part of it again. The bench now says when that's the case.

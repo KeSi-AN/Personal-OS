@@ -280,7 +280,10 @@ def forget_cmd(
     window = f"{start.astimezone().strftime(local)} -> {end.astimezone().strftime(local)}"
     if not yes and not typer.confirm(f"Permanently delete everything captured {window}?"):
         raise typer.Abort()
-    report = maintenance.forget(conn, start, end, clock, undo_dir=cfg.data_dir / "undo")
+    report = maintenance.forget(
+        conn, start, end, clock, undo_dir=cfg.data_dir / "undo", data_dir=cfg.data_dir,
+        runtime_dir=cfg.runtime_dir,
+    )  # fmt: skip
     typer.echo(
         f"Forgot {report.events} events and {report.page_extracts} page extracts ({window})."
     )

@@ -331,7 +331,10 @@ def create_app(state: WebState, *, lan: bool = False) -> FastAPI:
         with state.db() as conn:
             start = end - timedelta(minutes=body.minutes)
             undo_dir = state.config.data_dir / "undo"
-            report = maintenance.forget(conn, start, end, state.clock, undo_dir=undo_dir)
+            report = maintenance.forget(
+                conn, start, end, state.clock, undo_dir=undo_dir,
+                data_dir=state.config.data_dir, runtime_dir=state.config.runtime_dir,
+            )  # fmt: skip
         return {"message": f"Forgot the last {body.minutes} minutes ({report.events} events)."}
 
     # --- laptop only ---------------------------------------------------------------------------

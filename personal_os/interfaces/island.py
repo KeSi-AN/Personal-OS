@@ -599,7 +599,11 @@ class Island:
                     traceback.print_exc()
                     popup.record_error(self.cfg.runtime_dir, f"island: {type(exc).__name__}: {exc}")
                 time.sleep(0.5)
-            self._poke.wait(0.05)
+            # 20 times a second while it can be seen (hover and springs need it); twice a
+            # second while hidden behind a full-screen app, where nothing moves (audit). A
+            # poke (a turn, a page asked for) still wakes it at once.
+            hidden = self.shape is not None and not self.shape.visible
+            self._poke.wait(0.5 if hidden else 0.05)
             self._poke.clear()
 
     def _rect(self) -> tuple[int, int, int, int] | None:

@@ -15,6 +15,7 @@ from typing import Any
 from personal_os.context.embeddings import nearest
 from personal_os.llm.provider import LLMError, LLMProvider
 from personal_os.projects.features import STOPWORDS
+from personal_os.storage.repo import LONGEST_EVENT_MS
 
 RRF_K = 60
 RECENCY_WEIGHT = 0.5
@@ -68,6 +69,9 @@ def _filters(
     if start_ms is not None:
         where.append(f"coalesce({alias}.ts_end, {alias}.ts_start) >= :start")
         params["start"] = start_ms
+        if alias == "e":  # events only: a summary may cover a week
+            where.append("e.ts_start >= :earliest")  # bounded: see LONGEST_EVENT_MS
+            params["earliest"] = start_ms - LONGEST_EVENT_MS
     if end_ms is not None:
         where.append(f"{alias}.ts_start < :end")
         params["end"] = end_ms

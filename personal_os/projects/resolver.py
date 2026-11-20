@@ -272,7 +272,13 @@ class Resolver:
             )
 
     def resolve_pending(self, limit: int = 5000) -> int:
-        """First pass over events never looked at; then the temporal pass."""
+        """First pass over events never looked at; then the temporal pass. Nothing new: no
+        work (it rebuilt 30 days of keyword profiles every 30 s regardless: audit)."""
+        if (
+            self.conn.execute("SELECT 1 FROM events WHERE assigned_at IS NULL LIMIT 1").fetchone()
+            is None
+        ):
+            return 0
         self.refresh()
         rows = self.conn.execute(
             _SELECT + "WHERE e.assigned_at IS NULL ORDER BY e.ts_start LIMIT ?", (limit,)

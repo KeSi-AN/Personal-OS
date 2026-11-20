@@ -287,7 +287,13 @@ class WindowObserver(BaseObserver):
                 self.emit(event)
 
     def forget(self, start: datetime, end: datetime) -> None:
+        """Drop open intervals and the remembered windows in [start, end): they kept feeding
+        browser active time after a forget (audit B5)."""
         self.tracker.reset()
+        h = self.tracker.history
+        kept = [x for x in h if not (x[2] < end and x[3] >= start)]
+        h.clear()
+        h.extend(kept)
 
     def foreground_ms(
         self, exes: set[str], titles: set[str], start: datetime, end: datetime

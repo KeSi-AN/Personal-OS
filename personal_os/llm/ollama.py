@@ -271,8 +271,11 @@ class OllamaProvider:
             "input": inputs,
             "truncate": True,
             "keep_alive": self.cfg.keep_alive,
-            # A question is embedded on the CPU (0.5 s) so the chat model keeps the GPU.
-            "options": self._options(gpu=not query, num_ctx=EMBED_CTX, temperature=0),
+            # Always on the CPU. Background batches used to load it on the GPU and questions
+            # on the CPU, so it was reloaded each time that flipped, and a GPU load could push
+            # the chat model (and its read prompt) out of the 4 GB (audit). Batches run while
+            # you're idle, where a slower CPU pass costs nothing you notice.
+            "options": self._options(gpu=False, num_ctx=EMBED_CTX, temperature=0),
         }
         reply = self._with_gpu_fallback("/api/embed", body)
         vectors = reply.get("embeddings") or []

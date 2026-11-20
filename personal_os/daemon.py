@@ -128,6 +128,7 @@ class Daemon:
             mode_allows=lambda: modes.effects(config.runtime_dir).background_jobs,
         )
         self.llm_status: dict[str, Any] = {"gate": "not checked yet"}
+        self.pipeline_task: asyncio.Task[None] | None = None  # the capture writer, for health
         self.last_nudge: datetime | None = None
         self.restart_requested = False
         self.interfaces = use_platform  # web dashboard, tray (never in tests without a desktop)
@@ -162,6 +163,7 @@ class Daemon:
         pipeline_task = asyncio.create_task(
             self.pipeline.run(self.bus, pipeline_stop), name="pipeline"
         )
+        self.pipeline_task = pipeline_task
         self.supervisor.start()
         _log.info(
             "daemon started", extra={"fields": {"pid": os.getpid(), "recovered_open": recovered}}
@@ -791,7 +793,7 @@ class Daemon:
             await self._drain()
             maintenance.forget(
                 self.control_conn, start, end, self.clock, marker=False,
-                undo_dir=self.config.data_dir / "undo",
+                undo_dir=self.config.data_dir / "undo", runtime_dir=self.config.runtime_dir,
             )  # fmt: skip
             _log.info("forget applied", extra={"fields": {"queued_purged": purged}})
 
@@ -903,6 +905,17 @@ class Daemon:
                 "received": self.pipeline.stats.received,
                 "stored": self.pipeline.stats.stored,
                 "forget_dropped": self.pipeline.forget_dropped,
+                "failed": self.pipeline.stats.failed,
+                "retries": self.pipeline.stats.retries,
+                "last_error": self.pipeline.stats.last_error,
+                "last_error_at": (
+                    datetime.fromtimestamp(self.pipeline.stats.last_error_at)
+                    .astimezone()
+                    .isoformat()
+                    if self.pipeline.stats.last_error_at
+                    else None
+                ),
+                "alive": self.pipeline_task is not None and not self.pipeline_task.done(),
             },
             "llm": dict(self.llm_status),
             "hotkeys": {

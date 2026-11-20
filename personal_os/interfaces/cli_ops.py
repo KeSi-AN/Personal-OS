@@ -204,6 +204,21 @@ def doctor() -> None:
     )
     if flt.get("errors"):
         problems.append("privacy filter errors (events were dropped, never stored)")
+    pipe = h.get("pipeline") or {}
+    if pipe:
+        typer.echo(
+            f"writer     received {pipe.get('received', 0)}, stored {pipe.get('stored', 0)}, "
+            f"retries {pipe.get('retries', 0)}, not written {pipe.get('failed', 0)}"
+        )
+        if pipe.get("last_error"):
+            when = _ago(pipe.get("last_error_at"))
+            typer.echo(f"           last error {when}: {pipe['last_error']}")
+    if pipe.get("alive") is False:
+        problems.append("the capture writer has stopped: nothing is being stored")
+    elif pipe.get("failed"):
+        problems.append(f"{pipe['failed']} events couldn't be written (see the log)")
+    elif bus.get("queued", 0) > 1000:
+        problems.append(f"{bus['queued']} events waiting to be written (is the database locked?)")
 
     typer.echo("\nhooks")
     policy = installer.execution_policy()
