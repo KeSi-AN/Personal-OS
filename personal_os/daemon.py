@@ -45,7 +45,7 @@ from personal_os.observers.window import WindowObserver
 from personal_os.platform.base import SessionWatcher, WindowProbe
 from personal_os.privacy.rules import PrivacyRules
 from personal_os.projects.registry import ensure_repo_projects
-from personal_os.projects.resolver import Resolver
+from personal_os.projects.resolver import Resolver, reassess_if_needed
 from personal_os.projects.sessions import rebuild_sessions
 from personal_os.storage import maintenance, repo
 from personal_os.storage.db import connect, open_db
@@ -803,6 +803,8 @@ class Daemon:
         A failure here is logged and retried next time; it never stops capture."""
         try:
             ensure_repo_projects(self.jobs_conn, self.clock)
+            if reassess_if_needed(self.jobs_conn, self.clock):
+                _log.info("projects re-decided under new rules")
             Resolver(self.jobs_conn, self.clock).resolve_pending()
             if rebuild_sessions_too:
                 now = self.clock.now()

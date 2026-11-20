@@ -37,6 +37,9 @@ class Session:
     confidence: float
     active_ms: int
     stats: dict[str, Any] = field(default_factory=dict)
+    # A side piece: work on `project_id` inside a session mostly on another project (its
+    # own summary, from that project's own records). Not stored as a session.
+    side_of: str | None = None
 
     @property
     def id(self) -> str:

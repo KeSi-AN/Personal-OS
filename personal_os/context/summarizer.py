@@ -140,8 +140,28 @@ def _check(valid: set[int]) -> Callable[[SessionSummary], None]:
 # --- packs and prompts --------------------------------------------------------------------------
 
 
+SURE = 0.8  # a record placed on a project by a strong signal (its folder, repo, remote)
+SIDE_MIN_RECORDS = 3  # side work worth its own summary: a commit, or this many records
+
+
+def _sure_elsewhere(row: Any, project_id: str | None) -> bool:
+    pid = row["project_id"]
+    return pid not in (None, "none", project_id) and (row["project_confidence"] or 0) >= SURE
+
+
 def session_pack(conn: sqlite3.Connection, session: Session) -> EvidencePack:
+    """The session's records for its summary. Records that surely belong to another project
+    are left to that project's own side summary: summaries made from everything in the
+    window filed shop-app's billing work under roamies (20 Nov audit). A side piece has only
+    its own project's sure records."""
     rows = fetch_rows(conn, to_ms(session.start), to_ms(session.end))
+    if session.side_of is not None:
+        rows = [
+            r for r in rows
+            if r["project_id"] == session.project_id and (r["project_confidence"] or 0) >= SURE
+        ]  # fmt: skip
+    else:
+        rows = [r for r in rows if not _sure_elsewhere(r, session.project_id)]
     lines = lines_from_rows(rows, git_state=False)
     for line in lines:  # detours: other projects and personal browsing inside the session
         if line.project_id and session.project_id and line.project_id != session.project_id:
@@ -152,11 +172,17 @@ def session_pack(conn: sqlite3.Connection, session: Session) -> EvidencePack:
 def session_prompt(session: Session, pack: EvidencePack) -> str:
     a = session.start.astimezone().strftime("%Y-%m-%d %H:%M")
     b = session.end.astimezone().strftime("%H:%M")
-    return (
-        f"Session {a}-{b}, project: {session.project_id or 'unknown'}, "
-        f"active {session.active_ms // 60000} min.\n<data>\n{pack.render()}\n</data>\n"
-        "Write the JSON summary of this session."
-    )
+    if session.side_of is not None:
+        head = (
+            f"Session {a}-{b}: side work on project {session.project_id}, during time mostly "
+            f"spent on {session.side_of}. Only {session.project_id}'s own records are shown."
+        )
+    else:
+        head = (
+            f"Session {a}-{b}, project: {session.project_id or 'unknown'}, "
+            f"active {session.active_ms // 60000} min."
+        )
+    return f"{head}\n<data>\n{pack.render()}\n</data>\nWrite the JSON summary of this session."
 
 
 # --- storage ------------------------------------------------------------------------------------
@@ -176,6 +202,8 @@ class StoredSummary:
 
 
 def summary_id(session: Session) -> str:
+    if session.side_of is not None:
+        return f"session:{session.id}:{session.project_id}"
     return f"session:{session.id}"
 
 
@@ -303,10 +331,35 @@ def pending_sessions(
     for s in reversed(load_sessions(conn, now - timedelta(days=days), now)):
         if s.end > now - SETTLE or s.active_ms < min_active_ms:
             continue
-        pack = session_pack(conn, s)
-        if pack and needs_summary(conn, s, pack):
-            out.append((s, pack))
+        for piece in [s, *side_pieces(conn, s)]:
+            pack = session_pack(conn, piece)
+            if pack and needs_summary(conn, piece, pack):
+                out.append((piece, pack))
     return out
+
+
+def side_pieces(conn: sqlite3.Connection, session: Session) -> list[Session]:
+    """Other projects worked on inside the session, each a piece of its own: one with a
+    commit of yours, or SIDE_MIN_RECORDS sure records (five shop-app commits in a
+    personal-os evening, 19 Nov, were in no shop-app summary)."""
+    from dataclasses import replace
+
+    from personal_os.context.evidence import own_commit
+
+    sure: dict[str, int] = {}
+    commits: set[str] = set()
+    for r in fetch_rows(conn, to_ms(session.start), to_ms(session.end)):
+        if not _sure_elsewhere(r, session.project_id):
+            continue
+        pid = str(r["project_id"])
+        sure[pid] = sure.get(pid, 0) + 1
+        if r["source"] == "git" and r["type"] == "commit" and own_commit(json.loads(r["payload"])):
+            commits.add(pid)
+    return [
+        replace(session, project_id=pid, side_of=session.project_id or "other work")
+        for pid, n in sorted(sure.items())
+        if pid in commits or n >= SIDE_MIN_RECORDS
+    ]
 
 
 def load_summaries(

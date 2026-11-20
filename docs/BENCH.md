@@ -140,3 +140,13 @@ same model before every case, as the daemon does while you're away. All 35 right
 the model's steps took 5.6-15.4 s (what's playing 7.2 s, where you left off on shop-app 15.4 s).
 Before Ollama kept several read prompts, that summary made the next request read Donna's
 prompt again (about 30 s); now it's brought back in under a second.
+
+### 2026-11-21 01:21 (audit phase 3, ADR-092): 37/37
+
+Two project cases added: "what did I do on shop-app recently" (no other project, no
+entertainment, and an answer) and "where did I leave off on chordus" (none of the YouTube
+that used to be filed under it). Run right after history was re-decided, with 34 session and
+side summaries still waiting to be written in the background. The first run passed "recently"
+on the word "shop" alone while saying "I don't have data": "recently" was read as today, at
+1 a.m. It now means the last 7 days ("You made 8 commits to shop-app between 11-16 and
+11-20...", 11.9 s), and the case rejects "I don't have data".

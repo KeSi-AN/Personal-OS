@@ -341,3 +341,22 @@ reply = ["project"]
 only = true
 max_s = 3
 tags = ["island"]
+
+[[case]]
+id = "projects-what-on-shop"
+say = "what did I do on shop-app recently"
+from = "20 Nov audit: project notes credited other projects' work and filed movies under projects"
+reply = ["shop"]
+no_reply = ["fmovies", "anime", "monster", "imdb", "netflix", "roamies", "chordus", "don't have data"]
+max_s = 30
+tags = ["recall", "projects"]
+
+[[case]]
+id = "projects-latest-chordus"
+say = "where did I leave off on chordus"
+from = "20 Nov: 30 hours of YouTube were filed under Chordus by time and keyword"
+reply = ["chord"]
+no_reply = ["youtube", "claude in 20", "3d print", "scammer"]
+max_s = 30
+tags = ["recall", "projects"]
+

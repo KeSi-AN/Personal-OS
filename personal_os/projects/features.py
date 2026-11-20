@@ -190,6 +190,7 @@ class Features:
     github: str | None = None  # "github.com/owner/repo"
     exe: str | None = None
     title: str = ""
+    url: str = ""  # a page's address (browser events)
     words: list[str] = field(default_factory=list)
     duration_s: float = 0.0
 
@@ -293,6 +294,7 @@ def build(
         if extract_headings:
             text_parts += json.loads(extract_headings)
         f.title = p.get("title", "")
+        f.url = str(p.get("url") or "")
     elif f.source == "window":
         f.exe = (p.get("exe") or "").lower() or None
         f.title = p.get("title", "")

@@ -236,10 +236,15 @@ def test_inbox_groups_and_learning_from_a_group(w: World):
 def test_weak_temporal_guesses_are_shown_for_review(w: World):
     w.commit(0, AUTH, "x")
     w.window(0, 10, "session.py - auth-service - Visual Studio Code")
-    w.visit(10, 15, "https://www.youtube.com/watch?v=lofi", "lofi beats - YouTube")
+    w.visit(10, 15, "https://example.org/notes", "Some notes")
+    w.visit(15, 20, "https://www.youtube.com/watch?v=lofi", "lofi beats - YouTube")
     w.resolve()
-    g = {g.label: g for g in inbox(w.conn, w.clock)}["domain:www.youtube.com"]
-    assert g.guesses["auth-service"] == 1
+    groups = {g.label: g for g in inbox(w.conn, w.clock)}
+    assert groups["domain:example.org"].guesses["auth-service"] == 1
+    # A video is never guessed into a project from what was around it (20 Nov: 30 hours of
+    # YouTube were filed under Chordus that way).
+    yt = groups.get("domain:www.youtube.com")
+    assert yt is None or "auth-service" not in yt.guesses
 
 
 # --- sessions ------------------------------------------------------------------------------

@@ -253,6 +253,9 @@ def parse_time_range(
         return start, start + timedelta(days=7), "last week", used
     if re.search(r"\b(this|last|past) month\b", q):
         return now - timedelta(days=30), now, "the last 30 days", used
+    if re.search(r"\b(recently|lately|these days|of late)\b", q):
+        # Not "today": at 1 a.m. that's empty, and "I don't have data" came back (21 Nov).
+        return now - timedelta(days=7), now, "the last 7 days", used
     for part, (h1, h2) in {
         "morning": (5, 12),
         "afternoon": (12, 17),

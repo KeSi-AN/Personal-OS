@@ -144,7 +144,7 @@ def finalize(lines: list[EvidenceLine], max_lines: int = MAX_LINES) -> EvidenceP
 
 EVENT_SQL = """
 SELECT e.id, e.source, e.type, e.ts_start, coalesce(e.ts_end, e.last_seen, e.ts_start) AS ts_stop,
-       e.project_id, e.privacy_class, e.payload,
+       e.project_id, e.project_confidence, e.privacy_class, e.payload,
        x.meta_description AS x_meta, x.headings AS x_headings, x.main_text AS x_text
 FROM events e LEFT JOIN page_extracts x ON x.event_id = e.id
 """

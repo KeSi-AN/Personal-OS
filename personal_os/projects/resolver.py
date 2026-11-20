@@ -8,6 +8,7 @@ over what is still unassigned, so it can lean on neighbours resolved in the firs
 from __future__ import annotations
 
 import math
+import re
 import sqlite3
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -40,6 +41,52 @@ _SELECT = (
     "e.assign_source, e.project_id, e.project_confidence, e.payload, x.title AS x_title, "
     "x.headings AS x_headings FROM events e LEFT JOIN page_extracts x ON x.event_id = e.id "
 )
+
+
+# Files and commits are decided by their path alone. Checked on 20 Nov against the projects'
+# folders: every path decision was right (3,403 of 3,403), and every other guess for a file
+# was wrong (33 of 33: APKs and a Jetty script filed under personal-os or shop-app by
+# keyword). Commands keep their guesses: run in a folder named like a project (Personal OS's
+# data folder), they belonged to it (4 of 4).
+PATH_SOURCES = {"fs", "git", "editor"}
+PATH_DECISIONS = {"path", "remote", "rule"}  # a rule: a folder you taught by correcting one
+# Weak signals: a guess, not evidence of the work itself.
+WEAK = {"keyword", "temporal", "combined", "page"}
+# Entertainment never gets a weak guess: 30 hours of YouTube were filed under Chordus because
+# Chordus was open around them, and Fmovies, IMDb, anime sites and YouTube Music under
+# personal-os, roamies and shop-app (20 Nov). Only a title naming the project, a remote, or a
+# rule you taught by correcting one places them.
+_LEISURE_TITLE = re.compile(
+    r"\b(youtube music|netflix|prime video|hotstar|jiocinema|imdb|crunchyroll|instagram|"
+    r"reddit|twitch|spotify|fmovies|anime|anikoto|hianime|aniwatch|9anime|gogoanime|"
+    r"episode \d+|watch .{1,60} online|full movie|official (?:music )?video|lyrics?)\b",
+    re.I,
+)
+_BROWSER_SUFFIX = re.compile(r"\s+[-–—]\s+(?:brave|google chrome|microsoft edge|firefox|opera)$",
+                             re.I)  # fmt: skip
+
+
+def leisure(f: Features) -> bool:
+    """Entertainment (videos, streaming, music, social, games): never a weak guess's."""
+    from personal_os.context import activity
+
+    if f.source == "browser":
+        if not f.url and not f.domain:
+            return False
+        if "youtube.com" in (f.domain or "") and "/watch" in f.url:
+            # Any video, learning ones too: a title's words match a project too easily (a
+            # Claude video, open 39 hours, was filed under Chordus by keyword).
+            return True
+        cat, _why = activity.classify_page(f.url or f"https://{f.domain}/", f.title)
+        return cat in ("chill", "gaming")
+    if f.source != "window":
+        return False
+    if not f.is_browser_window:
+        return activity.classify_app(f.exe or "") in ("chill", "gaming")
+    title = _BROWSER_SUFFIX.sub("", f.title or "")
+    if _LEISURE_TITLE.search(title):
+        return True
+    return title.endswith(" - YouTube")  # a video (see the browser case above)
 
 
 @dataclass(frozen=True)
@@ -239,15 +286,25 @@ class Resolver:
     def candidates(self, f: Features) -> list[Decision]:
         if f.source in NO_PROJECT_SOURCES:
             return []
-        found = (
-            self._by_path(f),
-            self._by_title(f),
-            self._by_remote(f),
-            self._by_page(f),
-            self._by_rules(f),
-            self._by_keywords(f),
-        )
-        return [d for d in found if d]
+        found = [
+            d
+            for d in (
+                self._by_path(f),
+                self._by_title(f),
+                self._by_remote(f),
+                self._by_page(f),
+                self._by_rules(f),
+                self._by_keywords(f),
+            )
+            if d
+        ]
+        if f.source in PATH_SOURCES:
+            return [d for d in found if d.source in PATH_DECISIONS]
+        if found and leisure(f):
+            # Kept out of projects, not out of "personal": a window can still take its
+            # page's "none" (from a rule you taught, "YouTube is personal").
+            return [d for d in found if d.source not in WEAK or d.project_id == NONE_PROJECT]
+        return found
 
     def decide(self, f: Features) -> Decision:
         if f.source in NO_PROJECT_SOURCES:
@@ -352,6 +409,11 @@ class Resolver:
         decisions = []
         for r in pending:
             f = build(r, r["x_title"], r["x_headings"])
+            if f.source in PATH_SOURCES or leisure(f):
+                # Never placed by what was around them (see PATH_SOURCES and leisure).
+                if r["assign_source"] in ("temporal", "combined"):
+                    decisions.append((r["id"], self.decide(f)))
+                continue
             evidence: dict[str, list[Decision]] = defaultdict(list)
             for d in self.candidates(f):
                 if d.project_id:
@@ -413,3 +475,27 @@ def learn(
             "DO UPDATE SET weight = weight + 1, updated_at = excluded.updated_at",
             [(k, v, project_id, now) for k, v in keys],
         )
+
+
+# Bumped when the rules change in a way that should re-decide history (not your corrections).
+RESOLVER_VERSION = 2  # 2: path-only for files and commits, no weak guesses for leisure
+_VERSION_KEY = "projects.resolver_version"
+
+
+def reassess_if_needed(conn: sqlite3.Connection, clock: Clock, days: int = 90) -> bool:
+    """Once per RESOLVER_VERSION: re-decide everything you haven't corrected, then rebuild
+    the sessions (whose summaries are then written again, in the background)."""
+    from personal_os.projects.sessions import rebuild_sessions
+    from personal_os.storage import repo
+
+    if repo.get_setting(conn, _VERSION_KEY) == RESOLVER_VERSION:
+        return False
+    resolver = Resolver(conn, clock)
+    resolver.resolve_all()
+    now = clock.now()
+    # resolve_all's own temporal pass looks back two days; the rest of history needs it too,
+    # or every window placed by what you were working on around it becomes unassigned.
+    resolver.temporal_pass(horizon=timedelta(days=days))
+    rebuild_sessions(conn, clock, now - timedelta(days=days), now)
+    repo.set_setting(conn, _VERSION_KEY, RESOLVER_VERSION, clock)
+    return True
